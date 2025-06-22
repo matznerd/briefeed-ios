@@ -95,3 +95,6 @@ iOSInjectionProject/
 # SwiftUI Previews
 *.xcuserdata
 *.xcworkspace/xcuserdata
+
+# Ignore the Capacitor app folder
+/briefeed/
