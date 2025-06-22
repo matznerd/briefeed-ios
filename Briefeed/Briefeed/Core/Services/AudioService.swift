@@ -445,7 +445,7 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
         let savedIndex = UserDefaults.standard.integer(forKey: currentIndexKey)
         
         // Rebuild queue from saved IDs
-        let restoredQueue = queueIDs.compactMap { idString in
+        let restoredQueue: [Article] = queueIDs.compactMap { idString -> Article? in
             guard let uuid = UUID(uuidString: idString) else { return nil }
             return articles.first { $0.id == uuid }
         }
@@ -453,7 +453,7 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
         if !restoredQueue.isEmpty {
             queue = restoredQueue
             queueIndex = min(savedIndex, restoredQueue.count - 1)
-            currentArticle = restoredQueue[safe: queueIndex]
+            currentArticle = queueIndex >= 0 && queueIndex < restoredQueue.count ? restoredQueue[queueIndex] : nil
         }
     }
     
