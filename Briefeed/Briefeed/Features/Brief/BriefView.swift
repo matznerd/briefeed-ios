@@ -80,46 +80,48 @@ struct BriefView: View {
     // MARK: - Views
     
     private var queueListView: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(0..<viewModel.queuedArticles.count, id: \.self) { index in
-                    let article = viewModel.queuedArticles[index]
-                    let queuePosition = viewModel.queuedArticles.count - index
-                    let isPlaying = audioService.currentArticle?.id == article.id
-                    let isNext = audioService.queueIndex > 0 && index == audioService.queueIndex - 1
-                    
-                    QueuedArticleRow(
-                        article: article,
-                        queuePosition: queuePosition,
-                        isCurrentlyPlaying: isPlaying,
-                        audioState: stateManager.audioState,
-                        isNextToPlay: isNext
-                    )
-                    .onTapGesture {
-                        viewModel.playArticle(article)
-                    }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            withAnimation {
-                                viewModel.removeFromQueue(article)
-                            }
-                        } label: {
-                            Label("Remove", systemImage: "minus.circle")
-                        }
-                    }
-                    
-                    if index < viewModel.queuedArticles.count - 1 {
-                        Divider()
-                            .padding(.horizontal, Constants.UI.padding)
-                    }
+        List {
+            ForEach(Array(viewModel.queuedArticles.enumerated()), id: \.element.id) { index, article in
+                let queuePosition = viewModel.queuedArticles.count - index
+                let isPlaying = audioService.currentArticle?.id == article.id
+                let isNext = audioService.queueIndex > 0 && index == audioService.queueIndex - 1
+                
+                QueuedArticleRow(
+                    article: article,
+                    queuePosition: queuePosition,
+                    isCurrentlyPlaying: isPlaying,
+                    audioState: stateManager.audioState,
+                    isNextToPlay: isNext
+                )
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    viewModel.playArticle(article)
                 }
-                .onMove { indices, newOffset in
-                    viewModel.moveQueueItems(from: indices, to: newOffset)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        viewModel.removeFromQueue(article)
+                    } label: {
+                        Label("Remove", systemImage: "minus.circle")
+                    }
                 }
             }
-            .padding(.bottom, 100) // Space for mini player
+            .onMove { source, destination in
+                viewModel.moveQueueItems(from: source, to: destination)
+            }
+            
+            // Add padding at bottom for mini player
+            Color.clear
+                .frame(height: 100)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
         }
+        .listStyle(.plain)
         .background(Color.briefeedBackground)
+        .scrollContentBackground(.hidden)
     }
     
     private var loadingView: some View {
