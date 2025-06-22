@@ -82,13 +82,18 @@ struct BriefView: View {
     private var queueListView: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                ForEach(Array(viewModel.queuedArticles.enumerated()), id: \.element.id) { index, article in
+                ForEach(0..<viewModel.queuedArticles.count, id: \.self) { index in
+                    let article = viewModel.queuedArticles[index]
+                    let queuePosition = viewModel.queuedArticles.count - index
+                    let isPlaying = audioService.currentArticle?.id == article.id
+                    let isNext = audioService.queueIndex > 0 && index == audioService.queueIndex - 1
+                    
                     QueuedArticleRow(
                         article: article,
-                        queuePosition: viewModel.queuedArticles.count - index,  // Reverse numbering: bottom is #1
-                        isCurrentlyPlaying: audioService.currentArticle?.id == article.id,
+                        queuePosition: queuePosition,
+                        isCurrentlyPlaying: isPlaying,
                         audioState: stateManager.audioState,
-                        isNextToPlay: audioService.queueIndex > 0 && index == audioService.queueIndex - 1
+                        isNextToPlay: isNext
                     )
                     .onTapGesture {
                         viewModel.playArticle(article)
