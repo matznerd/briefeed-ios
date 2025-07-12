@@ -26,6 +26,10 @@ enum UserDefaultsKey: String, CaseIterable {
     case autoQueueAudio = "autoQueueAudio"
     case ttsVoice = "ttsVoice"
     case ttsLanguage = "ttsLanguage"
+    case useDeviceTTS = "useDeviceTTS"
+    case selectedVoice = "selectedVoice"
+    case autoPlayNext = "autoPlayNext"
+    case playbackSpeed = "playbackSpeed"
     
     // API Keys
     case geminiAPIKey = "geminiAPIKey"
@@ -80,14 +84,17 @@ class UserDefaultsManager: ObservableObject {
             UserDefaultsKey.autoQueueAudio.rawValue: true,
             UserDefaultsKey.ttsVoice.rawValue: "com.apple.ttsbundle.Samantha-compact",
             UserDefaultsKey.ttsLanguage.rawValue: "en-US",
+            UserDefaultsKey.useDeviceTTS.rawValue: false,
+            UserDefaultsKey.selectedVoice.rawValue: "Autonoe",
+            UserDefaultsKey.autoPlayNext.rawValue: true,
+            UserDefaultsKey.playbackSpeed.rawValue: 1.0,
             UserDefaultsKey.onboardingCompleted.rawValue: false,
             UserDefaultsKey.hasCreatedDefaultFeeds.rawValue: false,
             UserDefaultsKey.defaultFeedRefreshInterval.rawValue: 3600, // 1 hour
             UserDefaultsKey.articlesPerPage.rawValue: 20,
             UserDefaultsKey.preferredReadingFont.rawValue: "System",
-            UserDefaultsKey.currentFeedSort.rawValue: "hot",
-            UserDefaultsKey.geminiAPIKey.rawValue: "AIzaSyDtYihYMAZlHyP5TUhdoEHe-lSf0ko9-0s",
-            UserDefaultsKey.firecrawlAPIKey.rawValue: "fc-3492b220c6f94cb08dc4b99327fee026"
+            UserDefaultsKey.currentFeedSort.rawValue: "hot"
+            // API keys should be set by the user, not hardcoded
         ]
         userDefaults.register(defaults: defaults)
     }
@@ -166,6 +173,30 @@ class UserDefaultsManager: ObservableObject {
     @Published var ttsLanguage: String = "en-US" {
         didSet {
             userDefaults.set(ttsLanguage, forKey: UserDefaultsKey.ttsLanguage.rawValue)
+        }
+    }
+    
+    @Published var useDeviceTTS: Bool = false {
+        didSet {
+            userDefaults.set(useDeviceTTS, forKey: UserDefaultsKey.useDeviceTTS.rawValue)
+        }
+    }
+    
+    @Published var selectedVoice: String = "Autonoe" {
+        didSet {
+            userDefaults.set(selectedVoice, forKey: UserDefaultsKey.selectedVoice.rawValue)
+        }
+    }
+    
+    @Published var autoPlayNext: Bool = true {
+        didSet {
+            userDefaults.set(autoPlayNext, forKey: UserDefaultsKey.autoPlayNext.rawValue)
+        }
+    }
+    
+    @Published var playbackSpeed: Float = 1.0 {
+        didSet {
+            userDefaults.set(playbackSpeed, forKey: UserDefaultsKey.playbackSpeed.rawValue)
         }
     }
     
@@ -272,6 +303,10 @@ class UserDefaultsManager: ObservableObject {
         autoQueueAudio = userDefaults.bool(forKey: UserDefaultsKey.autoQueueAudio.rawValue)
         ttsVoice = userDefaults.string(forKey: UserDefaultsKey.ttsVoice.rawValue) ?? "com.apple.ttsbundle.Samantha-compact"
         ttsLanguage = userDefaults.string(forKey: UserDefaultsKey.ttsLanguage.rawValue) ?? "en-US"
+        useDeviceTTS = userDefaults.bool(forKey: UserDefaultsKey.useDeviceTTS.rawValue)
+        selectedVoice = userDefaults.string(forKey: UserDefaultsKey.selectedVoice.rawValue) ?? "Autonoe"
+        autoPlayNext = userDefaults.bool(forKey: UserDefaultsKey.autoPlayNext.rawValue)
+        playbackSpeed = userDefaults.float(forKey: UserDefaultsKey.playbackSpeed.rawValue)
     }
     
     // MARK: - Reset Settings

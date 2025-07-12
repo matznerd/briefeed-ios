@@ -83,6 +83,11 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
     private var currentRange: NSRange = NSRange(location: 0, length: 0)
     private var isPausedByUser = false
     
+    // Audio player for Gemini TTS
+    private var audioPlayer: AVAudioPlayer?
+    private var playerTimer: Timer?
+    private var isUsingGeminiTTS = false
+    
     // Published properties
     let state = CurrentValueSubject<AudioPlayerState, Never>(.idle)
     let progress = CurrentValueSubject<Float, Never>(0.0)
@@ -144,7 +149,61 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
         currentRange = NSRange(location: 0, length: 0)
         progress.send(0.0)
         
-        print("📝 Creating utterance...")
+        // Configure audio session
+        do {
+            try configureBackgroundAudio()
+        } catch {
+            print("⚠️ Audio session configuration failed, continuing anyway: \(error)")
+        }
+        
+        // Try Gemini TTS first
+        print("🎤 Attempting Gemini TTS generation...")
+        let ttsResult = await GeminiTTSService.shared.generateSpeech(
+            text: text,
+            voiceName: nil, // Let it use random voice
+            useRandomVoice: true
+        )
+        
+        if ttsResult.success, let audioURL = ttsResult.audioURL {
+            print("✅ Gemini TTS successful, using voice: \(ttsResult.voiceUsed ?? "unknown")")
+            isUsingGeminiTTS = true
+            
+            do {
+                audioPlayer = try AVAudioPlayer(contentsOf: audioURL)
+                audioPlayer?.delegate = self
+                audioPlayer?.prepareToPlay()
+                audioPlayer?.play()
+                
+                // Update Now Playing info
+                updateNowPlayingInfo(title: title, author: author)
+                
+                // Start progress timer
+                startProgressTimer()
+                
+                state.send(.playing)
+                isPausedByUser = false
+                
+                // Store duration
+                duration = audioPlayer?.duration ?? 0
+                currentTime = 0
+                
+                print("✅ Audio playback started with Gemini TTS")
+            } catch {
+                print("❌ Failed to play Gemini audio: \(error)")
+                // Fall back to device TTS
+                try await speakWithDeviceTTS(text: text, title: title, author: author)
+            }
+        } else {
+            print("⚠️ Gemini TTS failed: \(ttsResult.error ?? "Unknown error"), falling back to device TTS")
+            // Fall back to device TTS
+            try await speakWithDeviceTTS(text: text, title: title, author: author)
+        }
+    }
+    
+    private func speakWithDeviceTTS(text: String, title: String?, author: String?) async throws {
+        isUsingGeminiTTS = false
+        
+        print("📝 Creating utterance for device TTS...")
         
         // Create utterance with clean text
         let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -152,7 +211,7 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
         
         // Use default settings for better compatibility
         if let utterance = currentUtterance {
-            utterance.rate = 0.5 // Default rate
+            utterance.rate = UserDefaultsManager.shared.playbackSpeed
             utterance.pitchMultiplier = 1.0
             utterance.volume = 1.0
             
@@ -162,23 +221,16 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
             print("✅ Utterance created with rate: \(utterance.rate), volume: \(utterance.volume)")
         }
         
-        // Configure audio session (don't let it stop execution)
-        do {
-            try configureBackgroundAudio()
-        } catch {
-            print("⚠️ Audio session configuration failed, continuing anyway: \(error)")
-        }
-        
         // Update Now Playing info
         updateNowPlayingInfo(title: title, author: author)
         
         // Start speaking
-        guard let utterance = currentUtterance else { 
+        guard let utterance = currentUtterance else {
             state.send(.idle)
             throw AudioServiceError.noTextToSpeak
         }
         
-        print("🎤 Starting speech synthesis with text length: \(text.count)")
+        print("🎤 Starting device speech synthesis with text length: \(text.count)")
         print("📱 Synthesizer state - isPaused: \(synthesizer.isPaused), isSpeaking: \(synthesizer.isSpeaking)")
         
         // Ensure synthesizer is ready
@@ -187,37 +239,60 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
         }
         
         // Start speech synthesis (already on main thread due to @MainActor)
-        print("🎯 Speaking utterance")
+        print("🎯 Speaking utterance with device TTS")
         synthesizer.speak(utterance)
         isPausedByUser = false
         state.send(.playing)
         
-        print("✅ Speech synthesis started")
+        print("✅ Device speech synthesis started")
     }
     
     func play() {
-        if synthesizer.isPaused {
-            synthesizer.continueSpeaking()
+        if isUsingGeminiTTS {
+            audioPlayer?.play()
+            startProgressTimer()
             isPausedByUser = false
             state.send(.playing)
             updateNowPlayingPlaybackState()
-        } else if let utterance = currentUtterance, !synthesizer.isSpeaking {
-            // Restart from beginning if stopped
-            synthesizer.speak(utterance)
-            isPausedByUser = false
+        } else {
+            if synthesizer.isPaused {
+                synthesizer.continueSpeaking()
+                isPausedByUser = false
+                state.send(.playing)
+                updateNowPlayingPlaybackState()
+            } else if let utterance = currentUtterance, !synthesizer.isSpeaking {
+                // Restart from beginning if stopped
+                synthesizer.speak(utterance)
+                isPausedByUser = false
+            }
         }
     }
     
     func pause() {
-        if synthesizer.isSpeaking && !synthesizer.isPaused {
-            synthesizer.pauseSpeaking(at: .immediate)
+        if isUsingGeminiTTS {
+            audioPlayer?.pause()
+            playerTimer?.invalidate()
             isPausedByUser = true
             state.send(.paused)
             updateNowPlayingPlaybackState()
+        } else {
+            if synthesizer.isSpeaking && !synthesizer.isPaused {
+                synthesizer.pauseSpeaking(at: .immediate)
+                isPausedByUser = true
+                state.send(.paused)
+                updateNowPlayingPlaybackState()
+            }
         }
     }
     
     func stop() {
+        if isUsingGeminiTTS {
+            audioPlayer?.stop()
+            audioPlayer = nil
+            playerTimer?.invalidate()
+            isUsingGeminiTTS = false
+        }
+        
         synthesizer.stopSpeaking(at: .immediate)
         currentUtterance = nil
         fullText = ""
@@ -289,24 +364,16 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
         do {
             let session = AVAudioSession.sharedInstance()
             
-            // Use playAndRecord with defaultToSpeaker for better simulator compatibility
-            try session.setCategory(.playAndRecord, options: [.defaultToSpeaker, .allowBluetooth])
+            // Use playback category for TTS
+            try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
             try session.setActive(true)
             
             print("✅ Audio session configured successfully")
             print("📱 Category: \(session.category.rawValue)")
+            print("📱 Mode: \(session.mode.rawValue)")
         } catch {
             print("❌ Failed to configure audio session: \(error)")
-            
-            // Try simpler configuration
-            do {
-                try AVAudioSession.sharedInstance().setCategory(.playback)
-                try AVAudioSession.sharedInstance().setActive(true)
-                print("✅ Fallback audio configuration successful")
-            } catch {
-                print("❌ All audio configurations failed: \(error)")
-                // Don't throw - let's try to continue anyway
-            }
+            throw AudioServiceError.audioSessionError
         }
     }
     
@@ -324,13 +391,8 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
             queueIndex = 0
         }
         
-        // Get summary for speech if available
-        let textToSpeak: String
-        if let summary = article.summary, !summary.isEmpty {
-            textToSpeak = summary
-        } else {
-            textToSpeak = article.content?.stripHTML ?? "No content available"
-        }
+        // Format the text for speech using the same logic as Capacitor app
+        let textToSpeak = GeminiTTSService.shared.formatStoryForSpeech(article)
         
         let title = article.title ?? "Untitled"
         let author = article.author ?? "Unknown"
@@ -479,6 +541,26 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
     
     // MARK: - Private Methods
     
+    private func startProgressTimer() {
+        playerTimer?.invalidate()
+        playerTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            guard let self = self, let player = self.audioPlayer else { return }
+            
+            self.currentTime = player.currentTime
+            
+            if self.duration > 0 {
+                let progressValue = Float(self.currentTime / self.duration)
+                self.progress.send(progressValue)
+                
+                // Update Now Playing info
+                if var info = MPNowPlayingInfoCenter.default().nowPlayingInfo {
+                    info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = self.currentTime
+                    MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+                }
+            }
+        }
+    }
+    
     private func setupNotifications() {
         // Audio interruption handling
         NotificationCenter.default.addObserver(
@@ -616,6 +698,36 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
             }
         default:
             break
+        }
+    }
+}
+
+// MARK: - AVAudioPlayerDelegate
+extension AudioService: AVAudioPlayerDelegate {
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor in
+            playerTimer?.invalidate()
+            state.send(.stopped)
+            progress.send(1.0)
+            updateNowPlayingPlaybackState()
+            
+            // Clean up temporary audio file
+            if let url = player.url {
+                try? FileManager.default.removeItem(at: url)
+            }
+            
+            // Play next if auto-play is enabled
+            if UserDefaultsManager.shared.autoPlayNext && queueIndex + 1 < queue.count {
+                try? await playNext()
+            }
+        }
+    }
+    
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        Task { @MainActor in
+            playerTimer?.invalidate()
+            state.send(.error(error ?? AudioServiceError.speechSynthesizerUnavailable))
+            print("❌ Audio player decode error: \(error?.localizedDescription ?? "Unknown error")")
         }
     }
 }

@@ -12,7 +12,7 @@ struct QueuedArticleRow: View {
     let queuePosition: Int
     let isCurrentlyPlaying: Bool
     let audioState: AudioPlayerState
-    let isNextToPlay: Bool = false
+    let isNextToPlay: Bool
     
     private var isPlaying: Bool {
         isCurrentlyPlaying && audioState == .playing
@@ -119,7 +119,8 @@ struct QueuedArticleRow_Previews: PreviewProvider {
                 article: createSampleArticle(title: "Understanding SwiftUI Layout System", author: "John Doe", subreddit: "SwiftUI"),
                 queuePosition: 1,
                 isCurrentlyPlaying: false,
-                audioState: .idle
+                audioState: .idle,
+                isNextToPlay: false
             )
             
             Divider()
@@ -129,7 +130,8 @@ struct QueuedArticleRow_Previews: PreviewProvider {
                 article: createSampleArticle(title: "The Future of AI in Mobile Development", author: "Jane Smith", subreddit: "iOSProgramming"),
                 queuePosition: 2,
                 isCurrentlyPlaying: true,
-                audioState: .playing
+                audioState: .playing,
+                isNextToPlay: false
             )
             
             Divider()
@@ -139,7 +141,8 @@ struct QueuedArticleRow_Previews: PreviewProvider {
                 article: createSampleArticle(title: "Building Efficient Core Data Models", author: "Tech Writer", subreddit: "swift"),
                 queuePosition: 3,
                 isCurrentlyPlaying: true,
-                audioState: .paused
+                audioState: .paused,
+                isNextToPlay: false
             )
         }
         .background(Color.briefeedBackground)
