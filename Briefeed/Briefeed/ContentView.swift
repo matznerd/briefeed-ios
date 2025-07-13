@@ -23,17 +23,23 @@ struct ContentView: View {
                         }
                         .tag(0)
                     
-                    BriefView()
+                    FilteredBriefView()
                         .tabItem {
                             Label("Brief", systemImage: "music.note.list")
                         }
                         .tag(1)
                     
+                    LiveNewsView()
+                        .tabItem {
+                            Label("Live News", systemImage: "dot.radiowaves.left.and.right")
+                        }
+                        .tag(2)
+                    
                     SettingsView()
                         .tabItem {
                             Label("Settings", systemImage: "gear")
                         }
-                        .tag(2)
+                        .tag(3)
                 }
                 .accentColor(.briefeedRed)
                 

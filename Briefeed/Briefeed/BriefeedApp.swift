@@ -22,6 +22,9 @@ struct BriefeedApp: App {
         // Apply dark mode preference early
         applyThemeSettings()
         
+        // Initialize RSS features
+        initializeRSSFeatures()
+        
         // Create default feeds on first launch
         Task {
             do {
