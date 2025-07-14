@@ -11,10 +11,6 @@ import CoreData
 // MARK: - RSS Queue Extension
 extension QueueService {
     
-    // MARK: - Enhanced Queue Properties
-    @Published private(set) var enhancedQueue: [EnhancedQueueItem] = []
-    private let enhancedQueueKey = "EnhancedAudioQueueItems"
-    
     // MARK: - RSS Methods
     
     /// Add an RSS episode to the queue
@@ -56,7 +52,7 @@ extension QueueService {
         guard UserDefaultsManager.shared.autoPlayLiveNewsOnOpen else { return }
         
         // Get fresh episodes from RSS service
-        if let rssService = try? await getRSSService() {
+        if let rssService = try? getRSSService() {
             let freshEpisodes = await rssService.getFreshEpisodes()
             
             // Add up to 10 fresh episodes
@@ -128,17 +124,16 @@ extension QueueService {
         article.title = episode.title
         article.summary = episode.episodeDescription ?? "RSS Episode"
         article.url = episode.audioUrl
-        article.sourceFeed = episode.feed?.displayName
-        article.publishedDate = episode.pubDate
+        // Note: sourceFeed and publishedDate are not part of Article model
+        // These are tracked in EnhancedQueueItem instead
         
         // Don't save to Core Data - this is temporary
         return article
     }
     
     /// Get RSS Audio Service instance
-    private func getRSSService() async throws -> RSSAudioService? {
-        // This will be implemented when we create RSSAudioService
-        return nil
+    private func getRSSService() throws -> RSSAudioService {
+        return RSSAudioService.shared
     }
     
     /// Save enhanced queue to UserDefaults

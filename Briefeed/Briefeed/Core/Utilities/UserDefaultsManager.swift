@@ -64,7 +64,7 @@ enum SummaryLength: String, CaseIterable {
 // MARK: - UserDefaults Manager
 class UserDefaultsManager: ObservableObject {
     static let shared = UserDefaultsManager()
-    private let userDefaults = UserDefaults.standard
+    internal let userDefaults = UserDefaults.standard
     
     private init() {
         registerDefaults()
@@ -93,7 +93,13 @@ class UserDefaultsManager: ObservableObject {
             UserDefaultsKey.defaultFeedRefreshInterval.rawValue: 3600, // 1 hour
             UserDefaultsKey.articlesPerPage.rawValue: 20,
             UserDefaultsKey.preferredReadingFont.rawValue: "System",
-            UserDefaultsKey.currentFeedSort.rawValue: "hot"
+            UserDefaultsKey.currentFeedSort.rawValue: "hot",
+            // RSS defaults
+            "autoPlayLiveNewsOnOpen": false,
+            "autoRefreshLiveNewsOnOpen": true,
+            "rssPlaybackSpeed": 1.0,
+            "defaultBriefFilter": "all",
+            "rssRetentionHours": 168
             // API keys should be set by the user, not hardcoded
         ]
         userDefaults.register(defaults: defaults)
@@ -197,6 +203,40 @@ class UserDefaultsManager: ObservableObject {
     @Published var playbackSpeed: Float = 1.0 {
         didSet {
             userDefaults.set(playbackSpeed, forKey: UserDefaultsKey.playbackSpeed.rawValue)
+        }
+    }
+    
+    // MARK: - RSS Settings
+    @Published var autoPlayLiveNewsOnOpen: Bool = false {
+        didSet {
+            userDefaults.set(autoPlayLiveNewsOnOpen, forKey: "autoPlayLiveNewsOnOpen")
+        }
+    }
+    
+    @Published var autoRefreshLiveNewsOnOpen: Bool = true {
+        didSet {
+            userDefaults.set(autoRefreshLiveNewsOnOpen, forKey: "autoRefreshLiveNewsOnOpen")
+        }
+    }
+    
+    @Published var rssPlaybackSpeed: Float = 1.0 {
+        didSet {
+            userDefaults.set(rssPlaybackSpeed, forKey: "rssPlaybackSpeed")
+        }
+    }
+    
+    var defaultBriefFilter: String {
+        get {
+            userDefaults.string(forKey: "defaultBriefFilter") ?? "all"
+        }
+        set {
+            userDefaults.set(newValue, forKey: "defaultBriefFilter")
+        }
+    }
+    
+    @Published var rssRetentionHours: Int = 168 {
+        didSet {
+            userDefaults.set(rssRetentionHours, forKey: "rssRetentionHours")
         }
     }
     
@@ -307,6 +347,12 @@ class UserDefaultsManager: ObservableObject {
         selectedVoice = userDefaults.string(forKey: UserDefaultsKey.selectedVoice.rawValue) ?? "Autonoe"
         autoPlayNext = userDefaults.bool(forKey: UserDefaultsKey.autoPlayNext.rawValue)
         playbackSpeed = userDefaults.float(forKey: UserDefaultsKey.playbackSpeed.rawValue)
+        
+        // Load RSS settings
+        autoPlayLiveNewsOnOpen = userDefaults.bool(forKey: "autoPlayLiveNewsOnOpen")
+        autoRefreshLiveNewsOnOpen = userDefaults.bool(forKey: "autoRefreshLiveNewsOnOpen")
+        rssPlaybackSpeed = userDefaults.float(forKey: "rssPlaybackSpeed")
+        rssRetentionHours = userDefaults.integer(forKey: "rssRetentionHours")
     }
     
     // MARK: - Reset Settings

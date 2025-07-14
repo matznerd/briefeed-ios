@@ -24,10 +24,14 @@ class QueueService: ObservableObject {
     
     // MARK: - Properties
     @Published private(set) var queuedItems: [QueuedItem] = []
-    private let userDefaults = UserDefaults.standard
+    internal let userDefaults = UserDefaults.standard
     private let queueKey = "AudioQueueItems"
-    private let audioService = AudioService.shared
+    internal let audioService = AudioService.shared
     private var cancellables = Set<AnyCancellable>()
+    
+    // Enhanced Queue Properties for RSS
+    @Published private(set) var enhancedQueue: [EnhancedQueueItem] = []
+    private let enhancedQueueKey = "EnhancedAudioQueueItems"
     
     // Background audio generation
     private var audioGenerationTask: Task<Void, Never>?

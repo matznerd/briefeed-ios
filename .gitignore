@@ -97,4 +97,4 @@ iOSInjectionProject/
 *.xcworkspace/xcuserdata
 
 # Ignore the Capacitor app folder
-/briefeed/
+# /briefeed/

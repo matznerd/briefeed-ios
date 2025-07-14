@@ -22,34 +22,8 @@ extension UserDefaultsKey {
 extension UserDefaultsManager {
     
     // MARK: - RSS Settings
-    
-    /// Auto-play live news when app opens
-    @Published var autoPlayLiveNewsOnOpen: Bool = false {
-        didSet {
-            userDefaults.set(autoPlayLiveNewsOnOpen, forKey: UserDefaultsKey.autoPlayLiveNewsOnOpen.rawValue)
-        }
-    }
-    
-    /// RSS playback speed (separate from TTS speed)
-    @Published var rssPlaybackSpeed: Float = 1.0 {
-        didSet {
-            userDefaults.set(rssPlaybackSpeed, forKey: UserDefaultsKey.rssPlaybackSpeed.rawValue)
-        }
-    }
-    
-    /// Default Brief queue filter
-    @Published var defaultBriefFilter: String = "all" {
-        didSet {
-            userDefaults.set(defaultBriefFilter, forKey: UserDefaultsKey.defaultBriefFilter.rawValue)
-        }
-    }
-    
-    /// RSS retention period in hours
-    @Published var rssRetentionHours: Int = 24 {
-        didSet {
-            userDefaults.set(rssRetentionHours, forKey: UserDefaultsKey.rssRetentionHours.rawValue)
-        }
-    }
+    // Note: RSS properties have been moved to the main UserDefaultsManager class
+    // to avoid Swift extension limitations with property wrappers
     
     /// RSS feed priority order
     var rssFeedPriorities: [String] {
