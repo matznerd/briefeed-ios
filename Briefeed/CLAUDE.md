@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Briefeed is an iOS app built with SwiftUI that provides an RSS feed reader with unique audio playback capabilities. The app allows users to manage RSS feeds, queue articles for reading, and listen to AI-generated summaries of articles using text-to-speech.
+Briefeed is an iOS app built with SwiftUI that provides an RSS feed reader with unique audio playback capabilities. The app allows users to manage RSS feeds, queue articles for reading, and listen to AI-generated summaries of articles using text-to-speech. 
+
+The app now includes a Live News feature that works like a radio - automatically playing the latest RSS podcast episodes from your configured feeds with a single tap.
 
 ## Build and Development Commands
 
@@ -31,7 +33,7 @@ xcodebuild clean -project Briefeed.xcodeproj -scheme Briefeed
 The app follows a clean architecture pattern with clear separation of concerns:
 
 - **App Entry**: `BriefeedApp.swift` - Main app entry point, handles app lifecycle, theme management, and Core Data initialization
-- **Navigation**: `ContentView.swift` - Tab-based navigation with Feed, Brief (queue), and Settings tabs
+- **Navigation**: `ContentView.swift` - Tab-based navigation with Feed, Brief (queue), Live News, and Settings tabs
 - **Persistence**: `Persistence.swift` - Core Data stack management
 - **Audio Player**: Always-visible mini player at bottom of screen
 
@@ -59,6 +61,11 @@ The app follows a clean architecture pattern with clear separation of concerns:
    - Manages article storage and archiving
    - Handles article state management
 
+6. **RSSAudioService** (`Core/Services/RSS/RSSAudioService.swift`):
+   - Manages RSS podcast feeds and episodes
+   - Handles feed parsing and updates
+   - Tracks episode listen status
+
 ### Feature Organization
 
 Features are organized by domain:
@@ -66,6 +73,7 @@ Features are organized by domain:
 - **Audio/**: Audio player UI components
 - **Brief/**: Queue management and playlist views
 - **Feed/**: RSS feed management and article fetching
+- **LiveNews/**: RSS podcast feed management and radio-like playback
 - **Settings/**: App preferences and configuration
 
 ### State Management
@@ -79,8 +87,11 @@ Features are organized by domain:
 
 - **Article**: Core Data entity for RSS articles
 - **Feed**: Core Data entity for RSS feeds
+- **RSSFeed**: Core Data entity for RSS podcast feeds
+- **RSSEpisode**: Core Data entity for RSS podcast episodes
 - **ArticleSummary**: Struct for AI-generated summaries
 - **QueuedItem**: Persistent queue item structure
+- **EnhancedQueueItem**: Unified queue item supporting both articles and RSS episodes
 
 ## Important Implementation Details
 
@@ -89,6 +100,9 @@ Features are organized by domain:
 3. **Queue Persistence**: Queue state saved to UserDefaults and restored on app launch
 4. **Background Processing**: Articles in queue have summaries generated in background
 5. **Error Handling**: Services use async/await with proper error propagation
+6. **RSS Radio Mode**: "Play Live News" button queues only latest unlistened episodes from each feed
+7. **Auto-play**: Optional auto-play on app launch for radio-like experience
+8. **Episode Management**: Listened episodes are automatically removed from queue
 
 ## UI Components
 

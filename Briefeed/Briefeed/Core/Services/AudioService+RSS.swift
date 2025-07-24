@@ -8,6 +8,7 @@
 import Foundation
 import AVFoundation
 import MediaPlayer
+import CoreData
 
 // MARK: - RSS Audio Extension
 extension AudioService {
@@ -58,6 +59,43 @@ extension AudioService {
         currentRSSEpisode = episode
         isUsingGeminiTTS = false // Flag to indicate RSS audio
         
+        // Create a placeholder article for the mini player
+        if let episode = episode {
+            // Use main context to ensure the article persists
+            let context = PersistenceController.shared.container.viewContext
+            
+            // Create a transient article (not saved to Core Data)
+            let article = Article(context: context)
+            article.id = UUID()
+            article.title = episode.title
+            article.summary = episode.episodeDescription ?? "RSS Episode"
+            article.url = episode.audioUrl
+            article.author = episode.feed?.displayName
+            // article.publishedDate = episode.pubDate // Not available on Article model
+            
+            // IMPORTANT: Set as current article BEFORE any async operations
+            currentArticle = article
+            
+            // Update the queue
+            if queue.isEmpty || queue.first?.id != article.id {
+                queue.insert(article, at: 0)
+            }
+            
+            // Force immediate state updates
+            objectWillChange.send()
+            ArticleStateManager.shared.objectWillChange.send()
+            
+            // Schedule another update after a brief delay to ensure UI catches up
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                self.objectWillChange.send()
+                print("📻 Current article after delay: \(self.currentArticle?.title ?? "nil")")
+            }
+            
+            print("📻 Set current article for RSS: \(article.title ?? "Unknown")")
+            print("📻 Current article check: \(currentArticle?.title ?? "nil")")
+        }
+        
         do {
             // Configure audio session
             try configureBackgroundAudio()
@@ -78,6 +116,12 @@ extension AudioService {
             // Start playback
             rssAudioPlayer?.play()
             state.send(.playing)
+            
+            // Force state update for UI
+            objectWillChange.send()
+            ArticleStateManager.shared.objectWillChange.send()
+            
+            print("📻 Started RSS playback, current article: \(currentArticle?.title ?? "nil")")
             
             // Observe when playback ends
             NotificationCenter.default.addObserver(
@@ -105,7 +149,7 @@ extension AudioService {
             let duration = rssAudioPlayer?.currentItem?.duration.seconds ?? 0
             let seekTime = duration * episode.lastPosition
             let time = CMTime(seconds: seekTime, preferredTimescale: 1000)
-            rssAudioPlayer?.seek(to: time)
+            await rssAudioPlayer?.seek(to: time)
         }
     }
     
@@ -120,6 +164,9 @@ extension AudioService {
         player.play()
         state.send(.playing)
         updateNowPlayingPlaybackState()
+        objectWillChange.send()
+        ArticleStateManager.shared.objectWillChange.send()
+        print("📻 Resumed RSS playback")
     }
     
     /// Pause for RSS
@@ -129,6 +176,9 @@ extension AudioService {
         state.send(.paused)
         updateNowPlayingPlaybackState()
         saveRSSProgress()
+        objectWillChange.send()
+        ArticleStateManager.shared.objectWillChange.send()
+        print("📻 Paused RSS playback")
     }
     
     /// Stop RSS playback
@@ -167,10 +217,13 @@ extension AudioService {
         // Add new observer
         let interval = CMTime(seconds: 1.0, preferredTimescale: 1000)
         progressObserver = rssAudioPlayer?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            self?.updateRSSProgress(time: time)
+            Task { @MainActor in
+                self?.updateRSSProgress(time: time)
+            }
         }
     }
     
+    @MainActor
     private func updateRSSProgress(time: CMTime) {
         guard let duration = rssAudioPlayer?.currentItem?.duration,
               duration.isNumeric && !duration.isIndefinite else { return }
@@ -237,6 +290,12 @@ extension AudioService {
     }
     
     @objc private func rssPlaybackDidFinish() {
+        Task { @MainActor in
+            await rssPlaybackDidFinishAsync()
+        }
+    }
+    
+    private func rssPlaybackDidFinishAsync() async {
         print("🎙️ RSS episode finished playing")
         
         // Mark episode as listened
@@ -257,7 +316,12 @@ extension AudioService {
         
         // Play next if auto-play is enabled
         if UserDefaultsManager.shared.autoPlayNext {
-            playNext()
+            do {
+                try await playNext()
+            } catch {
+                print("❌ Error playing next: \(error)")
+                state.send(.stopped)
+            }
         } else {
             state.send(.stopped)
         }
@@ -320,11 +384,4 @@ extension AudioService {
             skipBackward(seconds: seconds)
         }
     }
-}
-
-// MARK: - Associated Keys
-private struct AssociatedKeys {
-    static var currentRSSEpisode = "currentRSSEpisode"
-    static var rssAudioPlayer = "rssAudioPlayer"
-    static var progressObserver = "progressObserver"
 }

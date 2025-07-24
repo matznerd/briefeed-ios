@@ -85,11 +85,11 @@ class NetworkService: NetworkServiceProtocol {
         request.timeoutInterval = Constants.API.defaultTimeout
         
         // Add headers
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         headers?.forEach { request.setValue($1, forHTTPHeaderField: $0) }
         
         // Add parameters for POST/PUT requests
         if let parameters = parameters, method == .post || method == .put {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONSerialization.data(withJSONObject: parameters)
         }
         

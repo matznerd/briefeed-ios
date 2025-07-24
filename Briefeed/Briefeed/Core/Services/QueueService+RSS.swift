@@ -38,7 +38,7 @@ extension QueueService {
             lastPosition: 0.0
         )
         
-        enhancedQueue.append(queueItem)
+        appendToEnhancedQueue(queueItem)
         saveEnhancedQueue()
         
         // Add to audio service
@@ -66,7 +66,7 @@ extension QueueService {
             }
             
             // Start playing if nothing is playing
-            if !audioService.isPlaying && !enhancedQueue.isEmpty {
+            if audioService.state.value != .playing && !enhancedQueue.isEmpty {
                 playNext()
             }
         }
@@ -77,7 +77,7 @@ extension QueueService {
         let now = Date()
         
         // Remove expired items that aren't currently playing
-        enhancedQueue.removeAll { item in
+        removeFromEnhancedQueue { item in
             guard let expiresAt = item.expiresAt else { return false }
             let isExpired = now > expiresAt
             let isPlaying = audioService.currentArticle?.id?.uuidString == item.id.uuidString
@@ -95,22 +95,77 @@ extension QueueService {
     /// Update progress for RSS episode
     func updateRSSProgress(itemId: UUID, progress: Double) {
         guard let index = enhancedQueue.firstIndex(where: { $0.id == itemId }) else { return }
-        enhancedQueue[index].lastPosition = progress
+        modifyEnhancedQueueItem(at: index) { item in
+            let newItem = EnhancedQueueItem(
+                id: item.id,
+                title: item.title,
+                source: item.source,
+                addedDate: item.addedDate,
+                expiresAt: item.expiresAt,
+                articleID: item.articleID,
+                audioUrl: item.audioUrl,
+                duration: item.duration,
+                isListened: item.isListened,
+                lastPosition: progress
+            )
+            item = newItem
+        }
         saveEnhancedQueue()
     }
     
     /// Mark RSS episode as listened
     func markRSSListened(itemId: UUID) {
         guard let index = enhancedQueue.firstIndex(where: { $0.id == itemId }) else { return }
-        enhancedQueue[index].isListened = true
-        enhancedQueue[index].lastPosition = 1.0
+        modifyEnhancedQueueItem(at: index) { item in
+            let newItem = EnhancedQueueItem(
+                id: item.id,
+                title: item.title,
+                source: item.source,
+                addedDate: item.addedDate,
+                expiresAt: item.expiresAt,
+                articleID: item.articleID,
+                audioUrl: item.audioUrl,
+                duration: item.duration,
+                isListened: true,
+                lastPosition: 1.0
+            )
+            item = newItem
+        }
         
         // Remove from queue after playing (unless saved)
-        if enhancedQueue[index].source.isLiveNews {
-            enhancedQueue.remove(at: index)
+        if index < enhancedQueue.count && enhancedQueue[index].source.isLiveNews {
+            var updatedQueue = enhancedQueue
+            updatedQueue.remove(at: index)
+            updateEnhancedQueue(updatedQueue)
+            
+            // Auto-populate with next episode
+            Task {
+                await autoPopulateNextEpisode()
+            }
         }
         
         saveEnhancedQueue()
+    }
+    
+    /// Auto-populate with the next episode from available feeds
+    private func autoPopulateNextEpisode() async {
+        // Check if we should auto-populate
+        guard UserDefaultsManager.shared.autoPlayLiveNewsOnOpen else { return }
+        
+        // Get fresh episodes from RSS service
+        if let rssService = try? getRSSService() {
+            let freshEpisodes = await rssService.getFreshEpisodes()
+            
+            // Find an episode that's not already in queue
+            for episode in freshEpisodes {
+                if !enhancedQueue.contains(where: { $0.audioUrl?.absoluteString == episode.audioUrl }) && !episode.isListened {
+                    await MainActor.run {
+                        addRSSEpisode(episode)
+                    }
+                    break
+                }
+            }
+        }
     }
     
     // MARK: - Private Methods
@@ -137,18 +192,18 @@ extension QueueService {
     }
     
     /// Save enhanced queue to UserDefaults
-    private func saveEnhancedQueue() {
+    internal func saveEnhancedQueue() {
         guard let encoded = try? JSONEncoder().encode(enhancedQueue) else { return }
-        userDefaults.set(encoded, forKey: enhancedQueueKey)
+        userDefaults.set(encoded, forKey: getEnhancedQueueKey())
     }
     
     /// Load enhanced queue from UserDefaults
     func loadEnhancedQueue() {
-        guard let data = userDefaults.data(forKey: enhancedQueueKey),
+        guard let data = userDefaults.data(forKey: getEnhancedQueueKey()),
               let decoded = try? JSONDecoder().decode([EnhancedQueueItem].self, from: data) else {
             return
         }
-        enhancedQueue = decoded
+        updateEnhancedQueue(decoded)
     }
     
     /// Migrate legacy queue items to enhanced format
@@ -162,7 +217,7 @@ extension QueueService {
             
             if let article = try? PersistenceController.shared.container.viewContext.fetch(fetchRequest).first,
                let enhancedItem = legacyItem.toEnhancedItem(with: article) {
-                enhancedQueue.append(enhancedItem)
+                appendToEnhancedQueue(enhancedItem)
             }
         }
         
@@ -176,7 +231,20 @@ extension QueueService {
         if let audioUrl = nextItem.audioUrl {
             // Play RSS episode
             Task {
-                await audioService.playRSSEpisode(url: audioUrl, title: nextItem.title)
+                // Find the actual RSS episode for full data
+                if case let .rss(feedId, _) = nextItem.source {
+                    let fetchRequest: NSFetchRequest<RSSEpisode> = RSSEpisode.fetchRequest()
+                    fetchRequest.predicate = NSPredicate(format: "audioUrl == %@", audioUrl.absoluteString)
+                    fetchRequest.fetchLimit = 1
+                    
+                    if let episode = try? PersistenceController.shared.container.viewContext.fetch(fetchRequest).first {
+                        await audioService.playRSSEpisode(url: audioUrl, title: nextItem.title ?? "Unknown", episode: episode)
+                    } else {
+                        await audioService.playRSSEpisode(url: audioUrl, title: nextItem.title ?? "Unknown")
+                    }
+                } else {
+                    await audioService.playRSSEpisode(url: audioUrl, title: nextItem.title ?? "Unknown")
+                }
             }
         } else if let articleID = nextItem.articleID {
             // Play article TTS

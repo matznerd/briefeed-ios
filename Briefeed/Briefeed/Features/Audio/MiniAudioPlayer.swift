@@ -51,9 +51,12 @@ struct MiniAudioPlayer: View {
                                 Text("r/\(subreddit)")
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
-                            }
-                            if let author = article.author {
-                                Text("• u/\(author)")
+                            } else if let author = article.author, !author.isEmpty {
+                                // For RSS episodes, author contains the feed name
+                                Image(systemName: "dot.radiowaves.left.and.right")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text(author)
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
                             }
@@ -75,7 +78,7 @@ struct MiniAudioPlayer: View {
                 // Center controls
                 HStack(spacing: 24) {
                     // Skip backward button
-                    Button(action: { audioService.skipBackward(seconds: 15) }) {
+                    Button(action: { audioService.skipBackwardWithRSSSupport(seconds: 15) }) {
                         Image(systemName: "gobackward.15")
                             .font(.system(size: 22))
                             .foregroundColor(audioService.currentArticle != nil ? .primary : .secondary.opacity(0.5))
@@ -93,7 +96,7 @@ struct MiniAudioPlayer: View {
                     .disabled(audioService.currentArticle == nil)
                     
                     // Skip forward button
-                    Button(action: { audioService.skipForward(seconds: 30) }) {
+                    Button(action: { audioService.skipForwardWithRSSSupport(seconds: 30) }) {
                         Image(systemName: "goforward.30")
                             .font(.system(size: 22))
                             .foregroundColor(audioService.currentArticle != nil ? .primary : .secondary.opacity(0.5))
@@ -169,9 +172,9 @@ struct MiniAudioPlayer: View {
     
     private func togglePlayPause() {
         if isPlaying {
-            audioService.pause()
+            audioService.pauseWithRSSSupport()
         } else {
-            audioService.play()
+            audioService.playWithRSSSupport()
         }
     }
     

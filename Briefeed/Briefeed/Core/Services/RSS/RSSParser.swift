@@ -131,17 +131,19 @@ extension RSSParser: XMLParserDelegate {
     private func parseDate(_ dateString: String) -> Date? {
         let trimmedDate = dateString.trimmingCharacters(in: .whitespacesAndNewlines)
         
-        // Common RSS date formats
-        let formatters = [
-            DateFormatter.rfc822,
-            DateFormatter.rfc3339,
-            DateFormatter.iso8601
-        ]
+        // Try RFC822 format
+        if let date = DateFormatter.rfc822.date(from: trimmedDate) {
+            return date
+        }
         
-        for formatter in formatters {
-            if let date = formatter.date(from: trimmedDate) {
-                return date
-            }
+        // Try RFC3339 format
+        if let date = DateFormatter.rfc3339.date(from: trimmedDate) {
+            return date
+        }
+        
+        // Try ISO8601 format
+        if let date = DateFormatter.iso8601.date(from: trimmedDate) {
+            return date
         }
         
         return nil

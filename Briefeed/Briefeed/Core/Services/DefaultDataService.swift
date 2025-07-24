@@ -26,6 +26,8 @@ class DefaultDataService {
         
         guard !userDefaults.hasCreatedDefaultFeeds else { return }
         
+        print("📱 Creating default feeds...")
+        
         for (index, feedData) in Constants.Reddit.defaultFeeds.enumerated() {
             do {
                 let feed = try await storageService.createFeed(

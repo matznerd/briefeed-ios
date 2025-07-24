@@ -233,15 +233,25 @@ class CombinedFeedViewModel: ObservableObject {
         do {
             feeds = try viewContext.fetch(fetchRequest)
             
+            // Debug logging
+            print("📱 Loading feeds from Core Data:")
+            print("📱 Total feeds found: \(feeds.count)")
+            for feed in feeds {
+                print("📱 Feed: \(feed.name ?? "Unknown") - Active: \(feed.isActive) - Type: \(feed.type ?? "unknown")")
+            }
+            
             // If no feeds exist, create default feeds
             if feeds.isEmpty {
+                print("📱 No feeds found, creating defaults...")
                 await createDefaultFeeds()
             } else {
                 // Load articles from all feeds
+                print("📱 Loading articles from all active feeds...")
                 await refresh(feedId: "all")
             }
         } catch {
             errorMessage = "Failed to load feeds: \(error.localizedDescription)"
+            print("❌ Failed to load feeds: \(error)")
         }
     }
     
@@ -388,8 +398,6 @@ class CombinedFeedViewModel: ObservableObject {
     
     @MainActor
     private func createDefaultFeeds() async {
-        print("📱 Creating default feeds using DefaultDataService...")
-        
         do {
             // Use DefaultDataService to create feeds (this prevents duplicates)
             try await DefaultDataService.shared.createDefaultFeedsIfNeeded()

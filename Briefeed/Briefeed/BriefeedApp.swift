@@ -16,6 +16,8 @@ struct BriefeedApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     init() {
+        print("🚀 BriefeedApp initializing...")
+        
         // Initialize UserDefaults on app launch
         UserDefaultsManager.shared.loadSettings()
         
@@ -33,6 +35,8 @@ struct BriefeedApp: App {
                 print("Failed to create default feeds: \(error)")
             }
         }
+        
+        print("✅ BriefeedApp initialization complete")
     }
 
     var body: some Scene {
@@ -42,6 +46,7 @@ struct BriefeedApp: App {
                 .environmentObject(userDefaultsManager)
                 .preferredColorScheme(userDefaultsManager.isDarkMode ? .dark : .light)
                 .onAppear {
+                    print("🎯 ContentView appeared")
                     // Apply theme settings when window is ready
                     applyThemeSettings()
                 }

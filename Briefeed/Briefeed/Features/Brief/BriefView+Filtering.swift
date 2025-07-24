@@ -238,27 +238,44 @@ struct FilteredBriefView: View {
     }
     
     private func removeItem(_ item: EnhancedQueueItem) {
-        queueService.enhancedQueue.removeAll { $0.id == item.id }
+        queueService.removeFromEnhancedQueue { $0.id == item.id }
         queueService.saveEnhancedQueue()
         
         // Update audio service if needed
-        if let articleID = item.articleID {
-            viewModel.removeFromQueue(articleID: articleID)
+        if let articleID = item.articleID,
+           let article = viewModel.queuedArticles.first(where: { $0.id == articleID }) {
+            viewModel.removeFromQueue(article)
         }
     }
     
     private func saveItem(_ item: EnhancedQueueItem) {
         // Remove expiration for saved items
         if let index = queueService.enhancedQueue.firstIndex(where: { $0.id == item.id }) {
-            var savedItem = queueService.enhancedQueue[index]
-            savedItem.expiresAt = nil
-            queueService.enhancedQueue[index] = savedItem
+            // Create a new item with nil expiration since EnhancedQueueItem has let properties
+            let currentItem = queueService.enhancedQueue[index]
+            let newItem = EnhancedQueueItem(
+                id: currentItem.id,
+                title: currentItem.title,
+                source: currentItem.source,
+                addedDate: currentItem.addedDate,
+                expiresAt: nil,
+                articleID: currentItem.articleID,
+                audioUrl: currentItem.audioUrl,
+                duration: currentItem.duration,
+                isListened: currentItem.isListened,
+                lastPosition: currentItem.lastPosition
+            )
+            queueService.updateEnhancedQueue(
+                queueService.enhancedQueue.enumerated().map { i, item in
+                    i == index ? newItem : item
+                }
+            )
             queueService.saveEnhancedQueue()
         }
     }
     
     private func clearQueue() {
-        queueService.enhancedQueue.removeAll()
+        queueService.updateEnhancedQueue([])
         queueService.saveEnhancedQueue()
         viewModel.clearQueue()
     }

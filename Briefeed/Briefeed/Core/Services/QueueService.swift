@@ -37,6 +37,28 @@ class QueueService: ObservableObject {
     private var audioGenerationTask: Task<Void, Never>?
     private let geminiService = GeminiService()
     
+    // MARK: - Internal Methods for Extensions
+    internal func appendToEnhancedQueue(_ item: EnhancedQueueItem) {
+        enhancedQueue.append(item)
+    }
+    
+    internal func updateEnhancedQueue(_ newQueue: [EnhancedQueueItem]) {
+        enhancedQueue = newQueue
+    }
+    
+    internal func removeFromEnhancedQueue(where predicate: (EnhancedQueueItem) -> Bool) {
+        enhancedQueue.removeAll(where: predicate)
+    }
+    
+    internal func modifyEnhancedQueueItem(at index: Int, transform: (inout EnhancedQueueItem) -> Void) {
+        guard index >= 0 && index < enhancedQueue.count else { return }
+        transform(&enhancedQueue[index])
+    }
+    
+    internal func getEnhancedQueueKey() -> String {
+        return enhancedQueueKey
+    }
+    
     // MARK: - Initialization
     private init() {
         loadQueue()

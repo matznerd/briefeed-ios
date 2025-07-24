@@ -71,29 +71,75 @@ struct PersistenceController {
         return result
     }()
 
-    let container: NSPersistentContainer
+    var container: NSPersistentContainer
 
     init(inMemory: Bool = false) {
         container = NSPersistentContainer(name: "Briefeed")
         if inMemory {
             container.persistentStoreDescriptions.first!.url = URL(fileURLWithPath: "/dev/null")
         }
-        container.loadPersistentStores(completionHandler: { (storeDescription, error) in
+        
+        // Enable automatic lightweight migration
+        if let description = container.persistentStoreDescriptions.first {
+            description.setOption(true as NSNumber, forKey: NSMigratePersistentStoresAutomaticallyOption)
+            description.setOption(true as NSNumber, forKey: NSInferMappingModelAutomaticallyOption)
+        }
+        
+        // Load the persistent stores
+        var loadError: NSError?
+        container.loadPersistentStores { storeDescription, error in
             if let error = error as NSError? {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-
-                /*
-                 Typical reasons for an error here include:
-                 * The parent directory does not exist, cannot be created, or disallows writing.
-                 * The persistent store is not accessible, due to permissions or data protection when the device is locked.
-                 * The device is out of space.
-                 * The store could not be migrated to the current model version.
-                 Check the error message to determine what the actual problem was.
-                 */
+                print("❌ Core Data error: \(error), \(error.userInfo)")
+                loadError = error
+            }
+        }
+        
+        // Handle migration failure after the initial load
+        if let error = loadError {
+            // If migration fails, delete the store and recreate
+            if error.code == 134140 || error.code == 134100 {
+                print("⚠️ Migration failed, attempting to recreate store...")
+                
+                if let storeURL = container.persistentStoreDescriptions.first?.url {
+                    do {
+                        // Remove the existing store
+                        try FileManager.default.removeItem(at: storeURL)
+                        
+                        // Also remove journal files
+                        let walURL = storeURL.appendingPathExtension("sqlite-wal")
+                        let shmURL = storeURL.appendingPathExtension("sqlite-shm")
+                        try? FileManager.default.removeItem(at: walURL)
+                        try? FileManager.default.removeItem(at: shmURL)
+                        
+                        print("✅ Removed old store, recreating...")
+                        
+                        // Create a new container and try loading again
+                        let newContainer = NSPersistentContainer(name: "Briefeed")
+                        if inMemory {
+                            newContainer.persistentStoreDescriptions.first!.url = URL(fileURLWithPath: "/dev/null")
+                        }
+                        
+                        newContainer.loadPersistentStores { _, retryError in
+                            if let retryError = retryError {
+                                print("❌ Failed to recreate store: \(retryError)")
+                                fatalError("Could not recreate Core Data store: \(retryError)")
+                            } else {
+                                print("✅ Successfully recreated Core Data store")
+                            }
+                        }
+                        
+                        // Replace the container
+                        container = newContainer
+                    } catch {
+                        print("❌ Failed to remove old store: \(error)")
+                        fatalError("Could not remove old Core Data store: \(error)")
+                    }
+                }
+            } else {
                 fatalError("Unresolved error \(error), \(error.userInfo)")
             }
-        })
+        }
+        
         container.viewContext.automaticallyMergesChangesFromParent = true
     }
 }

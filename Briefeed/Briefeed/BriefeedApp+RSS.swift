@@ -6,44 +6,62 @@
 //
 
 import SwiftUI
+import CoreData
 
 // MARK: - RSS App Initialization
 extension BriefeedApp {
     
     /// Initialize RSS features on app launch
     func initializeRSSFeatures() {
-        // Register RSS defaults
-        UserDefaultsManager.shared.registerRSSDefaults()
-        UserDefaultsManager.shared.loadRSSSettings()
-        
-        // Initialize RSS feeds and auto-play
-        Task {
-            // Initialize default RSS feeds if needed
-            await RSSAudioService.shared.initializeDefaultFeedsIfNeeded()
+        do {
+            print("📡 Initializing RSS features...")
             
-            // Load enhanced queue
-            await MainActor.run {
-                QueueService.shared.loadEnhancedQueue()
-                
-                // Migrate legacy queue if needed
-                if QueueService.shared.enhancedQueue.isEmpty && !QueueService.shared.queuedItems.isEmpty {
-                    QueueService.shared.migrateLegacyQueue()
+            // Register RSS defaults
+            UserDefaultsManager.shared.registerRSSDefaults()
+            UserDefaultsManager.shared.loadRSSSettings()
+            
+            print("✅ RSS settings loaded")
+            
+            // Initialize RSS feeds and auto-play
+            Task {
+                do {
+                    // Initialize default RSS feeds if needed
+                    await RSSAudioService.shared.initializeDefaultFeedsIfNeeded()
+                    print("✅ RSS feeds initialized")
+                    
+                    // Load enhanced queue
+                    await MainActor.run {
+                        QueueService.shared.loadEnhancedQueue()
+                        
+                        // Migrate legacy queue if needed
+                        if QueueService.shared.enhancedQueue.isEmpty && !QueueService.shared.queuedItems.isEmpty {
+                            QueueService.shared.migrateLegacyQueue()
+                        }
+                    }
+                    print("✅ Queue loaded")
+                    
+                    // Handle auto-play if enabled
+                    if UserDefaultsManager.shared.autoPlayLiveNewsOnOpen {
+                        // Wait a moment for UI to be ready
+                        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                        
+                        // Refresh feeds if needed
+                        await RSSAudioService.shared.refreshAllFeeds()
+                        
+                        // Play live news like a radio
+                        await playLiveNewsRadio()
+                    }
+                } catch {
+                    print("❌ Error in RSS initialization: \(error)")
                 }
             }
             
-            // Handle auto-play if enabled
-            if UserDefaultsManager.shared.autoPlayLiveNewsOnOpen {
-                // Wait a moment for UI to be ready
-                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-                
-                // Refresh feeds and auto-populate queue
-                await RSSAudioService.shared.refreshAllFeeds()
-                await QueueService.shared.autoPopulateWithLiveNews()
-            }
+            // Schedule periodic cleanup of expired episodes
+            scheduleRSSCleanup()
+            
+        } catch {
+            print("❌ Fatal error initializing RSS features: \(error)")
         }
-        
-        // Schedule periodic cleanup of expired episodes
-        scheduleRSSCleanup()
     }
     
     /// Schedule periodic cleanup tasks
@@ -60,6 +78,47 @@ extension BriefeedApp {
             Task {
                 await RSSAudioService.shared.refreshAllFeeds()
             }
+        }
+    }
+    
+    /// Play live news like a radio - automatically queue and play latest episodes
+    private func playLiveNewsRadio() async {
+        let viewContext = PersistenceController.shared.container.viewContext
+        let fetchRequest: NSFetchRequest<RSSFeed> = RSSFeed.fetchRequest()
+        fetchRequest.predicate = NSPredicate(format: "isEnabled == YES")
+        fetchRequest.sortDescriptors = [
+            NSSortDescriptor(keyPath: \RSSFeed.priority, ascending: true),
+            NSSortDescriptor(keyPath: \RSSFeed.displayName, ascending: true)
+        ]
+        
+        do {
+            let feeds = try viewContext.fetch(fetchRequest)
+            
+            // Clear queue first
+            await MainActor.run {
+                QueueService.shared.clearQueue()
+            }
+            
+            // Add the latest unlistened episode from each feed
+            for feed in feeds {
+                if let episodes = feed.episodes?.allObjects as? [RSSEpisode] {
+                    if let latestEpisode = episodes
+                        .filter({ !$0.isListened })
+                        .sorted(by: { $0.pubDate > $1.pubDate })
+                        .first {
+                        await MainActor.run {
+                            QueueService.shared.addRSSEpisode(latestEpisode)
+                        }
+                    }
+                }
+            }
+            
+            // Start playing
+            await MainActor.run {
+                QueueService.shared.playNext()
+            }
+        } catch {
+            print("❌ Error playing live news radio: \(error)")
         }
     }
 }

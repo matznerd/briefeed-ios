@@ -35,28 +35,28 @@
         <attribute name="textSize" optional="YES" attributeType="Float" defaultValueString="1.0" usesScalarValueType="YES"/>
     </entity>
     <entity name="RSSFeed" representedClassName="RSSFeed" syncable="YES">
-        <attribute name="feedDescription" optional="YES" attributeType="String"/>
-        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
-        <attribute name="imageUrl" optional="YES" attributeType="String"/>
+        <attribute name="createdDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="displayName" optional="YES" attributeType="String"/>
+        <attribute name="id" optional="YES" attributeType="String"/>
         <attribute name="isEnabled" optional="YES" attributeType="Boolean" defaultValueString="YES" usesScalarValueType="YES"/>
-        <attribute name="lastError" optional="YES" attributeType="String"/>
-        <attribute name="lastUpdated" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="lastFetchDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="priority" optional="YES" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
-        <attribute name="title" optional="YES" attributeType="String"/>
         <attribute name="updateFrequency" optional="YES" attributeType="String"/>
         <attribute name="url" optional="YES" attributeType="String"/>
         <relationship name="episodes" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="RSSEpisode" inverseName="feed" inverseEntity="RSSEpisode"/>
     </entity>
     <entity name="RSSEpisode" representedClassName="RSSEpisode" syncable="YES">
         <attribute name="audioUrl" optional="YES" attributeType="String"/>
+        <attribute name="downloadedFilePath" optional="YES" attributeType="String"/>
         <attribute name="duration" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
         <attribute name="episodeDescription" optional="YES" attributeType="String"/>
+        <attribute name="feedId" optional="YES" attributeType="String"/>
         <attribute name="hasBeenQueued" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
-        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
-        <attribute name="imageUrl" optional="YES" attributeType="String"/>
+        <attribute name="id" optional="YES" attributeType="String"/>
         <attribute name="isListened" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
-        <attribute name="lastPosition" optional="YES" attributeType="Float" defaultValueString="0.0" usesScalarValueType="YES"/>
-        <attribute name="publishedDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="lastPosition" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="listenedDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="pubDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="title" optional="YES" attributeType="String"/>
         <relationship name="feed" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="RSSFeed" inverseName="episodes" inverseEntity="RSSFeed"/>
     </entity>
@@ -64,7 +64,7 @@
         <element name="Article" positionX="-63" positionY="-18" width="128" height="224"/>
         <element name="Feed" positionX="-254" positionY="36" width="128" height="149"/>
         <element name="UserPreferences" positionX="-243" positionY="126" width="128" height="119"/>
-        <element name="RSSFeed" positionX="-45" positionY="270" width="128" height="194"/>
-        <element name="RSSEpisode" positionX="160" positionY="270" width="128" height="194"/>
+        <element name="RSSFeed" positionX="-45" positionY="270" width="128" height="164"/>
+        <element name="RSSEpisode" positionX="160" positionY="270" width="128" height="224"/>
     </elements>
 </model>

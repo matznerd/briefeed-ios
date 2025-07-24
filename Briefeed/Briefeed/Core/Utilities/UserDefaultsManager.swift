@@ -44,6 +44,15 @@ enum UserDefaultsKey: String, CaseIterable {
     case defaultFeedRefreshInterval = "defaultFeedRefreshInterval"
     case articlesPerPage = "articlesPerPage"
     case currentFeedSort = "currentFeedSort"
+    
+    // RSS Live News
+    case autoPlayLiveNewsOnOpen = "autoPlayLiveNewsOnOpen"
+    case autoRefreshLiveNewsOnOpen = "autoRefreshLiveNewsOnOpen"
+    case rssPlaybackSpeed = "rssPlaybackSpeed"
+    case defaultBriefFilter = "defaultBriefFilter"
+    case rssRetentionHours = "rssRetentionHours"
+    case rssFeedPriorities = "rssFeedPriorities"
+    case rssLastPlayedEpisodeId = "rssLastPlayedEpisodeId"
 }
 
 // MARK: - Summary Length Options

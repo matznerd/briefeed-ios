@@ -70,6 +70,13 @@ protocol AudioServiceProtocol: AnyObject {
     func configureBackgroundAudio() throws
 }
 
+// MARK: - Associated Keys for RSS Extension
+internal struct AssociatedKeys {
+    static var currentRSSEpisode = "currentRSSEpisode"
+    static var rssAudioPlayer = "rssAudioPlayer"
+    static var progressObserver = "progressObserver"
+}
+
 // MARK: - Audio Service Implementation
 @MainActor
 class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
@@ -84,9 +91,9 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
     private var isPausedByUser = false
     
     // Audio player for Gemini TTS
-    private var audioPlayer: AVAudioPlayer?
+    internal var audioPlayer: AVAudioPlayer?
     private var playerTimer: Timer?
-    private var isUsingGeminiTTS = false
+    internal var isUsingGeminiTTS = false
     
     // Published properties
     let state = CurrentValueSubject<AudioPlayerState, Never>(.idle)
@@ -110,7 +117,7 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
     private let currentIndexKey = "audioQueueCurrentIndex"
     
     // Now Playing Info
-    private var nowPlayingInfo: [String: Any] = [:]
+    internal var nowPlayingInfo: [String: Any] = [:]
     
     // MARK: - Initialization
     override init() {
@@ -447,6 +454,16 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
     }
     
     func playNext() async throws {
+        // Check if QueueService has items to play
+        if !QueueService.shared.enhancedQueue.isEmpty {
+            // Let QueueService handle playing the next item (RSS or regular)
+            await MainActor.run {
+                QueueService.shared.playNext()
+            }
+            return
+        }
+        
+        // Fallback to regular queue
         guard queueIndex + 1 < queue.count else { return }
         queueIndex += 1
         currentArticle = queue[queueIndex]
@@ -651,8 +668,15 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
     }
     
-    private func updateNowPlayingPlaybackState() {
-        if synthesizer.isSpeaking && !synthesizer.isPaused {
+    internal func updateNowPlayingPlaybackState() {
+        // Check if RSS is playing
+        if let rssPlayer = objc_getAssociatedObject(self, &AssociatedKeys.rssAudioPlayer) as? AVPlayer {
+            if rssPlayer.rate > 0 {
+                MPNowPlayingInfoCenter.default().playbackState = .playing
+            } else {
+                MPNowPlayingInfoCenter.default().playbackState = .paused
+            }
+        } else if synthesizer.isSpeaking && !synthesizer.isPaused {
             MPNowPlayingInfoCenter.default().playbackState = .playing
         } else if synthesizer.isPaused {
             MPNowPlayingInfoCenter.default().playbackState = .paused

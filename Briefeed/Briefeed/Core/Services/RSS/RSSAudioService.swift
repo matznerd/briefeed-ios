@@ -91,7 +91,7 @@ class RSSAudioService: NSObject, ObservableObject {
         do {
             // Fetch RSS data
             guard let url = URL(string: feed.url) else { return }
-            let data = try await networkService.fetchData(from: url)
+            let data = try await networkService.requestData(url.absoluteString)
             
             // Parse RSS
             let parser = RSSParser()
@@ -184,7 +184,8 @@ class RSSAudioService: NSObject, ObservableObject {
             let scraped = try await firecrawlService.scrapeURL(urlString)
             
             // Look for RSS feed link in the content
-            if let content = scraped.markdown ?? scraped.content {
+            let content = scraped.markdown ?? scraped.content ?? ""
+            if !content.isEmpty {
                 // Player.fm includes RSS links in the page
                 let pattern = #"(https?://[^"\s]+\.rss|https?://[^"\s]+/rss|https?://[^"\s]+/feed)"#
                 if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
@@ -198,6 +199,85 @@ class RSSAudioService: NSObject, ObservableObject {
         }
         
         return nil
+    }
+    
+    /// Add a new RSS feed
+    func addFeed(from urlString: String) async throws {
+        // Check if it's a Player.fm URL
+        var feedURL = urlString
+        if urlString.contains("player.fm") {
+            if let extractedURL = await extractFeedFromPlayerFM(urlString) {
+                feedURL = extractedURL
+            } else {
+                throw NSError(domain: "RSSAudioService", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not extract RSS feed from Player.fm URL"])
+            }
+        }
+        
+        // Validate URL
+        guard let url = URL(string: feedURL) else {
+            throw NSError(domain: "RSSAudioService", code: 2, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
+        }
+        
+        // Check if feed already exists
+        if feeds.first(where: { $0.url == feedURL }) != nil {
+            throw NSError(domain: "RSSAudioService", code: 3, userInfo: [NSLocalizedDescriptionKey: "Feed already exists"])
+        }
+        
+        // Fetch and parse feed to get title
+        let data = try await URLSession.shared.data(from: url).0
+        let parser = RSSParser()
+        let episodes = try await parser.parse(data: data, feedId: UUID().uuidString)
+        
+        // Extract feed title from first episode or use URL
+        let feedTitle = episodes.first?.title.components(separatedBy: " - ").first ?? url.host ?? "Unknown Feed"
+        
+        // Create new feed
+        let feed = RSSFeed(context: viewContext)
+        feed.id = UUID().uuidString
+        feed.url = feedURL
+        feed.displayName = feedTitle
+        feed.updateFrequency = "daily"
+        feed.priority = Int16(feeds.count + 1)
+        feed.isEnabled = true
+        feed.createdDate = Date()
+        
+        try viewContext.save()
+        loadFeeds()
+        
+        // Refresh the new feed
+        await refreshFeed(feed)
+    }
+    
+    /// Delete a feed
+    func deleteFeed(_ feed: RSSFeed) {
+        viewContext.delete(feed)
+        
+        do {
+            try viewContext.save()
+            loadFeeds()
+        } catch {
+            print("Error deleting feed: \(error)")
+        }
+    }
+    
+    /// Save changes to a feed
+    func saveFeed(_ feed: RSSFeed) {
+        do {
+            try viewContext.save()
+            loadFeeds()
+        } catch {
+            print("Error saving feed: \(error)")
+        }
+    }
+    
+    /// Check if an episode is fresh (unlistened and recent)
+    func isEpisodeFresh(_ episode: RSSEpisode) -> Bool {
+        guard !episode.isListened else { return false }
+        
+        let maxAge: TimeInterval = episode.updateFrequency == "hourly" ? 7200 : 86400 // 2 hours or 24 hours
+        let age = Date().timeIntervalSince(episode.pubDate)
+        
+        return age <= maxAge
     }
     
     // MARK: - Private Methods

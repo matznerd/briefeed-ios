@@ -7,17 +7,6 @@
 
 import Foundation
 
-// MARK: - RSS UserDefaults Keys
-extension UserDefaultsKey {
-    // RSS Settings
-    static let autoPlayLiveNewsOnOpen = UserDefaultsKey(rawValue: "autoPlayLiveNewsOnOpen")!
-    static let rssPlaybackSpeed = UserDefaultsKey(rawValue: "rssPlaybackSpeed")!
-    static let defaultBriefFilter = UserDefaultsKey(rawValue: "defaultBriefFilter")!
-    static let rssRetentionHours = UserDefaultsKey(rawValue: "rssRetentionHours")!
-    static let rssFeedPriorities = UserDefaultsKey(rawValue: "rssFeedPriorities")!
-    static let rssLastPlayedEpisodeId = UserDefaultsKey(rawValue: "rssLastPlayedEpisodeId")!
-}
-
 // MARK: - RSS UserDefaults Properties
 extension UserDefaultsManager {
     

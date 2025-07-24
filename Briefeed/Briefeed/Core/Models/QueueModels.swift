@@ -125,7 +125,7 @@ extension QueueService.QueuedItem {
         return EnhancedQueueItem(
             id: UUID(),
             title: article.title ?? "Untitled",
-            source: .article(source: article.sourceFeed ?? "Unknown"),
+            source: .article(source: article.feed?.name ?? "Unknown"),
             addedDate: addedDate,
             expiresAt: nil, // Articles don't expire
             articleID: articleID,

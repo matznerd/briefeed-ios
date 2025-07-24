@@ -20,7 +20,7 @@ struct LiveNewsView: View {
         entity: RSSFeed.entity(),
         sortDescriptors: [
             NSSortDescriptor(keyPath: \RSSFeed.priority, ascending: true),
-            NSSortDescriptor(keyPath: \RSSFeed.title, ascending: true)
+            NSSortDescriptor(keyPath: \RSSFeed.displayName, ascending: true)
         ]
     ) private var feeds: FetchedResults<RSSFeed>
     
@@ -42,7 +42,7 @@ struct LiveNewsView: View {
                 await refreshFeeds()
             }
             .sheet(isPresented: $showingAddFeed) {
-                AddFeedView()
+                AddRSSFeedView()
             }
             .sheet(item: $selectedFeed) { feed in
                 FeedDetailsView(feed: feed)
@@ -60,28 +60,58 @@ struct LiveNewsView: View {
     // MARK: - Subviews
     
     private var feedsListView: some View {
-        List {
-            ForEach(feeds) { feed in
-                FeedRow(feed: feed) {
-                    selectedFeed = feed
+        VStack(spacing: 0) {
+            // Play All Button
+            if feeds.contains(where: { $0.isEnabled }) {
+                VStack(spacing: 0) {
+                    Button(action: {
+                        Task {
+                            await playAllLiveNews()
+                        }
+                    }) {
+                        HStack {
+                            Image(systemName: "play.circle.fill")
+                                .font(.system(size: 24))
+                            Text("Play Live News")
+                                .font(.headline)
+                            Spacer()
+                            Text("Auto-plays latest episodes")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding()
+                        .background(Color.briefeedRed.opacity(0.1))
+                        .foregroundColor(.briefeedRed)
+                    }
+                    .buttonStyle(.plain)
+                    
+                    Divider()
                 }
-                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    feedSwipeActions(for: feed)
-                }
-            }
-            .onMove { source, destination in
-                moveFeed(from: source, to: destination)
             }
             
-            // Add padding at bottom for mini player
-            Color.clear
-                .frame(height: 100)
-                .listRowInsets(EdgeInsets())
-                .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
+            List {
+                ForEach(feeds) { feed in
+                    FeedRow(feed: feed) {
+                        selectedFeed = feed
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        feedSwipeActions(for: feed)
+                    }
+                }
+                .onMove { source, destination in
+                    moveFeed(from: source, to: destination)
+                }
+                
+                // Add padding at bottom for mini player
+                Color.clear
+                    .frame(height: 100)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+            }
+            .listStyle(.plain)
+            .environment(\.editMode, .constant(feeds.count > 1 ? .inactive : .inactive))
         }
-        .listStyle(.plain)
-        .environment(\.editMode, .constant(feeds.count > 1 ? .inactive : .inactive))
     }
     
     private var emptyStateView: some View {
@@ -193,8 +223,45 @@ struct LiveNewsView: View {
                 }
                 
                 for episode in freshEpisodes.prefix(3) {
-                    await queueService.addRSSEpisode(episode)
+                    queueService.addRSSEpisode(episode)
                 }
+            }
+        }
+    }
+    
+    private func playAllLiveNews() async {
+        // Clear existing queue
+        await MainActor.run {
+            queueService.clearQueue()
+        }
+        
+        // Add only the latest episode from each enabled feed
+        var episodesToPlay: [(RSSEpisode, Int)] = []
+        
+        for (index, feed) in feeds.enumerated() where feed.isEnabled {
+            if let episodes = feed.episodes?.allObjects as? [RSSEpisode] {
+                // Get the most recent episode that hasn't been listened to
+                if let latestEpisode = episodes
+                    .filter({ !$0.isListened })
+                    .sorted(by: { $0.pubDate > $1.pubDate })
+                    .first {
+                    episodesToPlay.append((latestEpisode, index))
+                }
+            }
+        }
+        
+        // Sort by feed priority
+        episodesToPlay.sort { $0.1 < $1.1 }
+        
+        // Add to queue and start playing
+        for (episode, _) in episodesToPlay {
+            queueService.addRSSEpisode(episode)
+        }
+        
+        // Start playing immediately
+        if !episodesToPlay.isEmpty {
+            await MainActor.run {
+                queueService.playNext()
             }
         }
     }
@@ -225,37 +292,65 @@ struct LiveNewsView: View {
 private struct FeedRow: View {
     @ObservedObject var feed: RSSFeed
     let onTap: () -> Void
+    @ObservedObject private var audioService = AudioService.shared
+    @ObservedObject private var queueService = QueueService.shared
+    @ObservedObject private var stateManager = ArticleStateManager.shared
     
     private var latestEpisode: RSSEpisode? {
         (feed.episodes?.allObjects as? [RSSEpisode])?
-            .sorted { $0.publishedDate ?? Date.distantPast > $1.publishedDate ?? Date.distantPast }
+            .sorted { $0.pubDate > $1.pubDate }
             .first
     }
     
-    private var freshEpisodeCount: Int {
-        (feed.episodes?.allObjects as? [RSSEpisode])?
-            .filter { RSSAudioService.shared.isEpisodeFresh($0) }
-            .count ?? 0
+    private var hasNewEpisode: Bool {
+        guard let latest = latestEpisode else { return false }
+        return !latest.isListened
+    }
+    
+    private var isCurrentlyPlaying: Bool {
+        guard let latest = latestEpisode else { return false }
+        // Check if this episode is the current playing item
+        // Compare URLs as strings to handle any formatting differences
+        let currentURL = audioService.currentArticle?.url
+        let episodeURL = latest.audioUrl
+        let isPlayingThisEpisode = currentURL == episodeURL
+        return isPlayingThisEpisode && (audioService.state.value == .playing || audioService.state.value == .loading)
+    }
+    
+    private var isInQueue: Bool {
+        guard let latest = latestEpisode else { return false }
+        return queueService.enhancedQueue.contains { item in
+            item.audioUrl?.absoluteString == latest.audioUrl
+        }
     }
     
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 12) {
-                // Feed Icon
-                ZStack {
-                    Circle()
-                        .fill(feed.isEnabled ? Color.red.opacity(0.1) : Color.gray.opacity(0.1))
-                        .frame(width: 50, height: 50)
-                    
-                    Image(systemName: "dot.radiowaves.left.and.right")
-                        .font(.system(size: 22))
-                        .foregroundColor(feed.isEnabled ? .red : .gray)
+                // Inline Play/Pause Button
+                if hasNewEpisode || isCurrentlyPlaying {
+                    Button {
+                        if isCurrentlyPlaying {
+                            audioService.pauseWithRSSSupport()
+                        } else if let latest = latestEpisode {
+                            Task {
+                                queueService.clearQueue()
+                                queueService.addRSSEpisode(latest)
+                                queueService.playNext()
+                            }
+                        }
+                    } label: {
+                        Image(systemName: isCurrentlyPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundColor(.briefeedRed)
+                    }
+                    .buttonStyle(.plain)
                 }
                 
                 // Feed Info
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text(feed.title ?? "Unknown Feed")
+                        Text(feed.displayName)
                             .font(.headline)
                             .lineLimit(1)
                         
@@ -272,20 +367,20 @@ private struct FeedRow: View {
                     }
                     
                     if let latest = latestEpisode {
-                        Text(latest.title ?? "")
+                        Text(latest.title)
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .lineLimit(1)
                     }
                     
                     HStack(spacing: 8) {
-                        if freshEpisodeCount > 0 {
-                            Label("\(freshEpisodeCount) new", systemImage: "sparkle")
+                        if hasNewEpisode {
+                            Image(systemName: "sparkle")
                                 .font(.caption)
                                 .foregroundColor(.orange)
                         }
                         
-                        if let lastUpdate = feed.lastUpdated {
+                        if let lastUpdate = feed.lastFetchDate {
                             Text("Updated \(lastUpdate.formatted(.relative(presentation: .named)))")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -295,19 +390,39 @@ private struct FeedRow: View {
                 
                 Spacer()
                 
+                // Status indicators
+                if isCurrentlyPlaying {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 16))
+                        .foregroundColor(.briefeedRed)
+                        .symbolEffect(.bounce, options: .repeat(.continuous))
+                } else if isInQueue {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(.green)
+                }
+                
                 // Chevron
                 Image(systemName: "chevron.right")
                     .font(.system(size: 14))
                     .foregroundColor(.secondary)
+                    .padding(.leading, 8)
             }
             .padding(.vertical, 8)
         }
         .buttonStyle(.plain)
+        // Force refresh when audio state changes
+        .onReceive(audioService.$currentArticle) { _ in
+            // Triggers view update
+        }
+        .onReceive(audioService.state) { _ in
+            // Triggers view update
+        }
     }
 }
 
-// MARK: - Add Feed View
-private struct AddFeedView: View {
+// MARK: - Add RSS Feed View
+private struct AddRSSFeedView: View {
     @Environment(\.dismiss) var dismiss
     @State private var feedURL = ""
     @State private var isLoading = false
@@ -395,7 +510,7 @@ private struct FeedDetailsView: View {
     
     private var episodes: [RSSEpisode] {
         (feed.episodes?.allObjects as? [RSSEpisode] ?? [])
-            .sorted { $0.publishedDate ?? Date.distantPast > $1.publishedDate ?? Date.distantPast }
+            .sorted { $0.pubDate > $1.pubDate }
     }
     
     var body: some View {
@@ -404,20 +519,21 @@ private struct FeedDetailsView: View {
                 // Feed Info
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(feed.title ?? "Unknown Feed")
+                        Text(feed.displayName)
                             .font(.headline)
                         
-                        if let description = feed.feedDescription {
-                            Text(description)
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                        }
+                        // RSS feeds don't have descriptions in our model
+                        // if let description = feed.feedDescription {
+                        //     Text(description)
+                        //         .font(.subheadline)
+                        //         .foregroundColor(.secondary)
+                        // }
                         
-                        if let url = feed.url {
-                            Link(url, destination: URL(string: url)!)
-                                .font(.caption)
-                                .foregroundColor(.blue)
-                        }
+                        // Feed URL is not optional
+                        let url = feed.url
+                        Link(url, destination: URL(string: url)!)
+                            .font(.caption)
+                            .foregroundColor(.blue)
                     }
                     .padding(.vertical, 4)
                 } header: {
@@ -428,9 +544,7 @@ private struct FeedDetailsView: View {
                 Section {
                     ForEach(episodes.prefix(20)) { episode in
                         EpisodeRow(episode: episode) {
-                            Task {
-                                await queueService.addRSSEpisode(episode)
-                            }
+                            queueService.addRSSEpisode(episode)
                         }
                     }
                 } header: {
@@ -472,7 +586,7 @@ private struct EpisodeRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(episode.title ?? "Unknown Episode")
+                Text(episode.title)
                     .font(.subheadline)
                     .fontWeight(.medium)
                     .lineLimit(2)
@@ -494,14 +608,14 @@ private struct EpisodeRow: View {
             }
             
             HStack(spacing: 8) {
-                if let date = episode.publishedDate {
-                    Text(date.formatted(.relative(presentation: .named)))
+                if episode.pubDate != Date.distantPast {
+                    Text(episode.pubDate.formatted(.relative(presentation: .named)))
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
                 
-                if let duration = episode.duration, duration > 0 {
-                    Text("• \(formatDuration(duration))")
+                if episode.duration > 0 {
+                    Text("• \(formatDuration(episode.duration))")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
