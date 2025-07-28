@@ -22,18 +22,35 @@ struct GeminiTTSRequest: Codable {
 struct GeminiTTSConfig: Codable {
     let responseModalities: [String]
     let speechConfig: GeminiSpeechConfig
+    
+    enum CodingKeys: String, CodingKey {
+        case responseModalities = "response_modalities"
+        case speechConfig = "speech_config"
+    }
 }
 
 struct GeminiSpeechConfig: Codable {
     let voiceConfig: GeminiVoiceConfig
+    
+    enum CodingKeys: String, CodingKey {
+        case voiceConfig = "voice_config"
+    }
 }
 
 struct GeminiVoiceConfig: Codable {
     let prebuiltVoiceConfig: GeminiPrebuiltVoiceConfig
+    
+    enum CodingKeys: String, CodingKey {
+        case prebuiltVoiceConfig = "prebuilt_voice_config"
+    }
 }
 
 struct GeminiPrebuiltVoiceConfig: Codable {
     let voiceName: String
+    
+    enum CodingKeys: String, CodingKey {
+        case voiceName = "voice_name"
+    }
 }
 
 struct GeminiTTSResponse: Codable {
