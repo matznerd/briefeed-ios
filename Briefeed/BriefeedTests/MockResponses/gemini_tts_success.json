@@ -1,0 +1,37 @@
+{
+    "candidates": [
+        {
+            "content": {
+                "parts": [
+                    {
+                        "inline_data": {
+                            "mime_type": "audio/L16;codec=pcm;rate=24000",
+                            "data": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAEE0AAABNAAAAAQAIAGRhdGEAAAAA"
+                        }
+                    }
+                ],
+                "role": "model"
+            },
+            "finish_reason": "STOP",
+            "index": 0,
+            "safety_ratings": [
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "probability": "NEGLIGIBLE"
+                },
+                {
+                    "category": "HARM_CATEGORY_HATE_SPEECH",
+                    "probability": "NEGLIGIBLE"
+                },
+                {
+                    "category": "HARM_CATEGORY_HARASSMENT",
+                    "probability": "NEGLIGIBLE"
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "probability": "NEGLIGIBLE"
+                }
+            ]
+        }
+    ]
+}

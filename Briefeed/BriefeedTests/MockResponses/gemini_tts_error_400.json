@@ -1,0 +1,18 @@
+{
+    "error": {
+        "code": 400,
+        "message": "Invalid JSON payload received. Unknown name \"config\": Cannot find field.",
+        "status": "INVALID_ARGUMENT",
+        "details": [
+            {
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "field_violations": [
+                    {
+                        "field": "config",
+                        "description": "Invalid JSON payload received. Unknown name \"config\": Cannot find field."
+                    }
+                ]
+            }
+        ]
+    }
+}
