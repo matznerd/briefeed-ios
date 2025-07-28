@@ -11,7 +11,12 @@ import AVFoundation
 // MARK: - Gemini TTS Types
 struct GeminiTTSRequest: Codable {
     let contents: [GeminiContent]
-    let config: GeminiTTSConfig
+    let generationConfig: GeminiTTSConfig
+    
+    enum CodingKeys: String, CodingKey {
+        case contents
+        case generationConfig = "generation_config"
+    }
 }
 
 struct GeminiTTSConfig: Codable {
@@ -207,7 +212,7 @@ class GeminiTTSService: ObservableObject {
             contents: [
                 GeminiContent(parts: [GeminiPart(text: text)], role: "user")
             ],
-            config: GeminiTTSConfig(
+            generationConfig: GeminiTTSConfig(
                 responseModalities: ["AUDIO"],
                 speechConfig: GeminiSpeechConfig(
                     voiceConfig: GeminiVoiceConfig(

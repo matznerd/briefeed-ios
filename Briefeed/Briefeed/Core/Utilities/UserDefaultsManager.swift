@@ -355,12 +355,12 @@ class UserDefaultsManager: ObservableObject {
         useDeviceTTS = userDefaults.bool(forKey: UserDefaultsKey.useDeviceTTS.rawValue)
         selectedVoice = userDefaults.string(forKey: UserDefaultsKey.selectedVoice.rawValue) ?? "Autonoe"
         autoPlayNext = userDefaults.bool(forKey: UserDefaultsKey.autoPlayNext.rawValue)
-        playbackSpeed = userDefaults.float(forKey: UserDefaultsKey.playbackSpeed.rawValue)
+        playbackSpeed = userDefaults.object(forKey: UserDefaultsKey.playbackSpeed.rawValue) as? Float ?? 1.0
         
         // Load RSS settings
         autoPlayLiveNewsOnOpen = userDefaults.bool(forKey: "autoPlayLiveNewsOnOpen")
         autoRefreshLiveNewsOnOpen = userDefaults.bool(forKey: "autoRefreshLiveNewsOnOpen")
-        rssPlaybackSpeed = userDefaults.float(forKey: "rssPlaybackSpeed")
+        rssPlaybackSpeed = userDefaults.object(forKey: "rssPlaybackSpeed") as? Float ?? 1.0
         rssRetentionHours = userDefaults.integer(forKey: "rssRetentionHours")
     }
     
