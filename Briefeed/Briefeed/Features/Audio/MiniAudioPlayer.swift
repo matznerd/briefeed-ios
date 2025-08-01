@@ -40,7 +40,25 @@ struct MiniAudioPlayer: View {
             HStack(spacing: 0) {
                 // Article info (left side)
                 VStack(alignment: .leading, spacing: 2) {
-                    if let article = audioService.currentArticle {
+                    if let playbackItem = audioService.currentPlaybackItem {
+                        Text(playbackItem.title)
+                            .font(.system(size: 14, weight: .medium))
+                            .lineLimit(1)
+                            .foregroundColor(.primary)
+                        
+                        HStack(spacing: 4) {
+                            if playbackItem.isRSS {
+                                Image(systemName: "dot.radiowaves.left.and.right")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            Text(playbackItem.source)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        .lineLimit(1)
+                    } else if let article = audioService.currentArticle {
+                        // Fallback for legacy article playback
                         Text(article.title ?? "Untitled")
                             .font(.system(size: 14, weight: .medium))
                             .lineLimit(1)
@@ -52,10 +70,6 @@ struct MiniAudioPlayer: View {
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
                             } else if let author = article.author, !author.isEmpty {
-                                // For RSS episodes, author contains the feed name
-                                Image(systemName: "dot.radiowaves.left.and.right")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
                                 Text(author)
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
@@ -78,31 +92,31 @@ struct MiniAudioPlayer: View {
                 // Center controls
                 HStack(spacing: 24) {
                     // Skip backward button
-                    Button(action: { audioService.skipBackwardWithRSSSupport(seconds: 15) }) {
+                    Button(action: { audioService.skipBackward(seconds: 15) }) {
                         Image(systemName: "gobackward.15")
                             .font(.system(size: 22))
-                            .foregroundColor(audioService.currentArticle != nil ? .primary : .secondary.opacity(0.5))
+                            .foregroundColor((audioService.currentArticle != nil || audioService.currentPlaybackItem != nil) ? .primary : .secondary.opacity(0.5))
                     }
-                    .buttonStyle(PlainButtonStyle())
-                    .disabled(audioService.currentArticle == nil)
+                    .buttonStyle(ScaledButtonStyle())
+                    .disabled(audioService.currentArticle == nil && audioService.currentPlaybackItem == nil)
                     
                     // Play/Pause button
                     Button(action: togglePlayPause) {
                         Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
                             .font(.system(size: 44))
-                            .foregroundColor(audioService.currentArticle != nil ? .briefeedRed : .secondary.opacity(0.5))
+                            .foregroundColor((audioService.currentArticle != nil || audioService.currentPlaybackItem != nil) ? .briefeedRed : .secondary.opacity(0.5))
                     }
-                    .buttonStyle(PlainButtonStyle())
-                    .disabled(audioService.currentArticle == nil)
+                    .buttonStyle(ScaledButtonStyle())
+                    .disabled(audioService.currentArticle == nil && audioService.currentPlaybackItem == nil)
                     
                     // Skip forward button
-                    Button(action: { audioService.skipForwardWithRSSSupport(seconds: 30) }) {
+                    Button(action: { audioService.skipForward(seconds: 30) }) {
                         Image(systemName: "goforward.30")
                             .font(.system(size: 22))
-                            .foregroundColor(audioService.currentArticle != nil ? .primary : .secondary.opacity(0.5))
+                            .foregroundColor((audioService.currentArticle != nil || audioService.currentPlaybackItem != nil) ? .primary : .secondary.opacity(0.5))
                     }
-                    .buttonStyle(PlainButtonStyle())
-                    .disabled(audioService.currentArticle == nil)
+                    .buttonStyle(ScaledButtonStyle())
+                    .disabled(audioService.currentArticle == nil && audioService.currentPlaybackItem == nil)
                 }
                 .padding(.horizontal, 20)
                 
@@ -167,14 +181,14 @@ struct MiniAudioPlayer: View {
     }
     
     private var isPlaying: Bool {
-        audioService.currentArticle != nil && stateManager.isAudioPlaying
+        (audioService.currentArticle != nil || audioService.currentPlaybackItem != nil) && stateManager.isAudioPlaying
     }
     
     private func togglePlayPause() {
         if isPlaying {
-            audioService.pauseWithRSSSupport()
+            audioService.pause()
         } else {
-            audioService.playWithRSSSupport()
+            audioService.play()
         }
     }
     
@@ -193,6 +207,15 @@ struct VisualEffectBlur: UIViewRepresentable {
     
     func updateUIView(_ uiView: UIVisualEffectView, context: Context) {
         uiView.effect = UIBlurEffect(style: blurStyle)
+    }
+}
+
+// Custom button style with better touch feedback
+struct ScaledButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.9 : 1.0)
+            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
     }
 }
 

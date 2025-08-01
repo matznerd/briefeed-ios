@@ -175,7 +175,8 @@ class GeminiService: GeminiServiceProtocol {
                 endpoint,
                 method: .post,
                 parameters: try JSONEncoder().jsonObject(from: request),
-                headers: ["Content-Type": "application/json"]
+                headers: ["Content-Type": "application/json"],
+                timeout: nil
             )
             
             if let error = response.error {
@@ -271,7 +272,8 @@ class GeminiService: GeminiServiceProtocol {
                 endpoint,
                 method: .post,
                 parameters: try JSONEncoder().jsonObject(from: request),
-                headers: ["Content-Type": "application/json"]
+                headers: ["Content-Type": "application/json"],
+                timeout: nil
             )
             
             if let error = response.error {
@@ -370,13 +372,16 @@ class GeminiService: GeminiServiceProtocol {
             // If we got content, summarize it
             let content = firecrawlData.markdown ?? firecrawlData.content
             if !content.isEmpty {
+                await ProcessingStatusService.shared.updateGeneratingSummary()
                 let summary = try await summarize(text: content, length: .standard)
+                await ProcessingStatusService.shared.updateSummaryGenerated(summaryLength: summary.count)
                 return summary
             }
             
             return nil
         } catch {
             print("Error generating summary for URL \(url): \(error)")
+            await ProcessingStatusService.shared.updateError("Failed to generate summary")
             return nil
         }
     }

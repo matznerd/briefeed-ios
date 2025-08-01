@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import CoreData
 
 // MARK: - Brief View Filter Extension
 extension BriefView {
@@ -298,49 +299,61 @@ struct EnhancedQueueRow: View {
     }
     
     var body: some View {
-        HStack(spacing: 12) {
-            // Source Icon
-            Image(systemName: item.source.iconName)
-                .font(.system(size: 18))
-                .foregroundColor(item.source.isLiveNews ? .red : .briefeedRed)
-                .frame(width: 24)
-            
-            // Content
-            VStack(alignment: .leading, spacing: 4) {
-                Text(item.title)
-                    .font(.headline)
-                    .lineLimit(2)
+        Button(action: playItem) {
+            HStack(spacing: 12) {
+                // Play/Pause Button
+                Button(action: playItem) {
+                    Image(systemName: isCurrentlyPlaying && audioService.state.value == .playing ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 32))
+                        .foregroundColor(.briefeedRed)
+                }
+                .buttonStyle(.plain)
                 
-                HStack(spacing: 8) {
-                    Text(item.source.displayName)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                // Source Icon
+                Image(systemName: item.source.iconName)
+                    .font(.system(size: 18))
+                    .foregroundColor(item.source.isLiveNews ? .red : .briefeedRed)
+                    .frame(width: 24)
+                
+                // Content
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.title)
+                        .font(.headline)
+                        .lineLimit(2)
+                        .foregroundColor(.primary)
                     
-                    if let duration = item.formattedDuration {
-                        Text("• \(duration)")
+                    HStack(spacing: 8) {
+                        Text(item.source.displayName)
                             .font(.caption)
                             .foregroundColor(.secondary)
-                    }
-                    
-                    if item.source.isLiveNews, let remaining = item.remainingTime {
-                        Text("• Expires in \(formatTimeRemaining(remaining))")
-                            .font(.caption)
-                            .foregroundColor(.orange)
+                        
+                        if let duration = item.formattedDuration {
+                            Text("• \(duration)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        if item.source.isLiveNews, let remaining = item.remainingTime {
+                            Text("• Expires in \(formatTimeRemaining(remaining))")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
                     }
                 }
+                
+                Spacer()
+                
+                // Playing Indicator
+                if isCurrentlyPlaying {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 20))
+                        .foregroundColor(.briefeedRed)
+                        .symbolEffect(.variableColor.iterative)
+                }
             }
-            
-            Spacer()
-            
-            // Playing Indicator
-            if isCurrentlyPlaying {
-                Image(systemName: "waveform")
-                    .font(.system(size: 20))
-                    .foregroundColor(.briefeedRed)
-                    .symbolEffect(.variableColor.iterative)
-            }
+            .padding(.vertical, 8)
         }
-        .padding(.vertical, 8)
+        .buttonStyle(.plain)
         .contentShape(Rectangle())
         .opacity(item.isListened ? 0.6 : 1.0)
     }
@@ -353,5 +366,37 @@ struct EnhancedQueueRow: View {
             let minutes = Int(interval) / 60
             return "\(minutes)m"
         }
+    }
+    
+    private func playItem() {
+        if isCurrentlyPlaying && audioService.state.value == .playing {
+            // Pause if currently playing
+            audioService.pause()
+        } else if let audioUrl = item.audioUrl {
+            // Play RSS episode
+            Task {
+                if let episode = fetchRSSEpisode(audioUrl: audioUrl) {
+                    await audioService.playRSSEpisode(url: audioUrl, title: item.title ?? "Unknown", episode: episode)
+                } else {
+                    await audioService.playRSSEpisode(url: audioUrl, title: item.title ?? "Unknown")
+                }
+            }
+        } else if let articleID = item.articleID {
+            // Play article
+            let fetchRequest: NSFetchRequest<Article> = Article.fetchRequest()
+            fetchRequest.predicate = NSPredicate(format: "id == %@", articleID as CVarArg)
+            if let article = try? PersistenceController.shared.container.viewContext.fetch(fetchRequest).first {
+                Task {
+                    try? await audioService.playNow(article)
+                }
+            }
+        }
+    }
+    
+    private func fetchRSSEpisode(audioUrl: URL) -> RSSEpisode? {
+        let fetchRequest: NSFetchRequest<RSSEpisode> = RSSEpisode.fetchRequest()
+        fetchRequest.predicate = NSPredicate(format: "audioUrl == %@", audioUrl.absoluteString)
+        fetchRequest.fetchLimit = 1
+        return try? PersistenceController.shared.container.viewContext.fetch(fetchRequest).first
     }
 }

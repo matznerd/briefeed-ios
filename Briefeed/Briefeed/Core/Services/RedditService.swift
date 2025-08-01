@@ -71,7 +71,7 @@ class RedditService: RedditServiceProtocol {
         }
         
         let headers = ["User-Agent": Constants.Reddit.userAgent]
-        let response: RedditResponse = try await networkService.request(endpoint, method: .get, parameters: nil, headers: headers)
+        let response: RedditResponse = try await networkService.request(endpoint, method: .get, parameters: nil, headers: headers, timeout: nil)
         
         // Filter out non-article content
         return filterResponse(response)
@@ -99,7 +99,7 @@ class RedditService: RedditServiceProtocol {
         }
         
         let headers = ["User-Agent": Constants.Reddit.userAgent]
-        let response: RedditResponse = try await networkService.request(endpoint, method: .get, parameters: nil, headers: headers)
+        let response: RedditResponse = try await networkService.request(endpoint, method: .get, parameters: nil, headers: headers, timeout: nil)
         
         // Filter out non-article content
         return filterResponse(response)
@@ -109,7 +109,7 @@ class RedditService: RedditServiceProtocol {
         let endpoint = "\(Constants.API.redditBaseURL)/subreddits/search.json?q=\(query)&limit=10&raw_json=1"
         let headers = ["User-Agent": Constants.Reddit.userAgent]
         
-        let response: RedditResponse = try await networkService.request(endpoint, method: .get, parameters: nil, headers: headers)
+        let response: RedditResponse = try await networkService.request(endpoint, method: .get, parameters: nil, headers: headers, timeout: nil)
         
         // Parse subreddit info from the response
         return response.data.children.compactMap { child -> SubredditInfo? in
@@ -133,7 +133,7 @@ class RedditService: RedditServiceProtocol {
         let headers = ["User-Agent": Constants.Reddit.userAgent]
         
         do {
-            let response: RedditResponse = try await networkService.request(url, method: .get, parameters: nil, headers: headers)
+            let response: RedditResponse = try await networkService.request(url, method: .get, parameters: nil, headers: headers, timeout: nil)
             print("✅ Reddit API Success: Got \(response.data.children.count) posts")
             
             // Filter out non-article content
@@ -151,7 +151,13 @@ class RedditService: RedditServiceProtocol {
     // MARK: - Content Filtering
     private func filterResponse(_ response: RedditResponse) -> RedditResponse {
         let filteredChildren = response.data.children.filter { child in
-            !DefaultDataService.shared.shouldFilterPost(child.data)
+            // Filter out self posts - we only want external articles
+            if child.data.isSelf == true {
+                return false
+            }
+            
+            // Also apply any other filters
+            return !DefaultDataService.shared.shouldFilterPost(child.data)
         }
         
         let filteredData = RedditData(
@@ -172,7 +178,10 @@ extension RedditPost {
         article.title = self.title
         article.author = self.author
         article.subreddit = self.subreddit
-        article.url = self.url ?? "https://reddit.com\(self.permalink)"
+        // Only set URL if it's an external link
+        if let url = self.url, self.isSelf != true {
+            article.url = url
+        }
         article.thumbnail = self.thumbnail
         article.createdAt = Date(timeIntervalSince1970: self.createdUtc)
         article.isRead = false

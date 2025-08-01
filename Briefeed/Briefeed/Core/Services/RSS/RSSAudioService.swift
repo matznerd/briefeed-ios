@@ -91,7 +91,7 @@ class RSSAudioService: NSObject, ObservableObject {
         do {
             // Fetch RSS data
             guard let url = URL(string: feed.url) else { return }
-            let data = try await networkService.requestData(url.absoluteString)
+            let data = try await networkService.requestData(url.absoluteString, method: .get, parameters: nil, headers: nil, timeout: nil)
             
             // Parse RSS
             let parser = RSSParser()

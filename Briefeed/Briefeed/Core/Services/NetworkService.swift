@@ -15,6 +15,7 @@ enum NetworkError: LocalizedError {
     case unauthorized
     case rateLimited
     case networkUnavailable
+    case timeout
     case unknown(Error)
     
     var errorDescription: String? {
@@ -33,6 +34,8 @@ enum NetworkError: LocalizedError {
             return "Rate limit exceeded. Please try again later"
         case .networkUnavailable:
             return "Network connection unavailable"
+        case .timeout:
+            return "Request timed out. The server took too long to respond"
         case .unknown(let error):
             return error.localizedDescription
         }
@@ -40,8 +43,8 @@ enum NetworkError: LocalizedError {
 }
 
 protocol NetworkServiceProtocol {
-    func request<T: Decodable>(_ endpoint: String, method: HTTPMethod, parameters: [String: Any]?, headers: [String: String]?) async throws -> T
-    func requestData(_ endpoint: String, method: HTTPMethod, parameters: [String: Any]?, headers: [String: String]?) async throws -> Data
+    func request<T: Decodable>(_ endpoint: String, method: HTTPMethod, parameters: [String: Any]?, headers: [String: String]?, timeout: TimeInterval?) async throws -> T
+    func requestData(_ endpoint: String, method: HTTPMethod, parameters: [String: Any]?, headers: [String: String]?, timeout: TimeInterval?) async throws -> Data
 }
 
 enum HTTPMethod: String {
@@ -64,8 +67,8 @@ class NetworkService: NetworkServiceProtocol {
         self.decoder.dateDecodingStrategy = .secondsSince1970
     }
     
-    func request<T: Decodable>(_ endpoint: String, method: HTTPMethod = .get, parameters: [String: Any]? = nil, headers: [String: String]? = nil) async throws -> T {
-        let data = try await requestData(endpoint, method: method, parameters: parameters, headers: headers)
+    func request<T: Decodable>(_ endpoint: String, method: HTTPMethod = .get, parameters: [String: Any]? = nil, headers: [String: String]? = nil, timeout: TimeInterval? = nil) async throws -> T {
+        let data = try await requestData(endpoint, method: method, parameters: parameters, headers: headers, timeout: timeout)
         
         do {
             return try decoder.decode(T.self, from: data)
@@ -75,14 +78,14 @@ class NetworkService: NetworkServiceProtocol {
         }
     }
     
-    func requestData(_ endpoint: String, method: HTTPMethod = .get, parameters: [String: Any]? = nil, headers: [String: String]? = nil) async throws -> Data {
+    func requestData(_ endpoint: String, method: HTTPMethod = .get, parameters: [String: Any]? = nil, headers: [String: String]? = nil, timeout: TimeInterval? = nil) async throws -> Data {
         guard let url = URL(string: endpoint) else {
             throw NetworkError.invalidURL
         }
         
         var request = URLRequest(url: url)
         request.httpMethod = method.rawValue
-        request.timeoutInterval = Constants.API.defaultTimeout
+        request.timeoutInterval = timeout ?? Constants.API.defaultTimeout
         
         // Add headers
         headers?.forEach { request.setValue($1, forHTTPHeaderField: $0) }
@@ -125,8 +128,11 @@ class NetworkService: NetworkServiceProtocol {
         } catch let error as NetworkError {
             throw error
         } catch {
-            if (error as NSError).code == NSURLErrorNotConnectedToInternet {
+            let nsError = error as NSError
+            if nsError.code == NSURLErrorNotConnectedToInternet {
                 throw NetworkError.networkUnavailable
+            } else if nsError.code == NSURLErrorTimedOut {
+                throw NetworkError.timeout
             }
             throw NetworkError.unknown(error)
         }

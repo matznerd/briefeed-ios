@@ -42,6 +42,10 @@ class QueueService: ObservableObject {
         enhancedQueue.append(item)
     }
     
+    internal func insertIntoEnhancedQueue(_ item: EnhancedQueueItem, at index: Int) {
+        enhancedQueue.insert(item, at: index)
+    }
+    
     internal func updateEnhancedQueue(_ newQueue: [EnhancedQueueItem]) {
         enhancedQueue = newQueue
     }
@@ -107,6 +111,16 @@ class QueueService: ObservableObject {
         // Find and remove from audio service
         if let index = audioService.queue.firstIndex(where: { $0.id == articleID }) {
             audioService.removeFromQueue(at: index)
+        }
+    }
+    
+    /// Removes an item from the enhanced queue by ID
+    func removeFromQueue(itemId: UUID) {
+        enhancedQueue.removeAll { $0.id == itemId }
+        // Also remove from the legacy queue if it's an article
+        if let item = enhancedQueue.first(where: { $0.id == itemId }),
+           let articleID = item.articleID {
+            removeFromQueue(articleID: articleID)
         }
     }
     
@@ -209,10 +223,17 @@ class QueueService: ObservableObject {
                 articles.first { $0.id == queueItem.articleID }
             }
             
-            // Clear and restore audio service queue
-            audioService.clearQueue()
-            for article in sortedArticles {
-                audioService.addToQueue(article)
+            // Only clear and restore if not currently playing
+            let isPlaying = audioService.state.value == .playing || audioService.state.value == .loading
+            
+            if !isPlaying {
+                // Clear and restore audio service queue
+                audioService.clearQueue()
+                for article in sortedArticles {
+                    audioService.addToQueue(article)
+                }
+            } else {
+                print("⚠️ Skipping queue restore - audio is currently playing")
             }
         } catch {
             print("Error restoring queue: \(error)")
@@ -220,6 +241,7 @@ class QueueService: ObservableObject {
     }
     
     /// Generates audio in the background for queued articles
+    /// Only processes the next 3 articles in queue to avoid excessive API usage
     private func generateAudioInBackground(for article: Article) {
         // Cancel previous task if any
         audioGenerationTask?.cancel()
@@ -230,8 +252,9 @@ class QueueService: ObservableObject {
             
             guard !Task.isCancelled else { return }
             
-            // Process queue items that don't have audio yet
-            for queueItem in queuedItems {
+            // Process only the next few items in queue to avoid excessive API calls
+            let itemsToProcess = min(3, queuedItems.count) // Only process next 3 items
+            for (index, queueItem) in queuedItems.prefix(itemsToProcess).enumerated() {
                 guard !Task.isCancelled else { break }
                 
                 // Fetch article

@@ -11,6 +11,7 @@ import CoreData
 struct LiveNewsView: View {
     @StateObject private var rssService = RSSAudioService.shared
     @StateObject private var queueService = QueueService.shared
+    @StateObject private var audioService = AudioService.shared
     @State private var isRefreshing = false
     @State private var selectedFeed: RSSFeed?
     @State private var showingAddFeed = false
@@ -96,6 +97,13 @@ struct LiveNewsView: View {
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         feedSwipeActions(for: feed)
+                    }
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        if let episode = (feed.episodes?.allObjects as? [RSSEpisode])?
+                            .sorted(by: { $0.pubDate > $1.pubDate })
+                            .first {
+                            episodeSwipeActions(for: episode)
+                        }
                     }
                 }
                 .onMove { source, destination in
@@ -193,6 +201,37 @@ struct LiveNewsView: View {
     // MARK: - Actions
     
     @ViewBuilder
+    private func episodeSwipeActions(for episode: RSSEpisode) -> some View {
+        Button {
+            // Add to end of queue
+            queueService.addRSSEpisode(episode, isLiveNews: false)
+            // Haptic feedback
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        } label: {
+            Label("Play Later", systemImage: "plus.circle")
+        }
+        .tint(.blue)
+        
+        Button {
+            Task {
+                // Add to queue and play immediately
+                queueService.addRSSEpisode(episode, isLiveNews: false, playNext: true)
+                
+                // If nothing is playing, start playback
+                if audioService.state.value == .idle || audioService.state.value == .stopped {
+                    if let audioUrl = URL(string: episode.audioUrl) {
+                        await audioService.playRSSEpisode(url: audioUrl, title: episode.title ?? "Unknown", episode: episode)
+                    }
+                }
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            }
+        } label: {
+            Label("Play Next", systemImage: "play.circle")
+        }
+        .tint(.orange)
+    }
+    
+    @ViewBuilder
     private func feedSwipeActions(for feed: RSSFeed) -> some View {
         Button(role: .destructive) {
             deleteFeed(feed)
@@ -230,12 +269,12 @@ struct LiveNewsView: View {
     }
     
     private func playAllLiveNews() async {
-        // Clear existing queue
-        await MainActor.run {
-            queueService.clearQueue()
-        }
+        print("🎙️ Play Live News pressed")
         
-        // Add only the latest episode from each enabled feed
+        // Set Live News context
+        audioService.playbackContext = .liveNews
+        
+        // Find the latest episode from each enabled feed
         var episodesToPlay: [(RSSEpisode, Int)] = []
         
         for (index, feed) in feeds.enumerated() where feed.isEnabled {
@@ -246,23 +285,31 @@ struct LiveNewsView: View {
                     .sorted(by: { $0.pubDate > $1.pubDate })
                     .first {
                     episodesToPlay.append((latestEpisode, index))
+                    print("🎙️ Found episode: \(latestEpisode.title ?? "Unknown") from \(feed.displayName ?? "Unknown feed")")
                 }
             }
         }
         
+        print("🎙️ Total episodes to play: \(episodesToPlay.count)")
+        
         // Sort by feed priority
         episodesToPlay.sort { $0.1 < $1.1 }
         
-        // Add to queue and start playing
-        for (episode, _) in episodesToPlay {
-            queueService.addRSSEpisode(episode)
-        }
-        
-        // Start playing immediately
-        if !episodesToPlay.isEmpty {
-            await MainActor.run {
-                queueService.playNext()
+        // Play the first episode directly (like radio streaming)
+        if let firstEpisode = episodesToPlay.first?.0,
+           let audioUrl = URL(string: firstEpisode.audioUrl) {
+            print("🎙️ Playing first episode directly: \(firstEpisode.title ?? "Unknown")")
+            
+            // Play directly using AudioService
+            await audioService.playRSSEpisode(url: audioUrl, title: firstEpisode.title ?? "Unknown", episode: firstEpisode)
+            
+            // Add remaining episodes to a "Live News" queue (separate from regular queue)
+            // This way they auto-play after the first one without mixing with articles
+            for (episode, _) in episodesToPlay.dropFirst() {
+                queueService.addRSSEpisode(episode, isLiveNews: true)
             }
+        } else {
+            print("⚠️ No episodes to play")
         }
     }
     
@@ -324,28 +371,52 @@ private struct FeedRow: View {
         }
     }
     
+    private var episodeTimeString: String? {
+        guard let latest = latestEpisode else { return nil }
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        formatter.locale = Locale(identifier: "en_US")
+        return formatter.string(from: latest.pubDate)
+    }
+    
+    private var lastUpdateTimeString: String? {
+        guard let lastUpdate = feed.lastFetchDate else { return nil }
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        formatter.locale = Locale(identifier: "en_US")
+        return "Updated \(formatter.string(from: lastUpdate))"
+    }
+    
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 12) {
-                // Inline Play/Pause Button
-                if hasNewEpisode || isCurrentlyPlaying {
-                    Button {
-                        if isCurrentlyPlaying {
-                            audioService.pauseWithRSSSupport()
-                        } else if let latest = latestEpisode {
-                            Task {
-                                queueService.clearQueue()
-                                queueService.addRSSEpisode(latest)
-                                queueService.playNext()
+        HStack(spacing: 12) {
+            // Inline Play/Pause Button
+            if hasNewEpisode || isCurrentlyPlaying {
+                Button {
+                    if isCurrentlyPlaying && audioService.state.value == .playing {
+                        audioService.pauseWithRSSSupport()
+                    } else if isCurrentlyPlaying && audioService.state.value == .paused {
+                        audioService.playWithRSSSupport()
+                    } else if let latest = latestEpisode {
+                        Task {
+                            // Set Live News context and play directly
+                            audioService.playbackContext = .liveNews
+                            if let audioUrl = URL(string: latest.audioUrl) {
+                                await audioService.playRSSEpisode(url: audioUrl, title: latest.title ?? "Unknown", episode: latest)
                             }
                         }
-                    } label: {
-                        Image(systemName: isCurrentlyPlaying ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 32))
-                            .foregroundColor(.briefeedRed)
                     }
-                    .buttonStyle(.plain)
+                } label: {
+                    Image(systemName: isCurrentlyPlaying && audioService.state.value == .playing ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 32))
+                        .foregroundColor(.briefeedRed)
                 }
+                .buttonStyle(.plain)
+            }
+            
+            // Feed Info wrapped in Button for tap action
+            Button(action: onTap) {
                 
                 // Feed Info
                 VStack(alignment: .leading, spacing: 4) {
@@ -380,8 +451,12 @@ private struct FeedRow: View {
                                 .foregroundColor(.orange)
                         }
                         
-                        if let lastUpdate = feed.lastFetchDate {
-                            Text("Updated \(lastUpdate.formatted(.relative(presentation: .named)))")
+                        if let timeString = episodeTimeString {
+                            Text(timeString)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else if let updateString = lastUpdateTimeString {
+                            Text(updateString)
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -408,9 +483,9 @@ private struct FeedRow: View {
                     .foregroundColor(.secondary)
                     .padding(.leading, 8)
             }
-            .padding(.vertical, 8)
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
+        .padding(.vertical, 8)
         // Force refresh when audio state changes
         .onReceive(audioService.$currentArticle) { _ in
             // Triggers view update

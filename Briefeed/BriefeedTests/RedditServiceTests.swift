@@ -156,7 +156,7 @@ class MockNetworkService: NetworkServiceProtocol {
     var lastRequestedURL: String?
     var requestCount = 0
     
-    func request<T: Decodable>(_ endpoint: String, method: HTTPMethod, parameters: [String: Any]?, headers: [String: String]?) async throws -> T {
+    func request<T: Decodable>(_ endpoint: String, method: HTTPMethod, parameters: [String: Any]?, headers: [String: String]?, timeout: TimeInterval?) async throws -> T {
         lastRequestedURL = endpoint
         requestCount += 1
         
@@ -171,7 +171,7 @@ class MockNetworkService: NetworkServiceProtocol {
         return try JSONDecoder().decode(T.self, from: data)
     }
     
-    func requestData(_ endpoint: String, method: HTTPMethod, parameters: [String: Any]?, headers: [String: String]?) async throws -> Data {
+    func requestData(_ endpoint: String, method: HTTPMethod, parameters: [String: Any]?, headers: [String: String]?, timeout: TimeInterval?) async throws -> Data {
         lastRequestedURL = endpoint
         requestCount += 1
         

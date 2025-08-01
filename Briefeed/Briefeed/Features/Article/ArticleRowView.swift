@@ -62,6 +62,7 @@ struct ArticleRowView: View {
                 .offset(x: offset)
                 .opacity(stateManager.isArchived(article) ? 0.5 : 1.0)
                 .simultaneousGesture(swipeGesture)
+                .allowsHitTesting(!isDragging) // Disable tap while dragging
             
             // Action buttons overlay (Play Now / Play Next)
             if showActionButtons {
@@ -82,7 +83,12 @@ struct ArticleRowView: View {
     // MARK: - Views
     
     private var articleContent: some View {
-        Button(action: onTap) {
+        Button(action: {
+            // Only trigger tap if we're not swiping
+            if !isDragging && offset == 0 {
+                onTap()
+            }
+        }) {
             HStack(alignment: .top, spacing: 12) {
                 // Thumbnail
                 if let thumbnailURL = article.thumbnail, !thumbnailURL.isEmpty, thumbnailURL != "self", thumbnailURL != "default" {
@@ -361,36 +367,21 @@ struct ArticleRowView: View {
         // Haptic feedback
         HapticManager.shared.saveAction()
         
+        // Check if article is being saved (not already saved)
+        let isBeingSaved = !article.isSaved
+        
         // Toggle saved state
         onSave()
         
-        // Add to audio queue if not already saved
-        if !article.isSaved {
+        // Add to audio queue if article is being saved
+        if isBeingSaved {
             Task { @MainActor in
-                AudioService.shared.addToQueue(article)
+                QueueService.shared.addToQueue(article)
             }
         }
         
-        // Show action buttons
-        showActionButtons = true
-        timeRemaining = 5
-        
-        // Start countdown timer
-        actionButtonsTimer?.invalidate()
-        actionButtonsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            if timeRemaining > 0 {
-                timeRemaining -= 1
-            } else {
-                showActionButtons = false
-                actionButtonsTimer?.invalidate()
-            }
-        }
-        
-        // Auto-hide after 5 seconds
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-            showActionButtons = false
-            actionButtonsTimer?.invalidate()
-        }
+        // Don't show action buttons - swipe should just add to queue
+        // Users can tap the article to open it and see play options there
     }
     
     private func performArchiveAction() {

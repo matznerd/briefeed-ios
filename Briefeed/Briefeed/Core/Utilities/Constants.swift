@@ -23,6 +23,7 @@ enum Constants {
         }
         
         static let defaultTimeout: TimeInterval = 30
+        static let firecrawlTimeout: TimeInterval = 60 // Longer timeout for web scraping
         static let maxRetries = 3
     }
     

@@ -11,6 +11,7 @@ struct SettingsView: View {
     @StateObject private var viewModel = SettingsViewModel()
     @State private var showingResetAlert = false
     @State private var showingDocumentPicker = false
+    @State private var showingProcessingHistory = false
     @Environment(\.colorScheme) var colorScheme
     
     var body: some View {
@@ -140,6 +141,20 @@ struct SettingsView: View {
                         .font(.caption)
                 }
                 
+                // MARK: - Diagnostics Section
+                Section {
+                    Button(action: {
+                        showingProcessingHistory = true
+                    }) {
+                        Label("Processing History", systemImage: "clock.arrow.circlepath")
+                            .foregroundColor(.primary)
+                    }
+                } header: {
+                    Label("Diagnostics", systemImage: "stethoscope")
+                } footer: {
+                    Text("View detailed logs of article processing and API calls")
+                }
+                
                 // MARK: - Data Section
                 Section {
                     HStack {
@@ -254,6 +269,9 @@ struct SettingsView: View {
                 }
             } message: {
                 Text(viewModel.errorMessage ?? "")
+            }
+            .sheet(isPresented: $showingProcessingHistory) {
+                ProcessingStatusHistoryView()
             }
             .sheet(isPresented: $showingDocumentPicker) {
                 DocumentPicker(

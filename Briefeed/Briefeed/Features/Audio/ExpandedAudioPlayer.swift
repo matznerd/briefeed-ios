@@ -7,9 +7,11 @@
 
 import SwiftUI
 import Combine
+import CoreData
 
 struct ExpandedAudioPlayer: View {
     @ObservedObject private var audioService = AudioService.shared
+    @ObservedObject private var queueService = QueueService.shared
     @Environment(\.dismiss) private var dismiss
     @State private var isDraggingSlider = false
     @State private var draggedProgress: Float = 0
@@ -98,8 +100,8 @@ struct ExpandedAudioPlayer: View {
                         .background(Color.gray.opacity(0.1))
                         .clipShape(Circle())
                     
-                    if audioService.queue.count > 1 {
-                        Text("\(audioService.queue.count)")
+                    if QueueService.shared.enhancedQueue.count > 1 {
+                        Text("\(QueueService.shared.enhancedQueue.count)")
                             .font(.system(size: 11, weight: .bold))
                             .foregroundColor(.white)
                             .padding(4)
@@ -230,9 +232,9 @@ struct ExpandedAudioPlayer: View {
             }) {
                 Image(systemName: "backward.fill")
                     .font(.system(size: 28))
-                    .foregroundColor(audioService.queueIndex > 0 ? .primary : .gray)
+                    .foregroundColor(canPlayPrevious() ? .primary : .gray)
             }
-            .disabled(audioService.queueIndex == 0)
+            .disabled(!canPlayPrevious())
             
             // Skip backward 15s
             Button(action: {
@@ -286,9 +288,9 @@ struct ExpandedAudioPlayer: View {
             }) {
                 Image(systemName: "forward.fill")
                     .font(.system(size: 28))
-                    .foregroundColor(audioService.queueIndex < audioService.queue.count - 1 ? .primary : .gray)
+                    .foregroundColor(canPlayNext() ? .primary : .gray)
             }
-            .disabled(audioService.queueIndex >= audioService.queue.count - 1)
+            .disabled(!canPlayNext())
         }
     }
     
@@ -358,6 +360,40 @@ struct ExpandedAudioPlayer: View {
             audioService.play()
         }
     }
+    
+    private func canPlayPrevious() -> Bool {
+        let enhancedQueue = QueueService.shared.enhancedQueue
+        guard !enhancedQueue.isEmpty,
+              let currentArticle = audioService.currentArticle else { return false }
+        
+        // Find current index in enhanced queue
+        var currentIndex = -1
+        if let articleID = currentArticle.id {
+            currentIndex = enhancedQueue.firstIndex { $0.articleID == articleID } ?? -1
+        }
+        if currentIndex == -1, let url = currentArticle.url {
+            currentIndex = enhancedQueue.firstIndex { $0.audioUrl?.absoluteString == url } ?? -1
+        }
+        
+        return currentIndex > 0
+    }
+    
+    private func canPlayNext() -> Bool {
+        let enhancedQueue = QueueService.shared.enhancedQueue
+        guard !enhancedQueue.isEmpty,
+              let currentArticle = audioService.currentArticle else { return false }
+        
+        // Find current index in enhanced queue
+        var currentIndex = -1
+        if let articleID = currentArticle.id {
+            currentIndex = enhancedQueue.firstIndex { $0.articleID == articleID } ?? -1
+        }
+        if currentIndex == -1, let url = currentArticle.url {
+            currentIndex = enhancedQueue.firstIndex { $0.audioUrl?.absoluteString == url } ?? -1
+        }
+        
+        return currentIndex >= 0 && currentIndex < enhancedQueue.count - 1
+    }
 }
 
 // MARK: - Scale Button Style
@@ -372,26 +408,34 @@ struct ScaleButtonStyle: ButtonStyle {
 // MARK: - Audio Queue View
 struct AudioQueueView: View {
     @ObservedObject private var audioService = AudioService.shared
+    @ObservedObject private var queueService = QueueService.shared
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         NavigationView {
             List {
-                ForEach(audioService.queue.indices, id: \.self) { index in
+                ForEach(queueService.enhancedQueue.indices, id: \.self) { index in
+                    let item = queueService.enhancedQueue[index]
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(audioService.queue[index].title ?? "Untitled")
+                            Text(item.title)
                                 .font(.system(size: 16, weight: .medium))
                                 .lineLimit(2)
                             
-                            Text(audioService.queue[index].author ?? "Unknown")
-                                .font(.system(size: 14))
-                                .foregroundColor(.secondary)
+                            HStack(spacing: 4) {
+                                Image(systemName: item.source.iconName)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text(item.source.displayName)
+                                    .font(.system(size: 14))
+                                    .foregroundColor(.secondary)
+                            }
                         }
                         
                         Spacer()
                         
-                        if index == audioService.queueIndex {
+                        // Check if this is the currently playing item
+                        if isCurrentlyPlaying(item) {
                             Image(systemName: "speaker.wave.2.fill")
                                 .font(.system(size: 16))
                                 .foregroundColor(.accentColor)
@@ -400,21 +444,21 @@ struct AudioQueueView: View {
                     .padding(.vertical, 4)
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        if index != audioService.queueIndex {
-                            audioService.queueIndex = index
+                        if !isCurrentlyPlaying(item) {
                             Task {
-                                try? await audioService.playArticle(audioService.queue[index])
+                                await playItem(item)
                             }
                         }
                     }
                 }
                 .onDelete { indexSet in
                     for index in indexSet {
-                        audioService.removeFromQueue(at: index)
+                        let item = queueService.enhancedQueue[index]
+                        queueService.removeFromQueue(itemId: item.id)
                     }
                 }
             }
-            .navigationTitle("Queue (\(audioService.queue.count))")
+            .navigationTitle("Queue (\(queueService.enhancedQueue.count))")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -424,14 +468,45 @@ struct AudioQueueView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarLeading) {
-                    if audioService.queue.count > 1 {
+                    if queueService.enhancedQueue.count > 1 {
                         Button("Clear All") {
-                            audioService.clearQueue()
+                            queueService.clearQueue()
                             dismiss()
                         }
                         .foregroundColor(.red)
                     }
                 }
+            }
+        }
+    }
+    
+    private func isCurrentlyPlaying(_ item: EnhancedQueueItem) -> Bool {
+        if let currentArticle = audioService.currentArticle {
+            // Check by article ID
+            if let articleID = currentArticle.id, item.articleID == articleID {
+                return true
+            }
+            // Check by audio URL for RSS
+            if let url = currentArticle.url, item.audioUrl?.absoluteString == url {
+                return true
+            }
+        }
+        return false
+    }
+    
+    private func playItem(_ item: EnhancedQueueItem) async {
+        if let audioUrl = item.audioUrl {
+            // RSS Episode
+            await audioService.playRSSEpisode(url: audioUrl, title: item.title, episode: nil)
+        } else if let articleID = item.articleID {
+            // Article - need to fetch it from Core Data
+            let context = PersistenceController.shared.container.viewContext
+            let request: NSFetchRequest<Article> = Article.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", articleID as CVarArg)
+            request.fetchLimit = 1
+            
+            if let article = try? context.fetch(request).first {
+                try? await audioService.playArticle(article)
             }
         }
     }

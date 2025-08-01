@@ -9,6 +9,7 @@ import Foundation
 import AVFoundation
 import MediaPlayer
 import Combine
+import CoreData
 import UIKit
 
 // MARK: - Audio Service Types
@@ -71,10 +72,10 @@ protocol AudioServiceProtocol: AnyObject {
 }
 
 // MARK: - Associated Keys for RSS Extension
-internal struct AssociatedKeys {
-    static var currentRSSEpisode = "currentRSSEpisode"
-    static var rssAudioPlayer = "rssAudioPlayer"
-    static var progressObserver = "progressObserver"
+internal enum AssociatedKeys {
+    static var currentRSSEpisode: UInt8 = 0
+    static var rssAudioPlayer: UInt8 = 1
+    static var progressObserver: UInt8 = 2
 }
 
 // MARK: - Audio Service Implementation
@@ -90,8 +91,18 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
     private var currentRange: NSRange = NSRange(location: 0, length: 0)
     private var isPausedByUser = false
     
-    // Audio player for Gemini TTS
-    internal var audioPlayer: AVAudioPlayer?
+    // Audio player for Gemini TTS - keep strong reference
+    internal var audioPlayer: AVAudioPlayer? {
+        didSet {
+            if audioPlayer != nil {
+                print("📱 Audio player created (setter called)")
+                print("📱 Stack trace: \(Thread.callStackSymbols.prefix(5).joined(separator: "\n"))")
+            } else {
+                print("📱 Audio player released (setter called)")
+                print("📱 Stack trace: \(Thread.callStackSymbols.prefix(5).joined(separator: "\n"))")
+            }
+        }
+    }
     private var playerTimer: Timer?
     internal var isUsingGeminiTTS = false
     
@@ -102,6 +113,8 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
     
     // New published properties for queue and progress tracking
     @Published var currentArticle: Article?
+    @Published var currentPlaybackItem: CurrentPlaybackItem?
+    @Published var playbackContext: PlaybackContext = .direct
     @Published var queue: [Article] = []
     @Published var queueIndex: Int = 0
     @Published var currentTime: TimeInterval = 0
@@ -125,10 +138,8 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
         synthesizer.delegate = self
         setupNotifications()
         
-        // Restore queue on init
-        Task {
-            QueueService.shared.restoreQueueOnAppLaunch()
-        }
+        // Don't restore queue here - it causes race conditions
+        // Queue will be restored by QueueService's own init
     }
     
     deinit {
@@ -165,6 +176,8 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
         
         // Try Gemini TTS first
         print("🎤 Attempting Gemini TTS generation...")
+        await ProcessingStatusService.shared.updateGeneratingAudio()
+        
         let ttsResult = await GeminiTTSService.shared.generateSpeech(
             text: text,
             voiceName: nil, // Let it use random voice
@@ -173,13 +186,36 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
         
         if ttsResult.success, let audioURL = ttsResult.audioURL {
             print("✅ Gemini TTS successful, using voice: \(ttsResult.voiceUsed ?? "unknown")")
+            await ProcessingStatusService.shared.updateGeneratingAudio(voiceName: ttsResult.voiceUsed)
             isUsingGeminiTTS = true
             
             do {
+                // Stop any existing player first
+                audioPlayer?.stop()
+                audioPlayer = nil
+                
+                // Create new player
                 audioPlayer = try AVAudioPlayer(contentsOf: audioURL)
                 audioPlayer?.delegate = self
+                
+                print("📱 Audio player created with URL: \(audioURL)")
+                print("📱 Audio player duration: \(audioPlayer?.duration ?? 0) seconds")
+                print("📱 Audio player isPlaying before prepare: \(audioPlayer?.isPlaying ?? false)")
+                
                 audioPlayer?.prepareToPlay()
-                audioPlayer?.play()
+                
+                // Configure audio session for playback
+                try AVAudioSession.sharedInstance().setActive(true)
+                
+                // Start playback
+                let didPlay = audioPlayer?.play() ?? false
+                print("📱 Audio player play() returned: \(didPlay)")
+                print("📱 Audio player isPlaying after play: \(audioPlayer?.isPlaying ?? false)")
+                
+                guard didPlay else {
+                    print("❌ Failed to start audio playback")
+                    throw AudioServiceError.speechSynthesizerUnavailable
+                }
                 
                 // Update Now Playing info
                 updateNowPlayingInfo(title: title, author: author)
@@ -193,6 +229,9 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
                 // Store duration
                 duration = audioPlayer?.duration ?? 0
                 currentTime = 0
+                
+                await ProcessingStatusService.shared.updateAudioReady()
+                await ProcessingStatusService.shared.completeProcessing()
                 
                 print("✅ Audio playback started with Gemini TTS")
             } catch {
@@ -255,7 +294,9 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
     }
     
     func play() {
-        if isUsingGeminiTTS {
+        if objc_getAssociatedObject(self, &AssociatedKeys.rssAudioPlayer) != nil {
+            playWithRSSSupport()
+        } else if isUsingGeminiTTS {
             audioPlayer?.play()
             startProgressTimer()
             isPausedByUser = false
@@ -276,7 +317,9 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
     }
     
     func pause() {
-        if isUsingGeminiTTS {
+        if objc_getAssociatedObject(self, &AssociatedKeys.rssAudioPlayer) != nil {
+            pauseWithRSSSupport()
+        } else if isUsingGeminiTTS {
             audioPlayer?.pause()
             playerTimer?.invalidate()
             isPausedByUser = true
@@ -308,26 +351,43 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
         state.send(.stopped)
         currentTime = 0
         duration = 0
+        currentPlaybackItem = nil
         currentArticle = nil
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
     
     func skipForward(seconds: TimeInterval = 15) {
-        // AVSpeechSynthesizer doesn't support direct seeking, but we can simulate it
-        // by calculating the new position and restarting from there
-        guard currentUtterance != nil else { return }
-        
-        let newTime = min(currentTime + seconds, duration)
-        seek(to: newTime)
+        if objc_getAssociatedObject(self, &AssociatedKeys.rssAudioPlayer) != nil {
+            skipForwardWithRSSSupport(seconds: seconds)
+        } else if isUsingGeminiTTS {
+            // For Gemini TTS audio player
+            guard let player = audioPlayer else { return }
+            let newTime = min(player.currentTime + seconds, player.duration)
+            player.currentTime = newTime
+            updateNowPlayingInfo(title: currentArticle?.title, author: currentArticle?.author)
+        } else {
+            // AVSpeechSynthesizer doesn't support direct seeking
+            guard currentUtterance != nil else { return }
+            let newTime = min(currentTime + seconds, duration)
+            seek(to: newTime)
+        }
     }
     
     func skipBackward(seconds: TimeInterval = 15) {
-        // AVSpeechSynthesizer doesn't support direct seeking, but we can simulate it
-        // by calculating the new position and restarting from there
-        guard currentUtterance != nil else { return }
-        
-        let newTime = max(currentTime - seconds, 0)
-        seek(to: newTime)
+        if objc_getAssociatedObject(self, &AssociatedKeys.rssAudioPlayer) != nil {
+            skipBackwardWithRSSSupport(seconds: seconds)
+        } else if isUsingGeminiTTS {
+            // For Gemini TTS audio player
+            guard let player = audioPlayer else { return }
+            let newTime = max(player.currentTime - seconds, 0)
+            player.currentTime = newTime
+            updateNowPlayingInfo(title: currentArticle?.title, author: currentArticle?.author)
+        } else {
+            // AVSpeechSynthesizer doesn't support direct seeking
+            guard currentUtterance != nil else { return }
+            let newTime = max(currentTime - seconds, 0)
+            seek(to: newTime)
+        }
     }
     
     func skip(by seconds: TimeInterval) {
@@ -361,8 +421,19 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
         let clampedRate = max(Constants.Audio.minSpeechRate, min(rate, Constants.Audio.maxSpeechRate))
         currentRate.send(clampedRate)
         
-        // Update current utterance if speaking
-        if let utterance = currentUtterance {
+        // Update UserDefaults
+        UserDefaultsManager.shared.playbackSpeed = clampedRate
+        
+        // Update RSS player if playing
+        if objc_getAssociatedObject(self, &AssociatedKeys.rssAudioPlayer) != nil {
+            if let player = objc_getAssociatedObject(self, &AssociatedKeys.rssAudioPlayer) as? AVPlayer {
+                player.rate = clampedRate
+            }
+        } else if isUsingGeminiTTS {
+            // For Gemini TTS, we can't change the rate of already generated audio
+            // but we'll use the new rate for future generations
+        } else if let utterance = currentUtterance {
+            // Update current utterance if speaking
             utterance.rate = clampedRate
         }
     }
@@ -388,6 +459,10 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
     
     func playArticle(_ article: Article) async throws {
         currentArticle = article
+        currentPlaybackItem = CurrentPlaybackItem(from: article)
+        
+        // Start processing status
+        await ProcessingStatusService.shared.startProcessing(articleTitle: article.title ?? "Article")
         
         // If article is already in queue, just jump to it
         if let index = queue.firstIndex(where: { $0.id == article.id }) {
@@ -396,6 +471,78 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
             // Add to queue and play
             queue = [article]
             queueIndex = 0
+        }
+        
+        // Check if article needs summary generation
+        let needsSummary = (article.summary == nil || article.summary?.isEmpty == true)
+        let hasURL = article.url != nil
+        
+        if needsSummary && hasURL {
+            // Show loading state
+            state.send(.loading)
+            
+            // Generate summary first
+            if let url = article.url {
+                let summary = await GeminiService().generateSummary(from: url)
+                
+                // Update article with summary if we got one
+                if let summary = summary, !summary.isEmpty {
+                    await MainActor.run {
+                        article.summary = summary
+                        do {
+                            try article.managedObjectContext?.save()
+                        } catch {
+                            print("Failed to save article summary: \(error)")
+                        }
+                    }
+                } else {
+                    // Firecrawl failed or timed out, create a simple fallback summary
+                    print("AudioService: Failed to generate summary, using fallback")
+                    await ProcessingStatusService.shared.updateError("Could not fetch article content")
+                    
+                    await MainActor.run {
+                        // Use a more informative fallback that includes the title
+                        let fallbackSummary = """
+                        Unable to retrieve the full article content at this time. \
+                        The website may be slow, blocking automated access, or experiencing issues. \
+                        Article title: \(article.title ?? "Unknown"). \
+                        You may want to try again later or visit the website directly.
+                        """
+                        
+                        article.summary = fallbackSummary
+                        do {
+                            try article.managedObjectContext?.save()
+                        } catch {
+                            print("Failed to save fallback summary: \(error)")
+                        }
+                    }
+                }
+            }
+        } else if needsSummary && article.content != nil && !article.content!.isEmpty {
+            // For articles with content but no URL, generate summary from content
+            print("AudioService: Generating summary from existing content")
+            do {
+                let summary = try await GeminiService().summarize(text: article.content!, length: .standard)
+                
+                await MainActor.run {
+                    article.summary = summary
+                    do {
+                        try article.managedObjectContext?.save()
+                    } catch {
+                        print("Failed to save content-based summary: \(error)")
+                    }
+                }
+            } catch {
+                print("AudioService: Failed to generate summary from content: \(error)")
+                await MainActor.run {
+                    article.summary = "Unable to generate summary from content."
+                    do {
+                        try article.managedObjectContext?.save()
+                    } catch {
+                        print("Failed to save fallback summary: \(error)")
+                    }
+                }
+            }
         }
         
         // Format the text for speech using the same logic as Capacitor app
@@ -409,8 +556,14 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
     }
     
     func addToQueue(_ article: Article) {
+        // Ensure article has an ID
+        if article.id == nil {
+            article.id = UUID()
+        }
+        
         // Don't add duplicates
         guard !queue.contains(where: { $0.id == article.id }) else { return }
+        
         queue.append(article)
         saveQueueState()
     }
@@ -454,43 +607,169 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
     }
     
     func playNext() async throws {
-        // Check if QueueService has items to play
-        if !QueueService.shared.enhancedQueue.isEmpty {
-            // Let QueueService handle playing the next item (RSS or regular)
-            await MainActor.run {
-                QueueService.shared.playNext()
-            }
+        print("🎵 playNext() called, context: \(playbackContext)")
+        
+        // Stop current playback
+        stop()
+        
+        // Handle different contexts
+        switch playbackContext {
+        case .liveNews:
+            // Play next from Live News
+            await playNextLiveNews()
             return
+            
+        case .brief, .direct:
+            // Play next from enhanced queue
+            break
+        }
+        
+        // Check if QueueService has items to play
+        let enhancedQueue = QueueService.shared.enhancedQueue
+        print("🎵 Enhanced queue has \(enhancedQueue.count) items")
+        
+        if !enhancedQueue.isEmpty {
+            // Find the currently playing item
+            var currentIndex = -1
+            if let currentArticle = currentArticle {
+                // Check by article ID
+                if let articleID = currentArticle.id {
+                    currentIndex = enhancedQueue.firstIndex { $0.articleID == articleID } ?? -1
+                }
+                // Check by audio URL for RSS
+                if currentIndex == -1, let url = currentArticle.url {
+                    currentIndex = enhancedQueue.firstIndex { $0.audioUrl?.absoluteString == url } ?? -1
+                }
+            }
+            
+            print("🎵 Current index in enhanced queue: \(currentIndex)")
+            
+            // If we found the current item and there's a next item
+            if currentIndex >= 0 && currentIndex + 1 < enhancedQueue.count {
+                // Play the next item
+                let nextItem = enhancedQueue[currentIndex + 1]
+                print("🎵 Playing next item: \(nextItem.title)")
+                
+                await MainActor.run {
+                    if let audioUrl = nextItem.audioUrl {
+                        // Play RSS episode
+                        Task {
+                            let fetchRequest: NSFetchRequest<RSSEpisode> = RSSEpisode.fetchRequest()
+                            fetchRequest.predicate = NSPredicate(format: "audioUrl == %@", audioUrl.absoluteString)
+                            fetchRequest.fetchLimit = 1
+                            
+                            if let episode = try? PersistenceController.shared.container.viewContext.fetch(fetchRequest).first {
+                                await self.playRSSEpisode(url: audioUrl, title: nextItem.title ?? "Unknown", episode: episode)
+                            } else {
+                                await self.playRSSEpisode(url: audioUrl, title: nextItem.title ?? "Unknown")
+                            }
+                        }
+                    } else if let articleID = nextItem.articleID {
+                        // Play article
+                        let fetchRequest: NSFetchRequest<Article> = Article.fetchRequest()
+                        fetchRequest.predicate = NSPredicate(format: "id == %@", articleID as CVarArg)
+                        if let article = try? PersistenceController.shared.container.viewContext.fetch(fetchRequest).first {
+                            Task {
+                                try? await self.playArticle(article)
+                            }
+                        }
+                    }
+                }
+                return
+            } else if currentIndex == -1 && !enhancedQueue.isEmpty {
+                // If we couldn't find current item, just play the first item
+                await MainActor.run {
+                    QueueService.shared.playNext()
+                }
+                return
+            }
         }
         
         // Fallback to regular queue
-        guard queueIndex + 1 < queue.count else { return }
+        guard queueIndex + 1 < queue.count else { 
+            print("🎵 No more items in queue")
+            return 
+        }
         queueIndex += 1
         currentArticle = queue[queueIndex]
         
-        let content = currentArticle?.content ?? ""
-        let title = currentArticle?.title ?? "Untitled"
-        let author = currentArticle?.author ?? "Unknown"
-        
-        // Strip HTML from content
-        let textToSpeak = content.stripHTML
-        
-        try await speak(text: textToSpeak, title: title, author: author)
+        if let article = currentArticle {
+            try await playArticle(article)
+        }
     }
     
     func playPrevious() async throws {
-        guard queueIndex > 0 else { return }
+        print("🎵 playPrevious() called")
+        
+        // Stop current playback
+        stop()
+        
+        // Check if QueueService has items to play
+        let enhancedQueue = QueueService.shared.enhancedQueue
+        print("🎵 Enhanced queue has \(enhancedQueue.count) items")
+        
+        if !enhancedQueue.isEmpty {
+            // Find the currently playing item
+            var currentIndex = -1
+            if let currentArticle = currentArticle {
+                // Check by article ID
+                if let articleID = currentArticle.id {
+                    currentIndex = enhancedQueue.firstIndex { $0.articleID == articleID } ?? -1
+                }
+                // Check by audio URL for RSS
+                if currentIndex == -1, let url = currentArticle.url {
+                    currentIndex = enhancedQueue.firstIndex { $0.audioUrl?.absoluteString == url } ?? -1
+                }
+            }
+            
+            print("🎵 Current index in enhanced queue: \(currentIndex)")
+            
+            // If we found the current item and there's a previous item
+            if currentIndex > 0 {
+                // Play the previous item
+                let previousItem = enhancedQueue[currentIndex - 1]
+                print("🎵 Playing previous item: \(previousItem.title)")
+                
+                await MainActor.run {
+                    if let audioUrl = previousItem.audioUrl {
+                        // Play RSS episode
+                        Task {
+                            let fetchRequest: NSFetchRequest<RSSEpisode> = RSSEpisode.fetchRequest()
+                            fetchRequest.predicate = NSPredicate(format: "audioUrl == %@", audioUrl.absoluteString)
+                            fetchRequest.fetchLimit = 1
+                            
+                            if let episode = try? PersistenceController.shared.container.viewContext.fetch(fetchRequest).first {
+                                await self.playRSSEpisode(url: audioUrl, title: previousItem.title ?? "Unknown", episode: episode)
+                            } else {
+                                await self.playRSSEpisode(url: audioUrl, title: previousItem.title ?? "Unknown")
+                            }
+                        }
+                    } else if let articleID = previousItem.articleID {
+                        // Play article
+                        let fetchRequest: NSFetchRequest<Article> = Article.fetchRequest()
+                        fetchRequest.predicate = NSPredicate(format: "id == %@", articleID as CVarArg)
+                        if let article = try? PersistenceController.shared.container.viewContext.fetch(fetchRequest).first {
+                            Task {
+                                try? await self.playArticle(article)
+                            }
+                        }
+                    }
+                }
+                return
+            }
+        }
+        
+        // Fallback to regular queue
+        guard queueIndex > 0 else { 
+            print("🎵 No previous items in queue")
+            return 
+        }
         queueIndex -= 1
         currentArticle = queue[queueIndex]
         
-        let content = currentArticle?.content ?? ""
-        let title = currentArticle?.title ?? "Untitled"
-        let author = currentArticle?.author ?? "Unknown"
-        
-        // Strip HTML from content
-        let textToSpeak = content.stripHTML
-        
-        try await speak(text: textToSpeak, title: title, author: author)
+        if let article = currentArticle {
+            try await playArticle(article)
+        }
     }
     
     func clearQueue() {
@@ -556,23 +835,85 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
         saveQueueState()
     }
     
+    // MARK: - Live News Navigation
+    
+    private func playNextLiveNews() async {
+        print("🎵 Playing next Live News episode")
+        
+        // Get RSS service
+        guard let rssService = try? QueueService.shared.getRSSService() else { return }
+        
+        // Get all feeds sorted by priority
+        let feeds = rssService.feeds.filter { $0.isEnabled }
+        
+        // Find current episode and feed
+        var currentFeedIndex = -1
+        var currentEpisodeFound = false
+        
+        if let currentItem = currentPlaybackItem,
+           let currentURL = currentItem.audioUrl?.absoluteString {
+            
+            // Find which feed and episode is currently playing
+            for (feedIndex, feed) in feeds.enumerated() {
+                if let episodes = feed.episodes?.allObjects as? [RSSEpisode] {
+                    let sortedEpisodes = episodes.sorted { $0.pubDate > $1.pubDate }
+                    
+                    for episode in sortedEpisodes {
+                        if episode.audioUrl == currentURL {
+                            currentFeedIndex = feedIndex
+                            currentEpisodeFound = true
+                            break
+                        }
+                    }
+                }
+                if currentEpisodeFound { break }
+            }
+        }
+        
+        // Find next unlistened episode
+        let startIndex = currentEpisodeFound ? currentFeedIndex + 1 : 0
+        
+        for i in startIndex..<feeds.count {
+            let feed = feeds[i]
+            if let episodes = feed.episodes?.allObjects as? [RSSEpisode] {
+                // Get the most recent unlistened episode
+                if let nextEpisode = episodes
+                    .filter({ !$0.isListened })
+                    .sorted(by: { $0.pubDate > $1.pubDate })
+                    .first {
+                    
+                    // Play the next episode
+                    if let audioUrl = URL(string: nextEpisode.audioUrl) {
+                        await playRSSEpisode(url: audioUrl, title: nextEpisode.title ?? "Unknown", episode: nextEpisode)
+                        return
+                    }
+                }
+            }
+        }
+        
+        print("🎵 No more Live News episodes to play")
+        state.send(.stopped)
+    }
+    
     // MARK: - Private Methods
     
     private func startProgressTimer() {
         playerTimer?.invalidate()
         playerTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            guard let self = self, let player = self.audioPlayer else { return }
-            
-            self.currentTime = player.currentTime
-            
-            if self.duration > 0 {
-                let progressValue = Float(self.currentTime / self.duration)
-                self.progress.send(progressValue)
+            Task { @MainActor in
+                guard let self = self, let player = self.audioPlayer else { return }
                 
-                // Update Now Playing info
-                if var info = MPNowPlayingInfoCenter.default().nowPlayingInfo {
-                    info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = self.currentTime
-                    MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+                self.currentTime = player.currentTime
+                
+                if self.duration > 0 {
+                    let progressValue = Float(self.currentTime / self.duration)
+                    self.progress.send(progressValue)
+                    
+                    // Update Now Playing info
+                    if var info = MPNowPlayingInfoCenter.default().nowPlayingInfo {
+                        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = self.currentTime
+                        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+                    }
                 }
             }
         }
@@ -635,6 +976,23 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
         commandCenter.skipBackwardCommand.preferredIntervals = [15]
         commandCenter.skipBackwardCommand.addTarget { [weak self] _ in
             self?.skipBackward()
+            return .success
+        }
+        
+        // Next/Previous track commands
+        commandCenter.nextTrackCommand.isEnabled = true
+        commandCenter.nextTrackCommand.addTarget { [weak self] _ in
+            Task {
+                try? await self?.playNext()
+            }
+            return .success
+        }
+        
+        commandCenter.previousTrackCommand.isEnabled = true
+        commandCenter.previousTrackCommand.addTarget { [weak self] _ in
+            Task {
+                try? await self?.playPrevious()
+            }
             return .success
         }
         
@@ -729,16 +1087,18 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
 // MARK: - AVAudioPlayerDelegate
 extension AudioService: AVAudioPlayerDelegate {
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        print("🎵 audioPlayerDidFinishPlaying called - successfully: \(flag)")
+        print("🎵 Player duration was: \(player.duration)")
+        print("🎵 Player current time: \(player.currentTime)")
+        
         Task { @MainActor in
             playerTimer?.invalidate()
             state.send(.stopped)
             progress.send(1.0)
             updateNowPlayingPlaybackState()
             
-            // Clean up temporary audio file
-            if let url = player.url {
-                try? FileManager.default.removeItem(at: url)
-            }
+            // Don't clean up cached audio files
+            // Audio files are now cached in AudioCache directory
             
             // Play next if auto-play is enabled
             if UserDefaultsManager.shared.autoPlayNext && queueIndex + 1 < queue.count {

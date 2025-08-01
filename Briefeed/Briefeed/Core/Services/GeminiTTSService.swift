@@ -115,6 +115,38 @@ class GeminiTTSService: ObservableObject {
     
     // MARK: - Public Methods
     
+    /// Clear the audio cache
+    func clearAudioCache() {
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("AudioCache", isDirectory: true)
+        
+        do {
+            let files = try FileManager.default.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: nil)
+            for file in files {
+                try FileManager.default.removeItem(at: file)
+            }
+            print("[GeminiTTS] Cleared audio cache: \(files.count) files removed")
+        } catch {
+            print("[GeminiTTS] Error clearing cache: \(error)")
+        }
+    }
+    
+    /// Get audio cache size
+    func getAudioCacheSize() -> Int64 {
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("AudioCache", isDirectory: true)
+        
+        var size: Int64 = 0
+        if let files = try? FileManager.default.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: [.fileSizeKey]) {
+            for file in files {
+                if let fileSize = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                    size += Int64(fileSize)
+                }
+            }
+        }
+        return size
+    }
+    
     /// Generate speech from text using Gemini TTS
     /// - Parameters:
     ///   - text: The text to convert to speech
@@ -136,6 +168,25 @@ class GeminiTTSService: ObservableObject {
         }
         
         print("[GeminiTTS] Using voice: \(selectedVoice)")
+        
+        // Check cache first
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("AudioCache", isDirectory: true)
+        
+        let textHash = text.data(using: .utf8)?.base64EncodedString()
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "+", with: "-") ?? UUID().uuidString
+        let textHashPrefix = String(textHash.prefix(32))
+        
+        let fileName = "\(textHashPrefix)_\(selectedVoice).wav"
+        let cachedURL = cacheDir.appendingPathComponent(fileName)
+        
+        if FileManager.default.fileExists(atPath: cachedURL.path) {
+            print("[GeminiTTS] Found cached audio file: \(fileName)")
+            if let cachedData = try? Data(contentsOf: cachedURL) {
+                return TTSResult(success: true, audioData: cachedData, audioURL: cachedURL, error: nil, usedFallback: false, voiceUsed: selectedVoice)
+            }
+        }
         
         // Try Gemini TTS first
         if let apiKey = apiKey {
@@ -164,16 +215,21 @@ class GeminiTTSService: ObservableObject {
         
         // Summary takes precedence
         if let summary = article.summary, !summary.isEmpty {
-            // Clean up the summary text
-            let cleanSummary = summary
-                .replacingOccurrences(of: "**", with: "") // Remove markdown bold
-                .replacingOccurrences(of: "*", with: "") // Remove markdown italic
-                .replacingOccurrences(of: "#", with: "") // Remove markdown headers
-                .replacingOccurrences(of: "\n\n", with: ". ") // Replace double newlines
-                .replacingOccurrences(of: "\n", with: " ") // Replace single newlines
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            
-            speechText += cleanSummary
+            // Skip the fallback summary message
+            if summary.contains("Unable to generate summary") {
+                speechText += "Summary not available. "
+            } else {
+                // Clean up the summary text
+                let cleanSummary = summary
+                    .replacingOccurrences(of: "**", with: "") // Remove markdown bold
+                    .replacingOccurrences(of: "*", with: "") // Remove markdown italic
+                    .replacingOccurrences(of: "#", with: "") // Remove markdown headers
+                    .replacingOccurrences(of: "\n\n", with: ". ") // Replace double newlines
+                    .replacingOccurrences(of: "\n", with: " ") // Replace single newlines
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                
+                speechText += cleanSummary
+            }
         } else if let content = article.content {
             // Fall back to content if no summary
             let cleanContent = content.stripHTML
@@ -189,15 +245,14 @@ class GeminiTTSService: ObservableObject {
             } else {
                 speechText += cleanContent
             }
+        } else {
+            // No content available at all
+            speechText += "Article content not available."
         }
         
-        // Add source attribution
-        if let author = article.author {
-            speechText += " By \(author)."
-        }
-        
-        if let subreddit = article.subreddit {
-            speechText += " From r/\(subreddit)."
+        // Ensure we have something to speak
+        if speechText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            speechText = "Unable to load article content."
         }
         
         return speechText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -277,11 +332,44 @@ class GeminiTTSService: ObservableObject {
             // Convert PCM to WAV
             let wavData = pcmToWav(pcmData: decodedData, sampleRate: 24000)
             
-            // Save to temporary file
-            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).wav")
-            try wavData.write(to: tempURL)
+            // Create cache directory if it doesn't exist
+            let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+                .appendingPathComponent("AudioCache", isDirectory: true)
+            try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true, attributes: nil)
             
-            return TTSResult(success: true, audioData: wavData, audioURL: tempURL, error: nil, usedFallback: false, voiceUsed: voiceName)
+            // Create filename based on text hash for caching
+            let textHash = text.data(using: .utf8)?.base64EncodedString()
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "+", with: "-") ?? UUID().uuidString
+            let textHashPrefix = String(textHash.prefix(32))
+            
+            let fileName = "\(textHashPrefix)_\(voiceName).wav"
+            let audioURL = cacheDir.appendingPathComponent(fileName)
+            
+            // Check if cached file exists
+            if FileManager.default.fileExists(atPath: audioURL.path) {
+                print("[GeminiTTS] Using cached audio file: \(fileName)")
+                if let cachedData = try? Data(contentsOf: audioURL) {
+                    return TTSResult(success: true, audioData: cachedData, audioURL: audioURL, error: nil, usedFallback: false, voiceUsed: voiceName)
+                }
+            }
+            
+            // Save new audio file
+            try wavData.write(to: audioURL)
+            print("[GeminiTTS] Saved audio to cache: \(fileName)")
+            print("[GeminiTTS] WAV file size: \(wavData.count) bytes")
+            print("[GeminiTTS] PCM data size: \(decodedData.count) bytes")
+            
+            // Validate the audio file can be played
+            do {
+                let testPlayer = try AVAudioPlayer(contentsOf: audioURL)
+                print("[GeminiTTS] Test player duration: \(testPlayer.duration) seconds")
+                print("[GeminiTTS] Test player channels: \(testPlayer.numberOfChannels)")
+            } catch {
+                print("[GeminiTTS] WARNING: Generated audio file cannot be played: \(error)")
+            }
+            
+            return TTSResult(success: true, audioData: wavData, audioURL: audioURL, error: nil, usedFallback: false, voiceUsed: voiceName)
             
         } catch {
             return TTSResult(success: false, audioData: nil, audioURL: nil, error: error.localizedDescription, usedFallback: false, voiceUsed: nil)

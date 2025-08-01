@@ -124,6 +124,16 @@ class ArticleViewModel: ObservableObject {
     func generateStructuredSummary() async {
         guard !isGeneratingSummary else { return }
         
+        // Check if we already have a summary
+        if let existingSummary = article.summary, !existingSummary.isEmpty {
+            // Parse the existing summary as structured summary if possible
+            if existingSummary.contains("whatHappened") || existingSummary.contains("who") {
+                // This looks like a structured summary JSON, just use it
+                summary = existingSummary
+            }
+            return
+        }
+        
         isGeneratingSummary = true
         errorMessage = nil
         

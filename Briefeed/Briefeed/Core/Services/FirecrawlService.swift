@@ -73,8 +73,12 @@ class FirecrawlService: FirecrawlServiceProtocol {
     
     func scrapeURL(_ url: String) async throws -> FirecrawlData {
         guard !apiKey.isEmpty else {
+            await ProcessingStatusService.shared.updateError("Firecrawl API key missing")
             throw FirecrawlError.invalidAPIKey
         }
+        
+        // Update status
+        await ProcessingStatusService.shared.updateFetchingContent(url: url)
         
         let endpoint = "\(Constants.API.firecrawlBaseURL)/scrape"
         
@@ -94,26 +98,48 @@ class FirecrawlService: FirecrawlServiceProtocol {
         ]
         
         do {
+            // Use a longer timeout for Firecrawl as it needs to fetch and process content
             let response: FirecrawlResponse = try await networkService.request(
                 endpoint,
                 method: .post,
                 parameters: parameters,
-                headers: headers
+                headers: headers,
+                timeout: Constants.API.firecrawlTimeout
             )
             
             guard response.success, let data = response.data else {
-                throw FirecrawlError.scrapeFailure(response.error ?? "Unknown error")
+                let errorMsg = response.error ?? "Unknown error"
+                await ProcessingStatusService.shared.updateError("Firecrawl failed: \(errorMsg)")
+                throw FirecrawlError.scrapeFailure(errorMsg)
             }
             
             if data.content.isEmpty && data.markdown?.isEmpty != false {
+                await ProcessingStatusService.shared.updateError("No content found at URL")
                 throw FirecrawlError.contentNotFound
             }
             
+            // Calculate word count
+            let wordCount = data.bestContent.split(separator: " ").count
+            await ProcessingStatusService.shared.updateContentFetched(wordCount: wordCount, url: url)
+            
             return data
         } catch let error as NetworkError {
-            if case .rateLimited = error {
+            switch error {
+            case .rateLimited:
+                await ProcessingStatusService.shared.updateError("Firecrawl rate limit exceeded")
                 throw FirecrawlError.rateLimitExceeded
+            case .timeout:
+                await ProcessingStatusService.shared.updateError("Firecrawl request timed out after 60 seconds")
+                throw FirecrawlError.scrapeFailure("Request timed out - the website may be slow or unresponsive")
+            case .networkUnavailable:
+                await ProcessingStatusService.shared.updateError("No internet connection")
+                throw error
+            default:
+                await ProcessingStatusService.shared.updateError("Network error: \(error.localizedDescription)")
+                throw error
             }
+        } catch {
+            await ProcessingStatusService.shared.updateError("Unexpected error: \(error.localizedDescription)")
             throw error
         }
     }

@@ -11,11 +11,20 @@ struct ContentView: View {
     @State private var selectedTab = 0
     @EnvironmentObject var userDefaultsManager: UserDefaultsManager
     @ObservedObject private var audioService = AudioService.shared
+    @ObservedObject private var statusService = ProcessingStatusService.shared
     
     var body: some View {
         ZStack(alignment: .bottom) {
             // Main content with tab view
             VStack(spacing: 0) {
+                // Status banner at the top
+                if statusService.showStatusBanner {
+                    ProcessingStatusBanner()
+                        .padding(.horizontal)
+                        .padding(.top, 5)
+                        .zIndex(1)
+                }
+                
                 TabView(selection: $selectedTab) {
                     FeedView()
                         .tabItem {

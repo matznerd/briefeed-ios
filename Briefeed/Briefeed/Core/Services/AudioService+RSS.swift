@@ -59,41 +59,21 @@ extension AudioService {
         currentRSSEpisode = episode
         isUsingGeminiTTS = false // Flag to indicate RSS audio
         
-        // Create a placeholder article for the mini player
+        // Create a playback item for the mini player
         if let episode = episode {
-            // Use main context to ensure the article persists
-            let context = PersistenceController.shared.container.viewContext
+            // Create a proper playback item
+            let playbackItem = CurrentPlaybackItem(from: episode)
+            currentPlaybackItem = playbackItem
             
-            // Create a transient article (not saved to Core Data)
-            let article = Article(context: context)
-            article.id = UUID()
-            article.title = episode.title
-            article.summary = episode.episodeDescription ?? "RSS Episode"
-            article.url = episode.audioUrl
-            article.author = episode.feed?.displayName
-            // article.publishedDate = episode.pubDate // Not available on Article model
-            
-            // IMPORTANT: Set as current article BEFORE any async operations
-            currentArticle = article
-            
-            // Update the queue
-            if queue.isEmpty || queue.first?.id != article.id {
-                queue.insert(article, at: 0)
-            }
+            // Clear the old article reference
+            currentArticle = nil
             
             // Force immediate state updates
             objectWillChange.send()
             ArticleStateManager.shared.objectWillChange.send()
             
-            // Schedule another update after a brief delay to ensure UI catches up
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                self.objectWillChange.send()
-                print("📻 Current article after delay: \(self.currentArticle?.title ?? "nil")")
-            }
-            
-            print("📻 Set current article for RSS: \(article.title ?? "Unknown")")
-            print("📻 Current article check: \(currentArticle?.title ?? "nil")")
+            print("📻 Set current playback item for RSS: \(playbackItem.title)")
+            print("📻 Playback context: \(playbackContext)")
         }
         
         do {
@@ -115,6 +95,11 @@ extension AudioService {
             
             // Start playback
             rssAudioPlayer?.play()
+            
+            // Set playback rate after starting playback
+            let playbackSpeed = UserDefaultsManager.shared.playbackSpeed
+            rssAudioPlayer?.rate = playbackSpeed
+            
             state.send(.playing)
             
             // Force state update for UI
@@ -162,11 +147,16 @@ extension AudioService {
     func playRSS() {
         guard let player = rssAudioPlayer else { return }
         player.play()
+        
+        // Apply current playback speed
+        let playbackSpeed = UserDefaultsManager.shared.playbackSpeed
+        player.rate = playbackSpeed
+        
         state.send(.playing)
         updateNowPlayingPlaybackState()
         objectWillChange.send()
         ArticleStateManager.shared.objectWillChange.send()
-        print("📻 Resumed RSS playback")
+        print("📻 Resumed RSS playback at rate: \(playbackSpeed)")
     }
     
     /// Pause for RSS
@@ -185,6 +175,7 @@ extension AudioService {
     func stopRSS() {
         saveRSSProgress()
         cleanupRSSPlayer()
+        currentPlaybackItem = nil
         state.send(.stopped)
     }
     
