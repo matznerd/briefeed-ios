@@ -167,12 +167,8 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
         currentRange = NSRange(location: 0, length: 0)
         progress.send(0.0)
         
-        // Configure audio session
-        do {
-            try configureBackgroundAudio()
-        } catch {
-            print("⚠️ Audio session configuration failed, continuing anyway: \(error)")
-        }
+        // Configure audio session - don't let failures stop playback
+        try? configureBackgroundAudio()
         
         // Try Gemini TTS first
         print("🎤 Attempting Gemini TTS generation...")
@@ -442,16 +438,50 @@ class AudioService: NSObject, AudioServiceProtocol, ObservableObject {
         do {
             let session = AVAudioSession.sharedInstance()
             
-            // Use playback category for TTS
-            try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
-            try session.setActive(true)
+            // Check if audio session is already configured properly
+            let currentCategory = session.category
+            let currentMode = session.mode
+            let currentOptions = session.categoryOptions
             
-            print("✅ Audio session configured successfully")
+            // Only reconfigure if necessary
+            if currentCategory != .playback || 
+               currentMode != .spokenAudio || 
+               !currentOptions.contains([.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP, .allowAirPlay]) {
+                
+                // First deactivate if needed
+                if session.isOtherAudioPlaying {
+                    try session.setActive(false, options: .notifyOthersOnDeactivation)
+                }
+                
+                // Use playback category with mixWithOthers for non-intrusive playback
+                try session.setCategory(
+                    .playback,
+                    mode: .spokenAudio,
+                    options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP, .allowAirPlay]
+                )
+                
+                print("✅ Audio session category configured")
+            }
+            
+            // Always try to activate the session
+            if !session.isOtherAudioPlaying {
+                try session.setActive(true)
+            } else {
+                // If other audio is playing, try with options
+                try session.setActive(true, options: [])
+            }
+            
+            print("✅ Audio session activated successfully")
             print("📱 Category: \(session.category.rawValue)")
             print("📱 Mode: \(session.mode.rawValue)")
+            print("📱 Options: mixWithOthers, Bluetooth, AirPlay enabled")
         } catch {
             print("❌ Failed to configure audio session: \(error)")
-            throw AudioServiceError.audioSessionError
+            print("📱 Error code: \((error as NSError).code)")
+            print("📱 Error domain: \((error as NSError).domain)")
+            
+            // Don't throw error - let playback continue anyway
+            // Some audio session errors are recoverable
         }
     }
     

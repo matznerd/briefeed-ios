@@ -82,10 +82,25 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     private func configureAudioSession() {
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.mixWithOthers])
-            try AVAudioSession.sharedInstance().setActive(true)
+            let session = AVAudioSession.sharedInstance()
+            
+            // Configure for mixing with other audio and Bluetooth support
+            try session.setCategory(
+                .playback,
+                mode: .spokenAudio,
+                options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP, .allowAirPlay]
+            )
+            
+            // Don't activate the session here - let AudioService do it when needed
+            // This prevents conflicts when the app launches
+            
+            print("✅ Audio session category configured at app launch")
+            print("📱 Category: \(session.category.rawValue)")
+            print("📱 Mode: \(session.mode.rawValue)")
         } catch {
-            print("Failed to configure audio session: \(error)")
+            print("❌ Failed to configure audio session at app launch: \(error)")
+            print("📱 Error code: \((error as NSError).code)")
+            print("📱 Error domain: \((error as NSError).domain)")
         }
     }
     

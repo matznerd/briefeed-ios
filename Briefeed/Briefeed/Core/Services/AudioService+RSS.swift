@@ -77,8 +77,8 @@ extension AudioService {
         }
         
         do {
-            // Configure audio session
-            try configureBackgroundAudio()
+            // Configure audio session (don't throw if it fails)
+            try? configureBackgroundAudio()
             
             // Create player item
             let playerItem = AVPlayerItem(url: url)
@@ -117,8 +117,12 @@ extension AudioService {
             )
             
         } catch {
-            print("❌ Error playing RSS episode: \(error)")
-            state.send(.error(error))
+            print("❌ Error playing RSS episode: \(error.localizedDescription)")
+            print("📱 Error details: \(error)")
+            state.send(.error(AudioServiceError.audioSessionError))
+            
+            // Clean up on error
+            cleanupRSSPlayer()
         }
     }
     
