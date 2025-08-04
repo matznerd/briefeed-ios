@@ -341,12 +341,15 @@ class CombinedFeedViewModel: ObservableObject {
         if article.isSaved {
             article.savedAt = Date()
             // Add to audio queue when saving
-            AudioService.shared.addToQueue(article)
+            Task {
+                await BriefeedAudioService.shared.addToQueue(article)
+            }
         } else {
             article.savedAt = nil
             // Remove from audio queue when unsaving
-            if let index = AudioService.shared.queue.firstIndex(where: { $0.id == article.id }) {
-                AudioService.shared.removeFromQueue(at: index)
+            let queue = BriefeedAudioService.shared.queue
+            if let index = queue.firstIndex(where: { $0.content.id == article.id }) {
+                BriefeedAudioService.shared.removeFromQueue(at: index)
             }
         }
         do {

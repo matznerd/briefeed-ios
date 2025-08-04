@@ -23,7 +23,7 @@ class ArticleStateManager: ObservableObject {
     
     // MARK: - Private Properties
     private var cancellables = Set<AnyCancellable>()
-    private let audioService = AudioService.shared
+    private let audioService = BriefeedAudioService.shared
     private let archivedService = ArchivedArticlesService.shared
     
     // MARK: - Initialization

@@ -11,11 +11,28 @@ import CoreData
 struct LiveNewsView: View {
     @StateObject private var rssService = RSSAudioService.shared
     @StateObject private var queueService = QueueService.shared
-    @StateObject private var audioService = AudioService.shared
+    @StateObject private var audioService = BriefeedAudioService.shared
+    @StateObject private var featureFlags = FeatureFlagManager.shared
     @State private var isRefreshing = false
     @State private var selectedFeed: RSSFeed?
     @State private var showingAddFeed = false
     @State private var showingFeedDetails = false
+    
+    // Helper function to play RSS episode using correct service
+    private func playRSSEpisode(url: URL, title: String, episode: RSSEpisode?) async {
+        // Always use new audio service
+        await audioService.playRSSEpisode(url: url, title: title, episode: episode)
+    }
+    
+    // Helper to get current playing state
+    private var currentPlayingState: AudioPlayerState {
+        return audioService.state.value
+    }
+    
+    // Helper to check if idle or stopped
+    private var isIdleOrStopped: Bool {
+        return audioService.state.value == .idle || audioService.state.value == .stopped
+    }
     
     @FetchRequest(
         entity: RSSFeed.entity(),
@@ -218,9 +235,9 @@ struct LiveNewsView: View {
                 queueService.addRSSEpisode(episode, isLiveNews: false, playNext: true)
                 
                 // If nothing is playing, start playback
-                if audioService.state.value == .idle || audioService.state.value == .stopped {
+                if isIdleOrStopped {
                     if let audioUrl = URL(string: episode.audioUrl) {
-                        await audioService.playRSSEpisode(url: audioUrl, title: episode.title ?? "Unknown", episode: episode)
+                        await playRSSEpisode(url: audioUrl, title: episode.title ?? "Unknown", episode: episode)
                     }
                 }
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -272,7 +289,7 @@ struct LiveNewsView: View {
         print("🎙️ Play Live News pressed")
         
         // Set Live News context
-        audioService.playbackContext = .liveNews
+        // No longer needed as BriefeedAudioService handles this internally
         
         // Find the latest episode from each enabled feed
         var episodesToPlay: [(RSSEpisode, Int)] = []
@@ -300,8 +317,8 @@ struct LiveNewsView: View {
            let audioUrl = URL(string: firstEpisode.audioUrl) {
             print("🎙️ Playing first episode directly: \(firstEpisode.title ?? "Unknown")")
             
-            // Play directly using AudioService
-            await audioService.playRSSEpisode(url: audioUrl, title: firstEpisode.title ?? "Unknown", episode: firstEpisode)
+            // Play directly using the appropriate audio service based on feature flag
+            await playRSSEpisode(url: audioUrl, title: firstEpisode.title ?? "Unknown", episode: firstEpisode)
             
             // Add remaining episodes to a "Live News" queue (separate from regular queue)
             // This way they auto-play after the first one without mixing with articles
@@ -339,9 +356,25 @@ struct LiveNewsView: View {
 private struct FeedRow: View {
     @ObservedObject var feed: RSSFeed
     let onTap: () -> Void
-    @ObservedObject private var audioService = AudioService.shared
+    @ObservedObject private var audioService = BriefeedAudioService.shared
+    @ObservedObject private var featureFlags = FeatureFlagManager.shared
     @ObservedObject private var queueService = QueueService.shared
     @ObservedObject private var stateManager = ArticleStateManager.shared
+    
+    // Helper functions for audio service
+    private func playRSSEpisode(_ episode: RSSEpisode) async {
+        if let audioUrl = URL(string: episode.audioUrl) {
+            await audioService.playRSSEpisode(episode)
+        }
+    }
+    
+    private func pausePlayback() {
+        audioService.pause()
+    }
+    
+    private func resumePlayback() {
+        audioService.play()
+    }
     
     private var latestEpisode: RSSEpisode? {
         (feed.episodes?.allObjects as? [RSSEpisode])?
@@ -357,11 +390,11 @@ private struct FeedRow: View {
     private var isCurrentlyPlaying: Bool {
         guard let latest = latestEpisode else { return false }
         // Check if this episode is the current playing item
-        // Compare URLs as strings to handle any formatting differences
-        let currentURL = audioService.currentArticle?.url
-        let episodeURL = latest.audioUrl
-        let isPlayingThisEpisode = currentURL == episodeURL
-        return isPlayingThisEpisode && (audioService.state.value == .playing || audioService.state.value == .loading)
+        if let currentItem = audioService.currentPlaybackItem {
+            let isPlayingThisEpisode = currentItem.audioUrl?.absoluteString == latest.audioUrl
+            return isPlayingThisEpisode && (audioService.state.value == .playing || audioService.state.value == .loading)
+        }
+        return false
     }
     
     private var isInQueue: Bool {
@@ -394,21 +427,20 @@ private struct FeedRow: View {
             // Inline Play/Pause Button
             if hasNewEpisode || isCurrentlyPlaying {
                 Button {
-                    if isCurrentlyPlaying && audioService.state.value == .playing {
-                        audioService.pauseWithRSSSupport()
-                    } else if isCurrentlyPlaying && audioService.state.value == .paused {
-                        audioService.playWithRSSSupport()
+                    let isPlaying = audioService.state.value == .playing
+                    
+                    if isCurrentlyPlaying && isPlaying {
+                        pausePlayback()
+                    } else if isCurrentlyPlaying && !isPlaying {
+                        resumePlayback()
                     } else if let latest = latestEpisode {
                         Task {
-                            // Set Live News context and play directly
-                            audioService.playbackContext = .liveNews
-                            if let audioUrl = URL(string: latest.audioUrl) {
-                                await audioService.playRSSEpisode(url: audioUrl, title: latest.title ?? "Unknown", episode: latest)
-                            }
+                            await playRSSEpisode(latest)
                         }
                     }
                 } label: {
-                    Image(systemName: isCurrentlyPlaying && audioService.state.value == .playing ? "pause.circle.fill" : "play.circle.fill")
+                    let isPlaying = audioService.state.value == .playing
+                    Image(systemName: isCurrentlyPlaying && isPlaying ? "pause.circle.fill" : "play.circle.fill")
                         .font(.system(size: 32))
                         .foregroundColor(.briefeedRed)
                 }
@@ -487,11 +519,11 @@ private struct FeedRow: View {
         }
         .padding(.vertical, 8)
         // Force refresh when audio state changes
-        .onReceive(audioService.$currentArticle) { _ in
+        .onReceive(audioService.$currentPlaybackItem) { _ in
             // Triggers view update
         }
-        .onReceive(audioService.state) { _ in
-            // Triggers view update
+        .onReceive(audioService.$isPlaying) { _ in
+            // Triggers view update when playing state changes
         }
     }
 }

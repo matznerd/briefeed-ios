@@ -26,7 +26,7 @@ class QueueService: ObservableObject {
     @Published private(set) var queuedItems: [QueuedItem] = []
     internal let userDefaults = UserDefaults.standard
     private let queueKey = "AudioQueueItems"
-    internal let audioService = AudioService.shared
+    internal let audioService = BriefeedAudioService.shared
     private var cancellables = Set<AnyCancellable>()
     
     // Enhanced Queue Properties for RSS

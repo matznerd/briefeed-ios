@@ -6,39 +6,35 @@
 //
 
 import Testing
+import Foundation
 @testable import Briefeed
 
 struct RedditServiceTests {
     
-    var sut: RedditService!
-    var mockNetworkService: MockNetworkService!
-    
-    override func setUp() {
-        super.setUp()
-        mockNetworkService = MockNetworkService()
-        sut = RedditService(networkService: mockNetworkService)
-    }
-    
-    override func tearDown() {
-        sut = nil
-        mockNetworkService = nil
-        super.tearDown()
+    // Helper to create test instances
+    func makeSystemUnderTest() -> (sut: RedditService, mock: MockNetworkService) {
+        let mockNetworkService = MockNetworkService()
+        let sut = RedditService(networkService: mockNetworkService)
+        return (sut, mockNetworkService)
     }
     
     // MARK: - URL Generation Tests
     
+    @Test("Fetch subreddit generates correct URL")
     func testFetchSubredditGeneratesCorrectURL() async throws {
         // Given
         let subreddit = "swift"
         let expectedURL = "https://www.reddit.com/r/swift.json?limit=25&raw_json=1"
         
         // When
+        let (sut, mockNetworkService) = makeSystemUnderTest()
         _ = try? await sut.fetchSubreddit(name: subreddit)
         
         // Then
-        XCTAssertEqual(mockNetworkService.lastRequestedURL, expectedURL)
+        #expect(mockNetworkService.lastRequestedURL == expectedURL)
     }
     
+    @Test("Fetch subreddit with pagination token")
     func testFetchSubredditWithPaginationToken() async throws {
         // Given
         let subreddit = "news"
@@ -46,14 +42,16 @@ struct RedditServiceTests {
         let expectedURL = "https://www.reddit.com/r/news.json?limit=25&raw_json=1&after=t3_abc123"
         
         // When
+        let (sut, mockNetworkService) = makeSystemUnderTest()
         _ = try? await sut.fetchSubreddit(name: subreddit, after: afterToken)
         
         // Then
-        XCTAssertEqual(mockNetworkService.lastRequestedURL, expectedURL)
+        #expect(mockNetworkService.lastRequestedURL == expectedURL)
     }
     
     // MARK: - Response Parsing Tests
     
+    @Test("Parse valid Reddit response")
     func testParseValidRedditResponse() async throws {
         // Given
         let json = """
@@ -66,49 +64,50 @@ struct RedditServiceTests {
                         "id": "abc123",
                         "title": "Test Post",
                         "author": "testuser",
-                        "subreddit": "swift",
-                        "url": "https://example.com",
-                        "created_utc": 1234567890,
-                        "score": 100,
-                        "num_comments": 50,
-                        "permalink": "/r/swift/comments/abc123/test_post/",
-                        "is_video": false,
-                        "is_self": false
+                        "selftext": "This is test content",
+                        "created_utc": 1629000000,
+                        "permalink": "/r/swift/comments/abc123/test_post/"
                     }
                 }],
-                "after": "t3_def456"
+                "after": "t3_xyz789"
             }
         }
         """
-        mockNetworkService.mockResponse = json.data(using: .utf8)!
+        
+        let mockData = json.data(using: .utf8)!
+        let (sut, mockNetworkService) = makeSystemUnderTest()
+        mockNetworkService.mockResponse = mockData
         
         // When
-        let response = try await sut.fetchSubreddit(name: "swift")
+        let result = try await sut.fetchSubreddit(name: "swift")
         
         // Then
-        XCTAssertEqual(response.data.children.count, 1)
-        XCTAssertEqual(response.data.children[0].data.title, "Test Post")
-        XCTAssertEqual(response.data.after, "t3_def456")
+        #expect(result.posts.count == 1)
+        #expect(result.posts[0].id == "abc123")
+        #expect(result.posts[0].title == "Test Post")
     }
     
-    // MARK: - Error Handling Tests
-    
-    func testHandleNetworkError() async {
+    @Test("Handle invalid JSON response")
+    func testHandleInvalidJSONResponse() async throws {
         // Given
-        mockNetworkService.shouldThrowError = .networkUnavailable
+        let invalidJSON = "{ invalid json }"
+        let mockData = invalidJSON.data(using: .utf8)!
+        let (sut, mockNetworkService) = makeSystemUnderTest()
+        mockNetworkService.mockResponse = mockData
         
         // When/Then
         do {
             _ = try await sut.fetchSubreddit(name: "swift")
-            XCTFail("Should have thrown network error")
+            Issue.record("Should have thrown an error for invalid JSON")
         } catch {
-            XCTAssertTrue(error is NetworkError)
+            #expect(error != nil)
         }
     }
     
     // MARK: - Content Filtering Tests
     
-    func testFiltersVideoContent() async throws {
+    @Test("Filter empty posts from response")
+    func testFilterEmptyPostsFromResponse() async throws {
         // Given
         let json = """
         {
@@ -118,67 +117,68 @@ struct RedditServiceTests {
                     {
                         "kind": "t3",
                         "data": {
-                            "id": "video123",
-                            "title": "Video Post",
-                            "is_video": true,
-                            "domain": "v.redd.it"
+                            "id": "post1",
+                            "title": "Valid Post",
+                            "selftext": "Content here",
+                            "author": "user1",
+                            "created_utc": 1629000000,
+                            "permalink": "/r/swift/comments/post1/"
                         }
                     },
                     {
                         "kind": "t3",
                         "data": {
-                            "id": "article123",
-                            "title": "Article Post",
-                            "is_video": false,
-                            "domain": "example.com"
+                            "id": "post2",
+                            "title": "",
+                            "selftext": "",
+                            "author": "user2",
+                            "created_utc": 1629000000,
+                            "permalink": "/r/swift/comments/post2/"
                         }
                     }
                 ]
             }
         }
         """
-        mockNetworkService.mockResponse = json.data(using: .utf8)!
+        
+        let mockData = json.data(using: .utf8)!
+        let (sut, mockNetworkService) = makeSystemUnderTest()
+        mockNetworkService.mockResponse = mockData
         
         // When
-        let response = try await sut.fetchSubreddit(name: "test")
+        let result = try await sut.fetchSubreddit(name: "swift")
         
         // Then
-        XCTAssertEqual(response.data.children.count, 1)
-        XCTAssertEqual(response.data.children[0].data.id, "article123")
+        #expect(result.posts.count == 1)
+        #expect(result.posts[0].id == "post1")
     }
 }
 
 // MARK: - Mock Network Service
 
 class MockNetworkService: NetworkServiceProtocol {
-    var mockResponse: Data?
-    var shouldThrowError: NetworkError?
     var lastRequestedURL: String?
-    var requestCount = 0
+    var mockResponse: Data?
+    var shouldThrowError = false
     
-    func request<T: Decodable>(_ endpoint: String, method: HTTPMethod, parameters: [String: Any]?, headers: [String: String]?, timeout: TimeInterval?) async throws -> T {
-        lastRequestedURL = endpoint
-        requestCount += 1
+    func fetchData(from urlString: String, cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy, timeout: TimeInterval = 30) async throws -> Data {
+        lastRequestedURL = urlString
         
-        if let error = shouldThrowError {
-            throw error
+        if shouldThrowError {
+            throw URLError(.badServerResponse)
         }
         
-        guard let data = mockResponse else {
-            throw NetworkError.noData
+        if let mockResponse = mockResponse {
+            return mockResponse
         }
         
-        return try JSONDecoder().decode(T.self, from: data)
+        // Return empty JSON as default
+        return "{}".data(using: .utf8)!
     }
     
-    func requestData(_ endpoint: String, method: HTTPMethod, parameters: [String: Any]?, headers: [String: String]?, timeout: TimeInterval?) async throws -> Data {
-        lastRequestedURL = endpoint
-        requestCount += 1
-        
-        if let error = shouldThrowError {
-            throw error
-        }
-        
-        return mockResponse ?? Data()
+    func fetchDataWithResponse(from urlString: String, cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy, timeout: TimeInterval = 30) async throws -> (data: Data, response: URLResponse) {
+        let data = try await fetchData(from: urlString, cachePolicy: cachePolicy, timeout: timeout)
+        let response = HTTPURLResponse(url: URL(string: urlString)!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        return (data, response)
     }
 }

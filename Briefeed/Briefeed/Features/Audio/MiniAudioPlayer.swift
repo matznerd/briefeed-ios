@@ -9,7 +9,7 @@ import SwiftUI
 import Combine
 
 struct MiniAudioPlayer: View {
-    @ObservedObject private var audioService = AudioService.shared
+    @ObservedObject private var audioService = BriefeedAudioService.shared
     @ObservedObject private var stateManager = ArticleStateManager.shared
     @EnvironmentObject var userDefaultsManager: UserDefaultsManager
     @State private var showExpandedPlayer = false

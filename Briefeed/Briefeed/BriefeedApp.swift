@@ -84,11 +84,13 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         do {
             let session = AVAudioSession.sharedInstance()
             
-            // Configure for mixing with other audio and Bluetooth support
+            // Configure for Bluetooth and AirPlay support
+            // Note: .mixWithOthers is incompatible with .spokenAudio mode
+            // Using .default mode for better compatibility with RSS podcasts
             try session.setCategory(
                 .playback,
-                mode: .spokenAudio,
-                options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP, .allowAirPlay]
+                mode: .default,  // Changed from .spokenAudio for compatibility
+                options: [.allowBluetooth, .allowBluetoothA2DP, .allowAirPlay]
             )
             
             // Don't activate the session here - let AudioService do it when needed

@@ -45,7 +45,7 @@ class ArticleViewModel: ObservableObject {
         self.storageService = storageService
         self.firecrawlService = firecrawlService
         self.geminiService = geminiService
-        self.audioService = audioService ?? AudioService.shared
+        self.audioService = audioService ?? BriefeedAudioService.shared
         
         // Load initial values
         self.articleContent = article.content

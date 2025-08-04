@@ -10,7 +10,7 @@ import CoreData
 
 struct BriefView: View {
     @StateObject private var viewModel = BriefViewModel()
-    @StateObject private var audioService = AudioService.shared
+    @StateObject private var audioService = BriefeedAudioService.shared
     @StateObject private var stateManager = ArticleStateManager.shared
     @State private var editMode = EditMode.inactive
     @State private var showingClearQueueAlert = false

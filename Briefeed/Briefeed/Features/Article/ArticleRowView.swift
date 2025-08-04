@@ -459,7 +459,7 @@ struct ArticleRowView: View {
         
         Task { @MainActor in
             do {
-                try await AudioService.shared.playNow(article)
+                await BriefeedAudioService.shared.playNow(article)
             } catch {
                 print("Failed to play article: \(error)")
             }
@@ -471,7 +471,7 @@ struct ArticleRowView: View {
         actionButtonsTimer?.invalidate()
         
         Task { @MainActor in
-            AudioService.shared.playAfterCurrent(article)
+            await BriefeedAudioService.shared.playAfterCurrent(article)
         }
     }
 }

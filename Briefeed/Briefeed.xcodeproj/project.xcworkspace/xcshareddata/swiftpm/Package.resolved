@@ -1,0 +1,15 @@
+{
+  "originHash" : "2527cb33c75ea4e24ab75901406bdf89145846a66bf470fdece0cf4a13e1cee2",
+  "pins" : [
+    {
+      "identity" : "swiftaudioex",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/doublesymmetry/SwiftAudioEx",
+      "state" : {
+        "branch" : "main",
+        "revision" : "42767039eb8e2a3caef81e39d4c66de26d6b9944"
+      }
+    }
+  ],
+  "version" : 3
+}

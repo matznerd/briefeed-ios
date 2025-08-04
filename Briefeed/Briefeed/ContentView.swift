@@ -10,8 +10,9 @@ import SwiftUI
 struct ContentView: View {
     @State private var selectedTab = 0
     @EnvironmentObject var userDefaultsManager: UserDefaultsManager
-    @ObservedObject private var audioService = AudioService.shared
+    @ObservedObject private var audioService = BriefeedAudioService.shared
     @ObservedObject private var statusService = ProcessingStatusService.shared
+    @StateObject private var featureFlags = FeatureFlagManager.shared
     
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -53,8 +54,13 @@ struct ContentView: View {
                 .accentColor(.briefeedRed)
                 
                 // Audio player always visible
-                MiniAudioPlayer()
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                if featureFlags.useNewAudioPlayerUI {
+                    MiniAudioPlayerV2()
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    MiniAudioPlayer()
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
             .onAppear {
                 // Apply theme settings when view appears

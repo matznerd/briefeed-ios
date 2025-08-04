@@ -13,6 +13,7 @@ struct SettingsView: View {
     @State private var showingDocumentPicker = false
     @State private var showingProcessingHistory = false
     @Environment(\.colorScheme) var colorScheme
+    @StateObject private var featureFlags = FeatureFlagManager.shared
     
     var body: some View {
         NavigationStack {
@@ -114,6 +115,57 @@ struct SettingsView: View {
                 } header: {
                     Label("Audio", systemImage: "speaker.wave.2")
                 }
+                
+                // MARK: - Developer Settings Section
+                #if DEBUG
+                Section {
+                    Toggle("Use New Audio System", isOn: $featureFlags.useNewAudioService)
+                    
+                    Toggle("Use New Audio Player UI", isOn: $featureFlags.useNewAudioPlayerUI)
+                    
+                    Toggle("Enable Playback History", isOn: $featureFlags.enablePlaybackHistory)
+                    
+                    Toggle("Enable Audio Caching", isOn: $featureFlags.enableAudioCaching)
+                    
+                    Toggle("Enable Sleep Timer", isOn: $featureFlags.enableSleepTimer)
+                    
+                    HStack {
+                        Text("Rollout Percentage")
+                        Spacer()
+                        Text("\(featureFlags.rolloutPercentage)%")
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    Slider(
+                        value: Binding(
+                            get: { Double(featureFlags.rolloutPercentage) },
+                            set: { featureFlags.rolloutPercentage = Int($0) }
+                        ),
+                        in: 0...100,
+                        step: 10
+                    )
+                    
+                    HStack(spacing: 12) {
+                        Button("Enable All") {
+                            featureFlags.enableAllNewFeatures()
+                        }
+                        .buttonStyle(.bordered)
+                        .foregroundColor(.green)
+                        
+                        Button("Disable All") {
+                            featureFlags.disableAllNewFeatures()
+                        }
+                        .buttonStyle(.bordered)
+                        .foregroundColor(.red)
+                    }
+                    .frame(maxWidth: .infinity)
+                } header: {
+                    Label("Developer Settings", systemImage: "hammer")
+                } footer: {
+                    Text("These settings control the new audio system migration. Changes take effect immediately.")
+                        .font(.caption)
+                }
+                #endif
                 
                 // MARK: - API Keys Section
                 Section {

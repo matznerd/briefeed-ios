@@ -20,7 +20,7 @@ extension BriefView {
 // MARK: - Filtered Brief View
 struct FilteredBriefView: View {
     @StateObject private var viewModel = BriefViewModel()
-    @StateObject private var audioService = AudioService.shared
+    @StateObject private var audioService = BriefeedAudioService.shared
     @StateObject private var queueService = QueueService.shared
     @State private var editMode = EditMode.inactive
     @State private var showingClearQueueAlert = false
@@ -285,7 +285,7 @@ struct FilteredBriefView: View {
 // MARK: - Enhanced Queue Row
 struct EnhancedQueueRow: View {
     let item: EnhancedQueueItem
-    @StateObject private var audioService = AudioService.shared
+    @StateObject private var audioService = BriefeedAudioService.shared
     
     private var isCurrentlyPlaying: Bool {
         // Check if this item is currently playing

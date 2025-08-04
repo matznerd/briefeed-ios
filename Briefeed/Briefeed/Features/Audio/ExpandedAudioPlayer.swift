@@ -10,7 +10,7 @@ import Combine
 import CoreData
 
 struct ExpandedAudioPlayer: View {
-    @ObservedObject private var audioService = AudioService.shared
+    @ObservedObject private var audioService = BriefeedAudioService.shared
     @ObservedObject private var queueService = QueueService.shared
     @Environment(\.dismiss) private var dismiss
     @State private var isDraggingSlider = false
@@ -407,7 +407,7 @@ struct ScaleButtonStyle: ButtonStyle {
 
 // MARK: - Audio Queue View
 struct AudioQueueView: View {
-    @ObservedObject private var audioService = AudioService.shared
+    @ObservedObject private var audioService = BriefeedAudioService.shared
     @ObservedObject private var queueService = QueueService.shared
     @Environment(\.dismiss) private var dismiss
     

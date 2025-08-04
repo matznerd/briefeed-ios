@@ -13,26 +13,6 @@ import CoreData
 import UIKit
 
 // MARK: - Audio Service Types
-enum AudioPlayerState: Equatable {
-    case idle
-    case loading
-    case playing
-    case paused
-    case stopped
-    case error(Error)
-    
-    static func == (lhs: AudioPlayerState, rhs: AudioPlayerState) -> Bool {
-        switch (lhs, rhs) {
-        case (.idle, .idle), (.loading, .loading), (.playing, .playing),
-             (.paused, .paused), (.stopped, .stopped):
-            return true
-        case (.error(_), .error(_)):
-            return true
-        default:
-            return false
-        }
-    }
-}
 
 enum AudioServiceError: LocalizedError {
     case speechSynthesizerUnavailable

@@ -70,4 +70,24 @@ struct CurrentPlaybackItem: PlayableItem {
         self.rssEpisode = episode
         self.source = episode.feed?.displayName ?? "RSS"
     }
+    
+    // Create from BriefeedAudioItem
+    init(from audioItem: BriefeedAudioItem) {
+        self.id = audioItem.content.id
+        self.title = audioItem.content.title
+        self.author = audioItem.content.author
+        self.audioUrl = audioItem.audioURL
+        self.isRSS = audioItem.content.contentType == .rssEpisode
+        
+        // Set specific properties based on content type
+        if audioItem.content.contentType == .article {
+            self.articleID = audioItem.content.id
+            self.rssEpisode = nil
+            self.source = audioItem.content.author ?? "Article"
+        } else {
+            self.articleID = nil
+            self.rssEpisode = nil // Could be set if we have access to the episode
+            self.source = audioItem.content.feedTitle ?? "RSS"
+        }
+    }
 }

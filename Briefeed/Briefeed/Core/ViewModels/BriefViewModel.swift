@@ -16,7 +16,7 @@ class BriefViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     
-    private let audioService = AudioService.shared
+    private let audioService = BriefeedAudioService.shared
     private let storageService: StorageServiceProtocol
     private let viewContext: NSManagedObjectContext
     private var cancellables = Set<AnyCancellable>()

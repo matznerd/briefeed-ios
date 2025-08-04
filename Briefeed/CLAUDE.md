@@ -2,6 +2,24 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 🚨 ACTIVE MIGRATION: Audio System Replacement
+
+**IMPORTANT**: We are actively migrating from the old broken AudioService to the new BriefeedAudioService. 
+
+### Quick Status
+- Old AudioService has AVAudioSession error -50 issues (FIXED but system needs replacement)
+- New BriefeedAudioService is 70% complete
+- Feature flags control which system is used
+- See `/docs/HANDOFF-AUDIO-MIGRATION.md` for full details
+
+### Key Files for Migration
+- `/docs/HANDOFF-AUDIO-MIGRATION.md` - START HERE
+- `/docs/MIGRATION-STATUS.md` - Current progress
+- `/docs/feature-parity-checklist.md` - What's missing
+- `Core/Services/Audio/BriefeedAudioService.swift` - New system
+
+---
+
 ## Project Overview
 
 Briefeed is an iOS app built with SwiftUI that provides an RSS feed reader with unique audio playback capabilities. The app allows users to manage RSS feeds, queue articles for reading, and listen to AI-generated summaries of articles using text-to-speech. 
@@ -39,17 +57,20 @@ The app follows a clean architecture pattern with clear separation of concerns:
 
 ### Key Services
 
+#### Audio Services (MIGRATION IN PROGRESS)
+- **OLD**: `AudioService.swift` + `AudioService+RSS.swift` - Being replaced
+- **NEW**: `BriefeedAudioService.swift` - Modern SwiftAudioEx-based service
+- **BRIDGE**: `AudioServiceAdapter.swift` - Temporary compatibility layer
+- **FEATURE FLAG**: `FeatureFlagManager.useNewAudioService` controls which is used
+
+#### Other Services
+
 1. **QueueService** (`Core/Services/QueueService.swift`): 
    - Manages persistent audio queue across app launches
    - Syncs with AudioService for playback
    - Handles background audio generation for queued articles
 
-2. **AudioService** (`Core/Services/AudioService.swift`):
-   - Handles audio playback using AVSpeechSynthesizer
-   - Manages playback state, speed, and queue
-   - Provides UI state updates via @Published properties
-
-3. **GeminiService** (`Core/Services/GeminiService.swift`):
+2. **GeminiService** (`Core/Services/GeminiService.swift`):
    - Integrates with Google's Gemini API for article summarization
    - Handles API communication and error handling
 
@@ -95,7 +116,7 @@ Features are organized by domain:
 
 ## Important Implementation Details
 
-1. **Audio Session**: Configured for spoken audio with mix-with-others capability
+1. **Audio Session**: Configured for spoken audio (being fixed in migration)
 2. **Theme Management**: Dark/light mode preference applied at window level
 3. **Queue Persistence**: Queue state saved to UserDefaults and restored on app launch
 4. **Background Processing**: Articles in queue have summaries generated in background
@@ -114,3 +135,16 @@ Features are organized by domain:
 ## Testing
 
 The project includes both unit tests (`BriefeedTests/`) and UI tests (`BriefeedUITests/`). Run tests through Xcode or using xcodebuild commands above.
+
+## Known Issues
+
+1. **Audio System Migration**: Currently replacing old AudioService with BriefeedAudioService
+2. **AVAudioSession Error -50**: Fixed in config but old system needs removal
+3. **Feature Flags**: Temporary - will be removed after migration
+
+## Important Instructions
+
+- Do what has been asked; nothing more, nothing less.
+- NEVER create files unless they're absolutely necessary for achieving your goal.
+- ALWAYS prefer editing an existing file to creating a new one.
+- NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
