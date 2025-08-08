@@ -101,7 +101,18 @@ struct ArticleSummaryView_Previews: PreviewProvider {
                         keyNumbers: "$2.5 billion investment, 1000x faster processing",
                         mostStrikingDetail: "The quantum computer can solve problems in minutes that would take classical computers thousands of years"
                     ),
-                    story: "TechCorp, in collaboration with MIT researchers, unveiled a revolutionary quantum computing system that promises to transform computational capabilities across industries. The breakthrough represents years of research and a massive financial investment in quantum technology.\n\nThe new quantum computer demonstrates unprecedented processing power, capable of solving complex optimization problems and simulating molecular interactions at speeds previously thought impossible. This advancement could accelerate drug discovery, improve financial modeling, and enhance artificial intelligence capabilities, marking a significant milestone in the quantum computing race.",
+                    story: """
+TechCorp, in collaboration with MIT researchers, unveiled a revolutionary quantum \
+computing system that promises to transform computational capabilities across industries. \
+The breakthrough represents years of research and a massive financial investment in \
+quantum technology.
+
+The new quantum computer demonstrates unprecedented processing power, capable of solving \
+complex optimization problems and simulating molecular interactions at speeds previously \
+thought impossible. This advancement could accelerate drug discovery, improve financial \
+modeling, and enhance artificial intelligence capabilities, marking a significant milestone \
+in the quantum computing race.
+""",
                     error: nil
                 )
             )

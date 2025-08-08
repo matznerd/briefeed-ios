@@ -2,18 +2,20 @@
 //  MiniAudioPlayerV2.swift
 //  Briefeed
 //
-//  Created by Briefeed Team on 1/8/25.
+//  Test version using AudioPlayerViewModel to fix UI freeze
 //
 
 import SwiftUI
 import Combine
 
-/// Updated mini audio player using the new BriefeedAudioService
 struct MiniAudioPlayerV2: View {
-    @StateObject private var audioService = AudioServiceAdapter()
-    @ObservedObject private var stateManager = ArticleStateManager.shared
+    // CRITICAL CHANGE: Using ViewModel instead of service directly
+    @StateObject private var viewModel = AudioPlayerViewModel()
+    @StateObject private var queueService = QueueServiceV2.shared
+    @StateObject private var stateManager = ArticleStateManager.shared
     @EnvironmentObject var userDefaultsManager: UserDefaultsManager
     @State private var showExpandedPlayer = false
+    @State private var progress: Float = 0
     
     private let playerHeight: CGFloat = 72
     private let progressBarHeight: CGFloat = 3
@@ -31,8 +33,7 @@ struct MiniAudioPlayerV2: View {
                     // Progress
                     Rectangle()
                         .fill(Color.briefeedRed)
-                        .frame(width: geometry.size.width * CGFloat(audioService.progress.value), height: progressBarHeight)
-                        .animation(.linear(duration: 0.1), value: audioService.progress.value)
+                        .frame(width: geometry.size.width * CGFloat(progress), height: progressBarHeight)
                 }
             }
             .frame(height: progressBarHeight)
@@ -41,129 +42,120 @@ struct MiniAudioPlayerV2: View {
             HStack(spacing: 0) {
                 // Article info (left side)
                 VStack(alignment: .leading, spacing: 2) {
-                    if let playbackItem = audioService.currentPlaybackItem {
-                        Text(playbackItem.title)
+                    if viewModel.hasCurrentItem {
+                        Text(viewModel.currentTitle)
                             .font(.system(size: 14, weight: .medium))
                             .lineLimit(1)
                             .foregroundColor(.primary)
                         
-                        HStack(spacing: 4) {
-                            if playbackItem.isRSS {
-                                Image(systemName: "dot.radiowaves.left.and.right")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
-                            }
-                            
-                            Text(playbackItem.author ?? playbackItem.feedTitle ?? "Unknown")
-                                .font(.system(size: 12))
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                            
-                            if !audioService.queue.isEmpty {
-                                Text("• \(audioService.queue.count) in queue")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
+                        Text(viewModel.currentArtist)
+                            .font(.system(size: 12))
+                            .lineLimit(1)
+                            .foregroundColor(.secondary)
                     } else {
-                        Text("No audio playing")
-                            .font(.system(size: 14))
+                        Text("Not Playing")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.secondary)
+                        
+                        Text("Queue: \(queueService.queue.count) items")
+                            .font(.system(size: 12))
                             .foregroundColor(.secondary)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, 16)
                 
-                // Loading indicator
-                if audioService.isLoading || audioService.isGeneratingAudio {
-                    HStack(spacing: 8) {
-                        if audioService.isGeneratingAudio {
-                            Text("Generating...")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        ProgressView()
-                            .scaleEffect(0.8)
-                            .frame(width: 20, height: 20)
-                    }
-                    .padding(.horizontal, 8)
-                }
-                
-                // Control buttons (right side)
-                HStack(spacing: 16) {
-                    // Skip backward button
+                // Playback controls (right side)
+                HStack(spacing: 20) {
+                    // Previous button
                     Button(action: {
-                        audioService.skipBackward()
+                        viewModel.previous()
                     }) {
-                        Image(systemName: "gobackward.15")
+                        Image(systemName: "backward.fill")
                             .font(.system(size: 20))
-                            .foregroundColor(.primary)
+                            .foregroundColor(viewModel.hasPrevious ? .primary : .secondary.opacity(0.5))
                     }
-                    .disabled(audioService.currentPlaybackItem == nil || audioService.isLoading)
-                    .opacity(audioService.currentPlaybackItem == nil ? 0.3 : 1.0)
+                    .disabled(!viewModel.hasPrevious)
                     
                     // Play/Pause button
                     Button(action: {
-                        audioService.togglePlayPause()
+                        viewModel.togglePlayPause()
                     }) {
-                        Image(systemName: audioService.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 24))
-                            .foregroundColor(.primary)
-                            .frame(width: 44, height: 44)
-                            .background(
-                                Circle()
-                                    .fill(Color.primary.opacity(0.1))
-                            )
+                        ZStack {
+                            if viewModel.isLoading {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            } else {
+                                Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
+                                    .font(.system(size: 24))
+                                    .foregroundColor(.primary)
+                            }
+                        }
+                        .frame(width: 44, height: 44)
                     }
-                    .disabled(audioService.currentPlaybackItem == nil || audioService.isLoading)
+                    .disabled(!viewModel.hasCurrentItem && queueService.queue.isEmpty)
                     
-                    // Skip forward button
+                    // Next button
                     Button(action: {
-                        audioService.skipForward()
+                        viewModel.next()
                     }) {
-                        Image(systemName: "goforward.15")
+                        Image(systemName: "forward.fill")
                             .font(.system(size: 20))
-                            .foregroundColor(.primary)
+                            .foregroundColor(viewModel.hasNext ? .primary : .secondary.opacity(0.5))
                     }
-                    .disabled(audioService.currentPlaybackItem == nil || audioService.isLoading)
-                    .opacity(audioService.currentPlaybackItem == nil ? 0.3 : 1.0)
+                    .disabled(!viewModel.hasNext)
                 }
-                .padding(.trailing, 16)
+                .padding(.horizontal, 16)
             }
-            .frame(height: playerHeight - progressBarHeight)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(UIColor.secondarySystemBackground))
-            )
+            .frame(height: playerHeight)
+            .background(Color(UIColor.systemBackground))
             .onTapGesture {
-                if audioService.currentPlaybackItem != nil {
+                if viewModel.hasCurrentItem {
                     showExpandedPlayer = true
                 }
             }
         }
-        .frame(height: playerHeight)
-        .background(
-            Color(UIColor.systemBackground)
-                .shadow(color: Color.black.opacity(0.1), radius: 4, y: -2)
+        .background(Color(UIColor.systemBackground))
+        .overlay(
+            Rectangle()
+                .fill(Color.primary.opacity(0.1))
+                .frame(height: 0.5),
+            alignment: .top
         )
         .sheet(isPresented: $showExpandedPlayer) {
-            ExpandedAudioPlayerV2()
-                .environmentObject(userDefaultsManager)
+            ExpandedAudioPlayer()
         }
-        .accessibility(label: Text("Audio Player"))
-        .accessibility(hint: Text("Tap to expand player"))
+        // CRITICAL: Connect to service AFTER view is constructed
+        .task {
+            print("🎵 MiniAudioPlayerV2: Connecting to audio service...")
+            await viewModel.connectToService()
+            print("✅ MiniAudioPlayerV2: Connected successfully")
+        }
+        .onDisappear {
+            viewModel.disconnect()
+        }
+        .onChange(of: viewModel.currentTime) { _ in
+            updateProgress()
+        }
+        .onAppear {
+            print("🎵 MiniAudioPlayerV2: View appeared")
+            // Auto-play disabled for testing
+        }
+    }
+    
+    private func updateProgress() {
+        if viewModel.duration > 0 {
+            progress = Float(viewModel.currentTime / viewModel.duration)
+        } else {
+            progress = 0
+        }
     }
 }
-
 
 // MARK: - Preview
 struct MiniAudioPlayerV2_Previews: PreviewProvider {
     static var previews: some View {
-        VStack {
-            Spacer()
-            MiniAudioPlayerV2()
-                .environmentObject(UserDefaultsManager.shared)
-        }
+        MiniAudioPlayerV2()
+            .environmentObject(UserDefaultsManager.shared)
     }
 }

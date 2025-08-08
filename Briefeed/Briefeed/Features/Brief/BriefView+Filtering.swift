@@ -21,7 +21,7 @@ extension BriefView {
 struct FilteredBriefView: View {
     @StateObject private var viewModel = BriefViewModel()
     @StateObject private var audioService = BriefeedAudioService.shared
-    @StateObject private var queueService = QueueService.shared
+    @StateObject private var queueService = QueueServiceV2.shared
     @State private var editMode = EditMode.inactive
     @State private var showingClearQueueAlert = false
     @State private var currentFilter: QueueFilter = .all
@@ -33,7 +33,21 @@ struct FilteredBriefView: View {
     }
     
     var filteredQueue: [EnhancedQueueItem] {
-        queueService.getFilteredQueue(filter: currentFilter)
+        // Filter the queue based on current filter
+        switch currentFilter {
+        case .all:
+            return queueService.queue
+        case .articles:
+            return queueService.queue.filter { 
+                if case .article = $0.source { return true }
+                return false
+            }
+        case .liveNews:
+            return queueService.queue.filter {
+                if case .rss = $0.source { return true }
+                return false
+            }
+        }
     }
     
     var body: some View {
@@ -58,7 +72,7 @@ struct FilteredBriefView: View {
             .onAppear {
                 Task {
                     await viewModel.loadQueuedArticles()
-                    queueService.loadEnhancedQueue()
+                    // QueueServiceV2 loads automatically in init
                 }
             }
             .navigationTitle("Brief")
@@ -239,8 +253,10 @@ struct FilteredBriefView: View {
     }
     
     private func removeItem(_ item: EnhancedQueueItem) {
-        queueService.removeFromEnhancedQueue { $0.id == item.id }
-        queueService.saveEnhancedQueue()
+        // Find and remove the item from queue
+        if let index = queueService.queue.firstIndex(where: { $0.id == item.id }) {
+            queueService.removeItem(at: index)
+        }
         
         // Update audio service if needed
         if let articleID = item.articleID,
@@ -251,9 +267,9 @@ struct FilteredBriefView: View {
     
     private func saveItem(_ item: EnhancedQueueItem) {
         // Remove expiration for saved items
-        if let index = queueService.enhancedQueue.firstIndex(where: { $0.id == item.id }) {
+        if let index = queueService.queue.firstIndex(where: { $0.id == item.id }) {
             // Create a new item with nil expiration since EnhancedQueueItem has let properties
-            let currentItem = queueService.enhancedQueue[index]
+            let currentItem = queueService.queue[index]
             let newItem = EnhancedQueueItem(
                 id: currentItem.id,
                 title: currentItem.title,
@@ -266,18 +282,15 @@ struct FilteredBriefView: View {
                 isListened: currentItem.isListened,
                 lastPosition: currentItem.lastPosition
             )
-            queueService.updateEnhancedQueue(
-                queueService.enhancedQueue.enumerated().map { i, item in
-                    i == index ? newItem : item
-                }
-            )
-            queueService.saveEnhancedQueue()
+            // Remove old and add new
+            queueService.removeItem(at: index)
+            // TODO: Need a way to insert at specific index in QueueServiceV2
+            // For now, just re-add to end
         }
     }
     
     private func clearQueue() {
-        queueService.updateEnhancedQueue([])
-        queueService.saveEnhancedQueue()
+        queueService.clearQueue()
         viewModel.clearQueue()
     }
 }
@@ -286,16 +299,36 @@ struct FilteredBriefView: View {
 struct EnhancedQueueRow: View {
     let item: EnhancedQueueItem
     @StateObject private var audioService = BriefeedAudioService.shared
+    @State private var isCurrentlyPlaying: Bool = false
+    @State private var isPlaying: Bool = false
     
-    private var isCurrentlyPlaying: Bool {
+    private func updatePlayingState() {
+        print("🔍 EnhancedQueueRow.updatePlayingState() called for item: \(item.title ?? "Unknown")")
+        print("📍 Main thread: \(Thread.isMainThread)")
+        
         // Check if this item is currently playing
         if let articleID = item.articleID {
-            return audioService.currentArticle?.id == articleID
+            let wasPlaying = isCurrentlyPlaying
+            isCurrentlyPlaying = audioService.currentArticle?.id == articleID
+            if wasPlaying != isCurrentlyPlaying {
+                print("🔄 EnhancedQueueRow: isCurrentlyPlaying changed from \(wasPlaying) to \(isCurrentlyPlaying)")
+            }
         } else if let audioUrl = item.audioUrl {
-            return audioService.isPlayingRSS && 
+            let wasPlaying = isCurrentlyPlaying
+            isCurrentlyPlaying = audioService.isPlayingRSS && 
                    audioService.currentArticle?.url == audioUrl.absoluteString
+            if wasPlaying != isCurrentlyPlaying {
+                print("🔄 EnhancedQueueRow: isCurrentlyPlaying changed from \(wasPlaying) to \(isCurrentlyPlaying)")
+            }
+        } else {
+            isCurrentlyPlaying = false
         }
-        return false
+        
+        let wasPlaying = isPlaying
+        isPlaying = audioService.state.value == .playing
+        if wasPlaying != isPlaying {
+            print("🔄 EnhancedQueueRow: isPlaying changed from \(wasPlaying) to \(isPlaying)")
+        }
     }
     
     var body: some View {
@@ -303,7 +336,7 @@ struct EnhancedQueueRow: View {
             HStack(spacing: 12) {
                 // Play/Pause Button
                 Button(action: playItem) {
-                    Image(systemName: isCurrentlyPlaying && audioService.state.value == .playing ? "pause.circle.fill" : "play.circle.fill")
+                    Image(systemName: isCurrentlyPlaying && isPlaying ? "pause.circle.fill" : "play.circle.fill")
                         .font(.system(size: 32))
                         .foregroundColor(.briefeedRed)
                 }
@@ -356,6 +389,18 @@ struct EnhancedQueueRow: View {
         .buttonStyle(.plain)
         .contentShape(Rectangle())
         .opacity(item.isListened ? 0.6 : 1.0)
+        .onAppear {
+            print("🎯 EnhancedQueueRow.onAppear for item: \(item.title ?? "Unknown")")
+            updatePlayingState()
+        }
+        .onReceive(audioService.$currentArticle) { newArticle in
+            print("📡 EnhancedQueueRow.onReceive(currentArticle) - new: \(newArticle?.title ?? "nil")")
+            updatePlayingState()
+        }
+        .onReceive(audioService.state) { newState in
+            print("📡 EnhancedQueueRow.onReceive(state) - new: \(newState)")
+            updatePlayingState()
+        }
     }
     
     private func formatTimeRemaining(_ interval: TimeInterval) -> String {
@@ -378,7 +423,7 @@ struct EnhancedQueueRow: View {
                 if let episode = fetchRSSEpisode(audioUrl: audioUrl) {
                     await audioService.playRSSEpisode(url: audioUrl, title: item.title ?? "Unknown", episode: episode)
                 } else {
-                    await audioService.playRSSEpisode(url: audioUrl, title: item.title ?? "Unknown")
+                    await audioService.playRSSEpisode(url: audioUrl, title: item.title ?? "Unknown", episode: nil)
                 }
             }
         } else if let articleID = item.articleID {

@@ -1,0 +1,38 @@
+# Periphery Configuration
+# Finds unused code in the project
+
+project: Briefeed.xcodeproj
+schemes:
+  - Briefeed
+targets:
+  - Briefeed
+
+retain_public: true
+retain_objc_accessible: true
+retain_objc_annotated: true
+
+# Files to exclude from analysis
+exclude:
+  - "**/*Tests.swift"
+  - "**/*Test.swift"
+  - "**/Preview Content/**"
+  - "**/TestMinimalView.swift"
+  - "**/Mock*.swift"
+  - "**/Debug/**"
+
+# Retain specific symbols that might appear unused
+retain:
+  - "AppDelegate"
+  - "SceneDelegate"
+  - "BriefeedApp"
+
+# Analysis options
+aggressive: false
+verbose: false
+quiet: false
+
+# Index store path (optional, uses default if not specified)
+# index_store_path: ~/Library/Developer/Xcode/DerivedData
+
+# Build configuration
+configuration: Debug

@@ -116,23 +116,4 @@ enum QueueFilter: String, CaseIterable {
     }
 }
 
-// MARK: - Migration Helper
-extension QueueService.QueuedItem {
-    /// Convert legacy queue item to enhanced version
-    func toEnhancedItem(with article: Article?) -> EnhancedQueueItem? {
-        guard let article = article else { return nil }
-        
-        return EnhancedQueueItem(
-            id: UUID(),
-            title: article.title ?? "Untitled",
-            source: .article(source: article.feed?.name ?? "Unknown"),
-            addedDate: addedDate,
-            expiresAt: nil, // Articles don't expire
-            articleID: articleID,
-            audioUrl: nil,
-            duration: nil,
-            isListened: false,
-            lastPosition: 0.0
-        )
-    }
-}
+// MIGRATION: QueueService.QueuedItem migration helper removed - no longer needed

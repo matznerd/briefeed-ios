@@ -30,7 +30,10 @@ struct ArticleReaderView: UIViewRepresentable {
     
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
-        configuration.preferences.javaScriptEnabled = true
+        // Use new API for JavaScript configuration
+        let preferences = WKWebpagePreferences()
+        preferences.allowsContentJavaScript = true
+        configuration.defaultWebpagePreferences = preferences
         
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -62,138 +65,69 @@ struct ArticleReaderView: UIViewRepresentable {
     }
     
     private func loadHTMLContent(_ webView: WKWebView, content: String) {
-        // Check if content is already HTML or needs to be converted from markdown
+        let processedContent = prepareContent(content)
+        let html = buildHTML(with: processedContent)
+        webView.loadHTMLString(html, baseURL: nil)
+    }
+    
+    private func prepareContent(_ content: String) -> String {
         let isHTML = content.contains("<") && content.contains(">")
-        let processedContent: String
-        
-        if isHTML {
-            processedContent = content
-        } else {
-            // Convert markdown to HTML (basic conversion)
-            processedContent = convertMarkdownToHTML(content)
-        }
-        
-        let html = """
+        return isHTML ? content : convertMarkdownToHTML(content)
+    }
+    
+    private func buildHTML(with content: String) -> String {
+        """
         <!DOCTYPE html>
         <html>
         <head>
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
-            <style>
-                :root {
-                    color-scheme: light dark;
-                }
-                
-                body {
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-                    font-size: \(fontSize)px;
-                    line-height: 1.6;
-                    color: \(colorScheme == .dark ? "#FFFFFF" : "#000000");
-                    background-color: \(colorScheme == .dark ? "#000000" : "#FFFFFF");
-                    padding: 16px;
-                    margin: 0;
-                    word-wrap: break-word;
-                    -webkit-text-size-adjust: 100%;
-                }
-                
-                p {
-                    margin: 1em 0;
-                }
-                
-                img {
-                    max-width: 100%;
-                    height: auto;
-                    display: block;
-                    margin: 1em auto;
-                    border-radius: 8px;
-                }
-                
-                a {
-                    color: \(colorScheme == .dark ? "#FF6B6B" : "#FF0000");
-                    text-decoration: none;
-                }
-                
-                a:hover {
-                    text-decoration: underline;
-                }
-                
-                pre {
-                    background-color: \(colorScheme == .dark ? "#1C1C1E" : "#F2F2F7");
-                    padding: 12px;
-                    border-radius: 8px;
-                    overflow-x: auto;
-                    white-space: pre-wrap;
-                }
-                
-                code {
-                    background-color: \(colorScheme == .dark ? "#1C1C1E" : "#F2F2F7");
-                    padding: 2px 4px;
-                    border-radius: 4px;
-                    font-family: 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;
-                    font-size: 0.9em;
-                }
-                
-                blockquote {
-                    border-left: 4px solid \(colorScheme == .dark ? "#FF6B6B" : "#FF0000");
-                    padding-left: 16px;
-                    margin-left: 0;
-                    color: \(colorScheme == .dark ? "#C7C7CC" : "#3C3C43");
-                }
-                
-                h1, h2, h3, h4, h5, h6 {
-                    margin-top: 1.5em;
-                    margin-bottom: 0.5em;
-                    font-weight: 600;
-                }
-                
-                hr {
-                    border: none;
-                    border-top: 1px solid \(colorScheme == .dark ? "#38383A" : "#C6C6C8");
-                    margin: 2em 0;
-                }
-                
-                ul, ol {
-                    padding-left: 20px;
-                }
-                
-                li {
-                    margin: 0.5em 0;
-                }
-                
-                /* Table styles */
-                table {
-                    border-collapse: collapse;
-                    width: 100%;
-                    margin: 1em 0;
-                }
-                
-                th, td {
-                    border: 1px solid \(colorScheme == .dark ? "#38383A" : "#C6C6C8");
-                    padding: 8px;
-                    text-align: left;
-                }
-                
-                th {
-                    background-color: \(colorScheme == .dark ? "#1C1C1E" : "#F2F2F7");
-                    font-weight: 600;
-                }
-                
-                /* Reader mode specific styles */
-                \(isReaderMode ? """
-                body {
-                    max-width: 700px;
-                    margin: 0 auto;
-                    padding: 20px;
-                }
-                """ : "")
-            </style>
+            <style>\(generateCSS())</style>
         </head>
         <body>
-            \(processedContent)
+            \(content)
         </body>
         </html>
         """
+    }
+    
+    private func generateCSS() -> String {
+        let isDark = colorScheme == .dark
+        let textColor = isDark ? "#FFFFFF" : "#000000"
+        let bgColor = isDark ? "#000000" : "#FFFFFF"
+        let linkColor = isDark ? "#FF6B6B" : "#FF0000"
+        let codeColor = isDark ? "#1C1C1E" : "#F2F2F7"
+        let quoteColor = isDark ? "#C7C7CC" : "#3C3C43"
+        let borderColor = isDark ? "#38383A" : "#C6C6C8"
         
-        webView.loadHTMLString(html, baseURL: nil)
+        return """
+            :root { color-scheme: light dark; }
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                font-size: \(fontSize)px;
+                line-height: 1.6;
+                color: \(textColor);
+                background-color: \(bgColor);
+                padding: 16px;
+                margin: 0;
+                word-wrap: break-word;
+                -webkit-text-size-adjust: 100%;
+            }
+            p { margin: 1em 0; }
+            img { max-width: 100%; height: auto; display: block; margin: 1em auto; border-radius: 8px; }
+            a { color: \(linkColor); text-decoration: none; }
+            a:hover { text-decoration: underline; }
+            pre { background-color: \(codeColor); padding: 12px; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; }
+            code { background-color: \(codeColor); padding: 2px 4px; border-radius: 4px; font-family: 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 0.9em; }
+            blockquote { border-left: 4px solid \(linkColor); padding-left: 16px; margin-left: 0; color: \(quoteColor); }
+            h1, h2, h3, h4, h5, h6 { margin-top: 1.5em; margin-bottom: 0.5em; font-weight: 600; }
+            hr { border: none; border-top: 1px solid \(borderColor); margin: 2em 0; }
+            ul, ol { padding-left: 20px; }
+            li { margin: 0.5em 0; }
+            table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+            th, td { border: 1px solid \(borderColor); padding: 8px; text-align: left; }
+            th { background-color: \(codeColor); font-weight: 600; }
+            \(isReaderMode ? "body { max-width: 700px; margin: 0 auto; padding: 20px; }" : "")
+        """
     }
     
     private func convertMarkdownToHTML(_ markdown: String) -> String {

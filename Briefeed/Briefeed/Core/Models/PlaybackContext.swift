@@ -62,7 +62,7 @@ struct CurrentPlaybackItem: PlayableItem {
     // Create from RSS Episode
     init(from episode: RSSEpisode) {
         self.id = UUID() // Generate new ID for playback session
-        self.title = episode.title ?? "Untitled Episode"
+        self.title = episode.title
         self.author = episode.feed?.displayName
         self.audioUrl = URL(string: episode.audioUrl)
         self.isRSS = true

@@ -14,6 +14,8 @@ struct BriefView: View {
     @StateObject private var stateManager = ArticleStateManager.shared
     @State private var editMode = EditMode.inactive
     @State private var showingClearQueueAlert = false
+    @State private var currentArticleID: UUID?
+    @State private var queueIndex: Int = -1
     
     var body: some View {
         NavigationStack {
@@ -31,6 +33,13 @@ struct BriefView: View {
                 Task {
                     await viewModel.loadQueuedArticles()
                 }
+                updatePlayingState()
+            }
+            .onReceive(audioService.$currentArticle) { _ in
+                updatePlayingState()
+            }
+            .onReceive(audioService.$queueIndex) { _ in
+                updatePlayingState()
             }
             .navigationTitle("Brief")
             .navigationBarTitleDisplayMode(.large)
@@ -108,8 +117,8 @@ struct BriefView: View {
     @ViewBuilder
     private func queueRowForArticle(_ article: Article, at index: Int) -> some View {
         let queuePosition = viewModel.queuedArticles.count - index
-        let isPlaying = audioService.currentArticle?.id == article.id
-        let isNext = audioService.queueIndex > 0 && index == audioService.queueIndex - 1
+        let isPlaying = currentArticleID == article.id
+        let isNext = queueIndex > 0 && index == queueIndex - 1
         
         QueuedArticleRow(
             article: article,
@@ -177,6 +186,11 @@ struct BriefView: View {
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.briefeedBackground)
+    }
+    
+    private func updatePlayingState() {
+        currentArticleID = audioService.currentArticle?.id
+        queueIndex = audioService.queueIndex
     }
 }
 

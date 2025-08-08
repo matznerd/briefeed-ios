@@ -25,10 +25,26 @@ enum ProcessingStage {
 class ProcessingStatusService: ObservableObject {
     static let shared = ProcessingStatusService()
     
-    @MainActor @Published var currentStatus: ProcessingStage = .idle
+    @MainActor @Published var currentStatus: ProcessingStage = .idle {
+        didSet {
+            perfLog.logPublisher("ProcessingStatusService.currentStatus", value: "\(currentStatus)")
+        }
+    }
     @MainActor @Published var statusHistory: [StatusEntry] = []
-    @MainActor @Published var isProcessing: Bool = false
-    @MainActor @Published var showStatusBanner: Bool = false
+    @MainActor @Published var isProcessing: Bool = false {
+        didSet {
+            if oldValue != isProcessing {
+                perfLog.logPublisher("ProcessingStatusService.isProcessing", value: "\(isProcessing)")
+            }
+        }
+    }
+    @MainActor @Published var showStatusBanner: Bool = false {
+        didSet {
+            if oldValue != showStatusBanner {
+                perfLog.logPublisher("ProcessingStatusService.showStatusBanner", value: "\(showStatusBanner)")
+            }
+        }
+    }
     
     struct StatusEntry {
         let id = UUID()
@@ -38,23 +54,30 @@ class ProcessingStatusService: ObservableObject {
         let isError: Bool
     }
     
-    private init() {}
+    private init() {
+        perfLog.logService("ProcessingStatusService", method: "init", detail: "Singleton initialized")
+    }
     
     // MARK: - Status Updates
     
     @MainActor func startProcessing(articleTitle: String) {
+        perfLog.startOperation("ProcessingStatusService.startProcessing")
+        perfLog.logService("ProcessingStatusService", method: "startProcessing", detail: "Article: \(articleTitle.prefix(30))")
         isProcessing = true
         showStatusBanner = true
         addStatus(.idle, message: "🎯 Starting to process: \"\(articleTitle.prefix(50))...\"")
+        perfLog.endOperation("ProcessingStatusService.startProcessing")
     }
     
     @MainActor func updateFetchingContent(url: String) {
+        perfLog.logService("ProcessingStatusService", method: "updateFetchingContent", detail: "URL: \(url)")
         currentStatus = .fetchingContent(url: url)
         let domain = URL(string: url)?.host ?? "website"
         addStatus(.fetchingContent(url: url), message: "🌐 Fetching article from \(domain)...")
     }
     
     @MainActor func updateContentFetched(wordCount: Int, url: String) {
+        perfLog.logService("ProcessingStatusService", method: "updateContentFetched", detail: "Words: \(wordCount)")
         currentStatus = .contentFetched(wordCount: wordCount)
         let domain = URL(string: url)?.host ?? "website"
         addStatus(.contentFetched(wordCount: wordCount), 
@@ -62,28 +85,34 @@ class ProcessingStatusService: ObservableObject {
     }
     
     @MainActor func updateGeneratingSummary() {
+        perfLog.logService("ProcessingStatusService", method: "updateGeneratingSummary")
         currentStatus = .generatingSummary
         addStatus(.generatingSummary, message: "🤖 Sending to Gemini AI for summarization...")
     }
     
     @MainActor func updateSummaryGenerated(summaryLength: Int) {
+        perfLog.logService("ProcessingStatusService", method: "updateSummaryGenerated", detail: "Length: \(summaryLength)")
         currentStatus = .summaryGenerated
         addStatus(.summaryGenerated, 
                  message: "✅ Summary created (\(summaryLength) characters)")
     }
     
     @MainActor func updateGeneratingAudio(voiceName: String? = nil) {
+        perfLog.logService("ProcessingStatusService", method: "updateGeneratingAudio", detail: voiceName ?? "default voice")
         currentStatus = .generatingAudio
         let voiceInfo = voiceName != nil ? " with voice: \(voiceName!)" : ""
         addStatus(.generatingAudio, message: "🎙️ Generating audio\(voiceInfo)...")
     }
     
     @MainActor func updateAudioReady() {
+        perfLog.logService("ProcessingStatusService", method: "updateAudioReady")
         currentStatus = .audioReady
         addStatus(.audioReady, message: "✅ Audio ready to play!")
     }
     
     @MainActor func updateError(_ error: String) {
+        perfLog.logService("ProcessingStatusService", method: "updateError", detail: error)
+        perfLog.log("Processing error: \(error)", category: .error)
         currentStatus = .error(error)
         addStatus(.error(error), message: "❌ Error: \(error)", isError: true)
         
@@ -94,6 +123,8 @@ class ProcessingStatusService: ObservableObject {
     }
     
     @MainActor func completeProcessing() {
+        perfLog.startOperation("ProcessingStatusService.completeProcessing")
+        perfLog.logService("ProcessingStatusService", method: "completeProcessing")
         currentStatus = .completed
         addStatus(.completed, message: "✨ Processing complete!")
         isProcessing = false
@@ -102,9 +133,11 @@ class ProcessingStatusService: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             self?.hideStatusIfNotProcessing()
         }
+        perfLog.endOperation("ProcessingStatusService.completeProcessing")
     }
     
     @MainActor func cancelProcessing() {
+        perfLog.logService("ProcessingStatusService", method: "cancelProcessing")
         isProcessing = false
         showStatusBanner = false
         currentStatus = .idle
@@ -131,6 +164,9 @@ class ProcessingStatusService: ObservableObject {
         // Also log to console for debugging
         let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
         print("[\(timestamp)] \(message)")
+        
+        // Log to performance logger as well
+        perfLog.log("Status: \(message)", category: isError ? .error : .service)
     }
     
     @MainActor private func hideStatusIfNotProcessing() {

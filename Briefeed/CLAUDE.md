@@ -2,21 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 🚨 ACTIVE MIGRATION: Audio System Replacement
+## ✅ Audio System Migration Complete
 
-**IMPORTANT**: We are actively migrating from the old broken AudioService to the new BriefeedAudioService. 
+The audio system migration from the old AudioService to BriefeedAudioService has been successfully completed.
 
-### Quick Status
-- Old AudioService has AVAudioSession error -50 issues (FIXED but system needs replacement)
-- New BriefeedAudioService is 70% complete
-- Feature flags control which system is used
-- See `/docs/HANDOFF-AUDIO-MIGRATION.md` for full details
-
-### Key Files for Migration
-- `/docs/HANDOFF-AUDIO-MIGRATION.md` - START HERE
-- `/docs/MIGRATION-STATUS.md` - Current progress
-- `/docs/feature-parity-checklist.md` - What's missing
-- `Core/Services/Audio/BriefeedAudioService.swift` - New system
+### Migration Summary
+- ✅ Old AudioService removed (AVAudioSession error -50 fixed)
+- ✅ New BriefeedAudioService fully integrated
+- ✅ QueueServiceV2 managing queue operations
+- ✅ All feature flags removed
+- ✅ Build succeeds with new architecture
 
 ---
 
@@ -57,18 +52,20 @@ The app follows a clean architecture pattern with clear separation of concerns:
 
 ### Key Services
 
-#### Audio Services (MIGRATION IN PROGRESS)
-- **OLD**: `AudioService.swift` + `AudioService+RSS.swift` - Being replaced
-- **NEW**: `BriefeedAudioService.swift` - Modern SwiftAudioEx-based service
-- **BRIDGE**: `AudioServiceAdapter.swift` - Temporary compatibility layer
-- **FEATURE FLAG**: `FeatureFlagManager.useNewAudioService` controls which is used
+#### Audio Services
+- **BriefeedAudioService** (`Core/Services/Audio/BriefeedAudioService.swift`):
+  - Modern SwiftAudioEx-based audio service
+  - Handles article TTS and RSS episode playback
+  - Manages playback state and controls
+  - Supports background audio with remote commands
 
 #### Other Services
 
-1. **QueueService** (`Core/Services/QueueService.swift`): 
+1. **QueueServiceV2** (`Core/Services/QueueServiceV2.swift`): 
    - Manages persistent audio queue across app launches
-   - Syncs with AudioService for playback
+   - Syncs with BriefeedAudioService for playback
    - Handles background audio generation for queued articles
+   - Unified queue management for articles and RSS episodes
 
 2. **GeminiService** (`Core/Services/GeminiService.swift`):
    - Integrates with Google's Gemini API for article summarization
@@ -138,9 +135,7 @@ The project includes both unit tests (`BriefeedTests/`) and UI tests (`BriefeedU
 
 ## Known Issues
 
-1. **Audio System Migration**: Currently replacing old AudioService with BriefeedAudioService
-2. **AVAudioSession Error -50**: Fixed in config but old system needs removal
-3. **Feature Flags**: Temporary - will be removed after migration
+None currently. The audio system migration has been completed successfully.
 
 ## Important Instructions
 

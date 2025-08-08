@@ -419,7 +419,7 @@ class GeminiService: GeminiServiceProtocol {
               "keyNumbers": "Any significant numbers, statistics, or monetary amounts, or 'N/A'.",
               "mostStrikingDetail": "The most interesting or surprising single fact from the article."
             },
-            "theStory": "Your two-paragraph summary here. The first paragraph should cover the main event and immediate context. The second paragraph should provide background or broader implications if available in the text."
+            "theStory": "Your two-paragraph summary. First paragraph: main event and context. Second: background or implications."
           }
         - If the provided "Article Content" is insufficient, unclear, not a news article, or if you cannot reasonably extract the required fields:
           Respond ONLY with this exact JSON object:
@@ -460,7 +460,7 @@ class GeminiService: GeminiServiceProtocol {
               "keyNumbers": "Any significant numbers, statistics, or monetary amounts, or 'N/A'.",
               "mostStrikingDetail": "The most interesting or surprising single fact from the article."
             },
-            "theStory": "Your two-paragraph summary here. The first paragraph should cover the main event and immediate context. The second paragraph should provide background or broader implications if available in the text."
+            "theStory": "Your two-paragraph summary. First paragraph: main event and context. Second: background or implications."
           }
         - If the provided "Article Content" is insufficient, unclear, not a news article, or if you cannot reasonably extract the required fields:
           Respond ONLY with this exact JSON object:

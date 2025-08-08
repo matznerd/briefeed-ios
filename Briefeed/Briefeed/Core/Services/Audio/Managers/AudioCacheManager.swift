@@ -37,13 +37,30 @@ final class AudioCacheManager {
     private var cacheMetadata: CacheMetadata = CacheMetadata()
     private let metadataQueue = DispatchQueue(label: "com.briefeed.audiocache.metadata")
     
+    private var isInitialized = false
+    
     private init() {
-        setupDirectories()
-        loadMetadata()
-        performInitialCleanup()
+        // Defer heavy operations to background
+        metadataQueue.async { [weak self] in
+            self?.setupDirectories()
+            self?.loadMetadata()
+            self?.performInitialCleanup()
+            self?.isInitialized = true
+        }
     }
     
     // MARK: - Setup
+    
+    private func ensureInitialized() {
+        guard !isInitialized else { return }
+        metadataQueue.sync {
+            guard !isInitialized else { return }
+            setupDirectories()
+            loadMetadata()
+            performInitialCleanup()
+            isInitialized = true
+        }
+    }
     
     private func setupDirectories() {
         do {

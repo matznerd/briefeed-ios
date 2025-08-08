@@ -12,7 +12,6 @@ import AVFoundation
 struct BriefeedApp: App {
     let persistenceController = PersistenceController.shared
     @StateObject private var userDefaultsManager = UserDefaultsManager.shared
-    @StateObject private var queueService = QueueService.shared
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     init() {
@@ -24,8 +23,8 @@ struct BriefeedApp: App {
         // Apply dark mode preference early
         applyThemeSettings()
         
-        // Initialize RSS features
-        initializeRSSFeatures()
+        // MOVED TO AppViewModel: Initialize RSS features
+        // initializeRSSFeatures() // This was accessing ObservableObject singletons!
         
         // Create default feeds on first launch
         Task {
@@ -41,20 +40,22 @@ struct BriefeedApp: App {
 
     var body: some Scene {
         WindowGroup {
+            // FIXED: Using ContentView with AppViewModel
             ContentView()
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
                 .environmentObject(userDefaultsManager)
                 .preferredColorScheme(userDefaultsManager.isDarkMode ? .dark : .light)
                 .onAppear {
-                    print("🎯 ContentView appeared")
                     // Apply theme settings when window is ready
                     applyThemeSettings()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-                    queueService.handleAppDidBecomeActive()
+                    // MIGRATION: QueueServiceV2 handles this automatically
+                    // queueService.handleAppDidBecomeActive()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
-                    queueService.handleAppWillResignActive()
+                    // MIGRATION: QueueServiceV2 handles this automatically
+                    // queueService.handleAppWillResignActive()
                 }
         }
     }
@@ -71,8 +72,8 @@ struct BriefeedApp: App {
 // MARK: - App Delegate
 class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
-        // Configure audio session for text-to-speech
-        configureAudioSession()
+        // Audio session is now configured by BriefeedAudioService
+        // configureAudioSession()
         
         // Configure app appearance
         configureAppearance()

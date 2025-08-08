@@ -224,14 +224,16 @@ class CombinedFeedViewModel: ObservableObject {
     private let viewContext = PersistenceController.shared.container.viewContext
     private var currentTask: Task<Void, Never>?
     
-    @MainActor
     func loadFeeds() async {
         // Fetch all feeds from Core Data
         let fetchRequest: NSFetchRequest<Feed> = Feed.fetchRequest()
         fetchRequest.sortDescriptors = [NSSortDescriptor(keyPath: \Feed.sortOrder, ascending: true)]
         
         do {
-            feeds = try viewContext.fetch(fetchRequest)
+            let fetchedFeeds = try viewContext.fetch(fetchRequest)
+            await MainActor.run {
+                feeds = fetchedFeeds
+            }
             
             // Debug logging
             print("📱 Loading feeds from Core Data:")
@@ -255,18 +257,21 @@ class CombinedFeedViewModel: ObservableObject {
         }
     }
     
-    @MainActor
     func refresh(feedId: String) async {
-        isLoading = true
-        errorMessage = nil
-        
-        print("🔄 Refreshing feed: \(feedId)")
-        print("  📊 Total feeds available: \(feeds.count)")
+        await MainActor.run {
+            isLoading = true
+            errorMessage = nil
+        }
         
         // Cancel previous task
         currentTask?.cancel()
         
         currentTask = Task {
+            defer {
+                Task { @MainActor in
+                    isLoading = false
+                }
+            }
             do {
                 if feedId == "all" {
                     // Load articles from all active feeds
@@ -298,13 +303,17 @@ class CombinedFeedViewModel: ObservableObject {
                     }
                     
                     // Filter out invalid articles and sort by date
-                    articles = allArticles
+                    let filteredArticles = allArticles
                         .filter { article in
                             // Filter out articles with no title or that are invalid
                             guard let title = article.title, !title.isEmpty else { return false }
                             return true
                         }
                         .sorted { ($0.createdAt ?? Date()) > ($1.createdAt ?? Date()) }
+                    
+                    await MainActor.run {
+                        articles = filteredArticles
+                    }
                 } else {
                     // Load articles from specific feed
                     if let feed = feeds.first(where: { $0.id?.uuidString == feedId }),
@@ -313,8 +322,11 @@ class CombinedFeedViewModel: ObservableObject {
                         let url = DefaultDataService.shared.generateFeedURL(for: feed)
                         let response = try await redditService.fetchFeedWithURL(url)
                         
-                        articles = response.data.children.map { child in
+                        let feedArticles = response.data.children.map { child in
                             createOrUpdateArticle(from: child.data, feed: feed)
+                        }
+                        await MainActor.run {
+                            articles = feedArticles
                         }
                     }
                 }
@@ -322,11 +334,12 @@ class CombinedFeedViewModel: ObservableObject {
                 try viewContext.save()
             } catch {
                 if !Task.isCancelled {
-                    errorMessage = error.localizedDescription
+                    await MainActor.run {
+                        errorMessage = error.localizedDescription
+                    }
+                    print("  ❌ Error during refresh: \(error)")
                 }
             }
-            
-            isLoading = false
         }
     }
     

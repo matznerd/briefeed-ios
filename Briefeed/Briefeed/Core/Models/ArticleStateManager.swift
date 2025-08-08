@@ -14,7 +14,13 @@ import Combine
 class ArticleStateManager: ObservableObject {
     
     // MARK: - Singleton
-    static let shared = ArticleStateManager()
+    private static var _shared: ArticleStateManager?
+    static var shared: ArticleStateManager {
+        if _shared == nil {
+            _shared = ArticleStateManager()
+        }
+        return _shared!
+    }
     
     // MARK: - Published Properties
     @Published private(set) var currentlyPlayingArticleID: UUID?
@@ -23,39 +29,69 @@ class ArticleStateManager: ObservableObject {
     
     // MARK: - Private Properties
     private var cancellables = Set<AnyCancellable>()
-    private let audioService = BriefeedAudioService.shared
-    private let archivedService = ArchivedArticlesService.shared
+    private var audioService: BriefeedAudioService?
+    private var archivedService: ArchivedArticlesService?
     
     // MARK: - Initialization
+    private var hasInitialized = false
+    
     private init() {
+        // Don't do ANY initialization here
+        // Everything will be done in initialize() method
+    }
+    
+    /// Call this after views are rendered
+    func initialize() {
+        guard !hasInitialized else { return }
+        hasInitialized = true
+        
+        // Get services lazily during initialize
+        audioService = BriefeedAudioService.shared
+        archivedService = ArchivedArticlesService.shared
+        
+        // Set initial values
+        currentlyPlayingArticleID = audioService?.currentArticle?.id
+        queuedArticleIDs = audioService?.queue.compactMap { $0.content.id } ?? []
+        archivedArticleIDs = archivedService?.archivedArticleIDs ?? []
+        
+        // Then setup observers
         setupObservers()
     }
     
     // MARK: - Setup
     private func setupObservers() {
-        // Observe audio service for currently playing article
-        audioService.$currentArticle
+        // Don't set initial values here - already done in init
+        
+        // Observe future changes only
+        audioService?.$currentArticle
+            .dropFirst() // Skip initial value to avoid immediate update
             .map { $0?.id }
-            .assign(to: &$currentlyPlayingArticleID)
-        
-        // Observe audio service for queue
-        audioService.$queue
-            .map { articles in
-                articles.compactMap { $0.id }
-            }
-            .assign(to: &$queuedArticleIDs)
-        
-        // Observe archived articles service
-        archivedService.$archivedArticleIDs
-            .assign(to: &$archivedArticleIDs)
-        
-        // Observe audio state changes
-        audioService.state
-            .sink { [weak self] state in
-                // Force UI update when state changes
-                self?.objectWillChange.send()
+            .sink { [weak self] articleID in
+                self?.currentlyPlayingArticleID = articleID
             }
             .store(in: &cancellables)
+        
+        // Observe audio service for queue
+        audioService?.$queue
+            .dropFirst() // Skip initial value
+            .map { items in
+                items.compactMap { $0.content.id }
+            }
+            .sink { [weak self] queuedIDs in
+                self?.queuedArticleIDs = queuedIDs
+            }
+            .store(in: &cancellables)
+        
+        // Observe archived articles service
+        archivedService?.$archivedArticleIDs
+            .dropFirst() // Skip initial value
+            .sink { [weak self] archivedIDs in
+                self?.archivedArticleIDs = archivedIDs
+            }
+            .store(in: &cancellables)
+        
+        // Removed audio state observation to prevent circular updates
+        // Views should observe audioService directly if they need state updates
     }
     
     // MARK: - Public Methods
@@ -69,7 +105,7 @@ class ArticleStateManager: ObservableObject {
     /// Checks if an article is currently playing with a specific state
     func isPlaying(_ article: Article, withState state: AudioPlayerState) -> Bool {
         guard isPlaying(article) else { return false }
-        return audioService.state.value == state
+        return audioService?.state.value == state
     }
     
     /// Checks if an article is archived
@@ -92,22 +128,22 @@ class ArticleStateManager: ObservableObject {
     
     /// Checks if audio is currently playing
     var isAudioPlaying: Bool {
-        audioService.state.value == .playing
+        audioService?.state.value == .playing
     }
     
     /// Checks if audio is currently paused
     var isAudioPaused: Bool {
-        audioService.state.value == .paused
+        audioService?.state.value == .paused
     }
     
     /// Checks if audio is currently loading
     var isAudioLoading: Bool {
-        audioService.state.value == .loading
+        audioService?.state.value == .loading
     }
     
     /// Gets the current audio state
     var audioState: AudioPlayerState {
-        audioService.state.value
+        audioService?.state.value ?? .idle
     }
     
     /// Updates an article's playing state
@@ -115,34 +151,36 @@ class ArticleStateManager: ObservableObject {
         if isPlaying(article) {
             // If playing, pause or stop
             if isAudioPlaying {
-                audioService.pause()
+                audioService?.pause()
             } else {
-                audioService.play()
+                audioService?.play()
             }
         } else {
             // Start playing this article
-            try await audioService.playArticle(article)
+            try await audioService?.playArticle(article)
         }
     }
     
     /// Toggles an article's archived state
     func toggleArchiveState(for article: Article) {
-        archivedService.toggleArchiveStatus(article)
+        archivedService?.toggleArchiveStatus(article)
     }
     
     /// Adds an article to the queue
     func addToQueue(_ article: Article) {
-        audioService.addToQueue(article)
+        Task {
+            await audioService?.addToQueue(article)
+        }
     }
     
     /// Removes an article from the queue
     func removeFromQueue(at index: Int) {
-        audioService.removeFromQueue(at: index)
+        audioService?.removeFromQueue(at: index)
     }
     
     /// Clears all states (useful for logout/reset)
     func reset() {
-        audioService.clearQueue()
+        audioService?.clearQueue()
         currentlyPlayingArticleID = nil
         // Note: archived articles are managed by ArchivedArticlesService
     }

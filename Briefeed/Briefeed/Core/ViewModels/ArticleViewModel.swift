@@ -28,24 +28,25 @@ class ArticleViewModel: ObservableObject {
     @Published var audioState: AudioPlayerState = .idle
     @Published var audioProgress: Float = 0.0
     @Published var audioRate: Float = Constants.Audio.defaultSpeechRate
+    @Published var isPlaying = false
+    @Published var isInQueue = false
     
     private let storageService: StorageServiceProtocol
     private let firecrawlService: FirecrawlServiceProtocol
     private let geminiService: GeminiServiceProtocol
-    private let audioService: AudioServiceProtocol
+    private let audioService = BriefeedAudioService.shared
+    private let queueService = QueueServiceV2.shared
     
     private var cancellables: Set<AnyCancellable> = []
     
     init(article: Article,
          storageService: StorageServiceProtocol = StorageService.shared,
          firecrawlService: FirecrawlServiceProtocol = FirecrawlService(),
-         geminiService: GeminiServiceProtocol = GeminiService(),
-         audioService: AudioServiceProtocol? = nil) {
+         geminiService: GeminiServiceProtocol = GeminiService()) {
         self.article = article
         self.storageService = storageService
         self.firecrawlService = firecrawlService
         self.geminiService = geminiService
-        self.audioService = audioService ?? BriefeedAudioService.shared
         
         // Load initial values
         self.articleContent = article.content
@@ -77,19 +78,40 @@ class ArticleViewModel: ObservableObject {
             }
             .store(in: &cancellables)
         
-        // Subscribe to audio progress
+        // Subscribe to audio progress - throttle updates to prevent UI flooding
         audioService.progress
+            .throttle(for: .milliseconds(500), scheduler: DispatchQueue.main, latest: true)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] progress in
                 self?.audioProgress = progress
             }
             .store(in: &cancellables)
         
-        // Subscribe to speech rate
-        audioService.currentRate
+        // Subscribe to playback rate
+        audioService.$playbackRate
             .receive(on: DispatchQueue.main)
             .sink { [weak self] rate in
                 self?.audioRate = rate
+            }
+            .store(in: &cancellables)
+        
+        // Subscribe to playing state
+        audioService.$currentArticle
+            .map { [weak self] currentArticle in
+                currentArticle?.id == self?.article.id
+            }
+            .sink { [weak self] isPlaying in
+                self?.isPlaying = isPlaying
+            }
+            .store(in: &cancellables)
+        
+        // Subscribe to queue state
+        queueService.$queue
+            .map { [weak self] items in
+                items.contains { $0.articleID == self?.article.id }
+            }
+            .sink { [weak self] isInQueue in
+                self?.isInQueue = isInQueue
             }
             .store(in: &cancellables)
     }
@@ -257,44 +279,20 @@ class ArticleViewModel: ObservableObject {
     // MARK: - Audio Playback Methods
     
     func startAudioPlayback() async {
-        // Check if we have a summary to read
-        let textToRead: String
-        
-        if let structuredSummary = structuredSummary, let story = structuredSummary.story {
-            // Use the structured summary story
-            textToRead = story
-        } else if let summary = summary, !summary.isEmpty {
-            // Use plain text summary
-            textToRead = summary
-        } else {
-            // No summary available, generate one first
+        // Ensure article has a summary for TTS
+        if article.summary == nil || article.summary?.isEmpty == true {
             errorMessage = "Generating summary before playback..."
             await generateStructuredSummary()
             
-            // Check again after generation
-            if let structuredSummary = structuredSummary, let story = structuredSummary.story {
-                textToRead = story
-            } else {
+            // Check if summary was generated
+            if article.summary == nil || article.summary?.isEmpty == true {
                 errorMessage = "Failed to generate summary for audio playback"
                 return
             }
         }
         
-        do {
-            // Use the proper play method that handles queue
-            if let audioService = audioService as? AudioService {
-                try await audioService.playNow(article)
-            } else {
-                // Fallback to speak method
-                try await audioService.speak(
-                    text: textToRead,
-                    title: article.title,
-                    author: article.author
-                )
-            }
-        } catch {
-            errorMessage = "Failed to start audio playback: \(error.localizedDescription)"
-        }
+        // Play the article using BriefeedAudioService
+        await audioService.playNow(article)
     }
     
     func toggleAudioPlayback() {
@@ -318,6 +316,18 @@ class ArticleViewModel: ObservableObject {
     
     func setAudioRate(_ rate: Float) {
         audioService.setSpeechRate(rate)
+    }
+    
+    func toggleQueue() async {
+        if isInQueue {
+            // Find and remove from queue
+            if let index = queueService.queue.firstIndex(where: { $0.articleID == article.id }) {
+                queueService.removeItem(at: index)
+            }
+        } else {
+            // Add to queue
+            await queueService.addArticle(article)
+        }
     }
     
     var isAudioPlaying: Bool {

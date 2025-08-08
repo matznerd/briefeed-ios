@@ -9,10 +9,13 @@ import SwiftUI
 import Combine
 
 struct MiniAudioPlayer: View {
-    @ObservedObject private var audioService = BriefeedAudioService.shared
-    @ObservedObject private var stateManager = ArticleStateManager.shared
+    @StateObject private var audioService = BriefeedAudioService.shared
+    @StateObject private var queueService = QueueServiceV2.shared
+    @StateObject private var stateManager = ArticleStateManager.shared
     @EnvironmentObject var userDefaultsManager: UserDefaultsManager
     @State private var showExpandedPlayer = false
+    @State private var progress: Float = 0
+    @State private var progressTimer: Timer?
     
     private let playerHeight: CGFloat = 72
     private let progressBarHeight: CGFloat = 3
@@ -30,8 +33,7 @@ struct MiniAudioPlayer: View {
                     // Progress
                     Rectangle()
                         .fill(Color.briefeedRed)
-                        .frame(width: geometry.size.width * CGFloat(audioService.progress.value), height: progressBarHeight)
-                        .animation(.linear(duration: 0.1), value: audioService.progress.value)
+                        .frame(width: geometry.size.width * CGFloat(progress), height: progressBarHeight)
                 }
             }
             .frame(height: progressBarHeight)
@@ -40,40 +42,21 @@ struct MiniAudioPlayer: View {
             HStack(spacing: 0) {
                 // Article info (left side)
                 VStack(alignment: .leading, spacing: 2) {
-                    if let playbackItem = audioService.currentPlaybackItem {
-                        Text(playbackItem.title)
+                    if let currentItem = audioService.currentItem {
+                        Text(currentItem.content.title)
                             .font(.system(size: 14, weight: .medium))
                             .lineLimit(1)
                             .foregroundColor(.primary)
                         
                         HStack(spacing: 4) {
-                            if playbackItem.isRSS {
+                            if currentItem.content.contentType == .rssEpisode {
                                 Image(systemName: "dot.radiowaves.left.and.right")
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
                             }
-                            Text(playbackItem.source)
+                            Text(currentItem.content.author ?? "")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
-                        }
-                        .lineLimit(1)
-                    } else if let article = audioService.currentArticle {
-                        // Fallback for legacy article playback
-                        Text(article.title ?? "Untitled")
-                            .font(.system(size: 14, weight: .medium))
-                            .lineLimit(1)
-                            .foregroundColor(.primary)
-                        
-                        HStack(spacing: 4) {
-                            if let subreddit = article.subreddit {
-                                Text("r/\(subreddit)")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            } else if let author = article.author, !author.isEmpty {
-                                Text(author)
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
                         }
                         .lineLimit(1)
                     } else {
@@ -92,31 +75,31 @@ struct MiniAudioPlayer: View {
                 // Center controls
                 HStack(spacing: 24) {
                     // Skip backward button
-                    Button(action: { audioService.skipBackward(seconds: 15) }) {
-                        Image(systemName: "gobackward.15")
+                    Button(action: { audioService.skipBackward() }) {
+                        Image(systemName: skipBackwardIconName)
                             .font(.system(size: 22))
-                            .foregroundColor((audioService.currentArticle != nil || audioService.currentPlaybackItem != nil) ? .primary : .secondary.opacity(0.5))
+                            .foregroundColor(audioService.currentItem != nil ? .primary : .secondary.opacity(0.5))
                     }
                     .buttonStyle(ScaledButtonStyle())
-                    .disabled(audioService.currentArticle == nil && audioService.currentPlaybackItem == nil)
+                    .disabled(audioService.currentItem == nil)
                     
                     // Play/Pause button
                     Button(action: togglePlayPause) {
                         Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
                             .font(.system(size: 44))
-                            .foregroundColor((audioService.currentArticle != nil || audioService.currentPlaybackItem != nil) ? .briefeedRed : .secondary.opacity(0.5))
+                            .foregroundColor(audioService.currentItem != nil ? .briefeedRed : .secondary.opacity(0.5))
                     }
                     .buttonStyle(ScaledButtonStyle())
-                    .disabled(audioService.currentArticle == nil && audioService.currentPlaybackItem == nil)
+                    .disabled(audioService.currentItem == nil)
                     
                     // Skip forward button
-                    Button(action: { audioService.skipForward(seconds: 30) }) {
-                        Image(systemName: "goforward.30")
+                    Button(action: { audioService.skipForward() }) {
+                        Image(systemName: skipForwardIconName)
                             .font(.system(size: 22))
-                            .foregroundColor((audioService.currentArticle != nil || audioService.currentPlaybackItem != nil) ? .primary : .secondary.opacity(0.5))
+                            .foregroundColor(audioService.currentItem != nil ? .primary : .secondary.opacity(0.5))
                     }
                     .buttonStyle(ScaledButtonStyle())
-                    .disabled(audioService.currentArticle == nil && audioService.currentPlaybackItem == nil)
+                    .disabled(audioService.currentItem == nil)
                 }
                 .padding(.horizontal, 20)
                 
@@ -159,12 +142,6 @@ struct MiniAudioPlayer: View {
                 }
             }
         )
-        .onReceive(audioService.$currentArticle) { article in
-            // Refresh view when current article changes
-        }
-        .onReceive(audioService.$queue) { _ in
-            // Refresh view when queue changes
-        }
         .overlay(
             // Top border
             Rectangle()
@@ -178,22 +155,57 @@ struct MiniAudioPlayer: View {
             ExpandedAudioPlayer()
                 .environmentObject(userDefaultsManager)
         }
+        .onAppear {
+            startProgressTimer()
+        }
+        .onDisappear {
+            stopProgressTimer()
+        }
     }
     
     private var isPlaying: Bool {
-        (audioService.currentArticle != nil || audioService.currentPlaybackItem != nil) && stateManager.isAudioPlaying
+        audioService.isPlaying
+    }
+    
+    private var skipBackwardIconName: String {
+        // Use 15s for articles, 30s for RSS
+        if let currentItem = audioService.currentItem {
+            return currentItem.content.contentType == .article ? "gobackward.15" : "gobackward.30"
+        }
+        return "gobackward.15"
+    }
+    
+    private var skipForwardIconName: String {
+        // Use 15s for articles, 30s for RSS
+        if let currentItem = audioService.currentItem {
+            return currentItem.content.contentType == .article ? "goforward.15" : "goforward.30"
+        }
+        return "goforward.30"
     }
     
     private func togglePlayPause() {
-        if isPlaying {
-            audioService.pause()
-        } else {
-            audioService.play()
-        }
+        audioService.togglePlayPause()
     }
     
     private func toggleAutoPlay() {
         userDefaultsManager.autoPlayEnabled.toggle()
+    }
+    
+    private func startProgressTimer() {
+        // Update progress periodically instead of continuously
+        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+            if audioService.currentItem != nil {
+                let newProgress = audioService.progress.value
+                if abs(progress - newProgress) > 0.001 { // Only update if changed significantly
+                    progress = newProgress
+                }
+            }
+        }
+    }
+    
+    private func stopProgressTimer() {
+        progressTimer?.invalidate()
+        progressTimer = nil
     }
 }
 

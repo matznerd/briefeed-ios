@@ -10,19 +10,33 @@ import Combine
 import CoreData
 
 struct ExpandedAudioPlayer: View {
-    @ObservedObject private var audioService = BriefeedAudioService.shared
-    @ObservedObject private var queueService = QueueService.shared
+    
+    // MARK: - Time Formatting Helpers
+    private func formatTime(_ time: TimeInterval) -> String {
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+    
+    private func formatTimeRemaining(_ current: TimeInterval, _ duration: TimeInterval) -> String {
+        let remaining = max(0, duration - current)
+        return "-\(formatTime(remaining))"
+    }
+    @StateObject private var audioService = BriefeedAudioService.shared
+    @StateObject private var queueService = QueueServiceV2.shared
     @Environment(\.dismiss) private var dismiss
     @State private var isDraggingSlider = false
     @State private var draggedProgress: Float = 0
     @State private var showQueue = false
+    @State private var progress: Float = 0
+    @State private var progressTimer: Timer?
     
     private var isPlaying: Bool {
-        audioService.state.value == .playing
+        audioService.isPlaying
     }
     
     private var currentProgress: Float {
-        isDraggingSlider ? draggedProgress : audioService.progress.value
+        isDraggingSlider ? draggedProgress : progress
     }
     
     var body: some View {
@@ -70,6 +84,12 @@ struct ExpandedAudioPlayer: View {
         .sheet(isPresented: $showQueue) {
             AudioQueueView()
         }
+        .onAppear {
+            startProgressTimer()
+        }
+        .onDisappear {
+            stopProgressTimer()
+        }
     }
     
     // MARK: - Navigation Bar
@@ -100,8 +120,8 @@ struct ExpandedAudioPlayer: View {
                         .background(Color.gray.opacity(0.1))
                         .clipShape(Circle())
                     
-                    if QueueService.shared.enhancedQueue.count > 1 {
-                        Text("\(QueueService.shared.enhancedQueue.count)")
+                    if queueService.queue.count > 1 {
+                        Text("\(queueService.queue.count)")
                             .font(.system(size: 11, weight: .bold))
                             .foregroundColor(.white)
                             .padding(4)
@@ -206,14 +226,14 @@ struct ExpandedAudioPlayer: View {
             
             // Time labels
             HStack {
-                Text(AudioService.formatTime(audioService.currentTime))
+                Text(formatTime(audioService.currentTime))
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(.secondary)
                     .monospacedDigit()
                 
                 Spacer()
                 
-                Text(AudioService.formatTimeRemaining(audioService.currentTime, audioService.duration))
+                Text(formatTimeRemaining(audioService.currentTime, audioService.duration))
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(.secondary)
                     .monospacedDigit()
@@ -238,7 +258,7 @@ struct ExpandedAudioPlayer: View {
             
             // Skip backward 15s
             Button(action: {
-                audioService.skipBackward(seconds: 15)
+                audioService.skipBackward()
             }) {
                 ZStack {
                     Image(systemName: "gobackward")
@@ -268,7 +288,7 @@ struct ExpandedAudioPlayer: View {
             
             // Skip forward 15s
             Button(action: {
-                audioService.skipForward(seconds: 15)
+                audioService.skipForward()
             }) {
                 ZStack {
                     Image(systemName: "goforward")
@@ -312,7 +332,7 @@ struct ExpandedAudioPlayer: View {
                 }
                 
                 CompactSpeedPicker(selectedSpeed: Binding(
-                    get: { audioService.currentRate.value },
+                    get: { audioService.playbackRate },
                     set: { audioService.setSpeechRate($0) }
                 ))
             }
@@ -362,37 +382,39 @@ struct ExpandedAudioPlayer: View {
     }
     
     private func canPlayPrevious() -> Bool {
-        let enhancedQueue = QueueService.shared.enhancedQueue
+        let enhancedQueue = queueService.queue
         guard !enhancedQueue.isEmpty,
-              let currentArticle = audioService.currentArticle else { return false }
+              let currentItem = audioService.currentItem else { return false }
         
         // Find current index in enhanced queue
-        var currentIndex = -1
-        if let articleID = currentArticle.id {
-            currentIndex = enhancedQueue.firstIndex { $0.articleID == articleID } ?? -1
-        }
-        if currentIndex == -1, let url = currentArticle.url {
-            currentIndex = enhancedQueue.firstIndex { $0.audioUrl?.absoluteString == url } ?? -1
-        }
+        let currentIndex = enhancedQueue.firstIndex { $0.id == currentItem.content.id } ?? -1
         
         return currentIndex > 0
     }
     
     private func canPlayNext() -> Bool {
-        let enhancedQueue = QueueService.shared.enhancedQueue
+        let enhancedQueue = queueService.queue
         guard !enhancedQueue.isEmpty,
-              let currentArticle = audioService.currentArticle else { return false }
+              let currentItem = audioService.currentItem else { return false }
         
         // Find current index in enhanced queue
-        var currentIndex = -1
-        if let articleID = currentArticle.id {
-            currentIndex = enhancedQueue.firstIndex { $0.articleID == articleID } ?? -1
-        }
-        if currentIndex == -1, let url = currentArticle.url {
-            currentIndex = enhancedQueue.firstIndex { $0.audioUrl?.absoluteString == url } ?? -1
-        }
+        let currentIndex = enhancedQueue.firstIndex { $0.id == currentItem.content.id } ?? -1
         
         return currentIndex >= 0 && currentIndex < enhancedQueue.count - 1
+    }
+    
+    private func startProgressTimer() {
+        // Update progress periodically instead of continuously
+        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+            if audioService.currentItem != nil {
+                progress = audioService.progress.value
+            }
+        }
+    }
+    
+    private func stopProgressTimer() {
+        progressTimer?.invalidate()
+        progressTimer = nil
     }
 }
 
@@ -407,15 +429,15 @@ struct ScaleButtonStyle: ButtonStyle {
 
 // MARK: - Audio Queue View
 struct AudioQueueView: View {
-    @ObservedObject private var audioService = BriefeedAudioService.shared
-    @ObservedObject private var queueService = QueueService.shared
+    @StateObject private var audioService = BriefeedAudioService.shared
+    @StateObject private var queueService = QueueServiceV2.shared
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         NavigationView {
             List {
-                ForEach(queueService.enhancedQueue.indices, id: \.self) { index in
-                    let item = queueService.enhancedQueue[index]
+                ForEach(queueService.queue.indices, id: \.self) { index in
+                    let item = queueService.queue[index]
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(item.title)
@@ -426,7 +448,7 @@ struct AudioQueueView: View {
                                 Image(systemName: item.source.iconName)
                                     .font(.caption)
                                     .foregroundColor(.secondary)
-                                Text(item.source.displayName)
+                                Text(item.source.isLiveNews ? "Podcast" : "Article")
                                     .font(.system(size: 14))
                                     .foregroundColor(.secondary)
                             }
@@ -453,12 +475,11 @@ struct AudioQueueView: View {
                 }
                 .onDelete { indexSet in
                     for index in indexSet {
-                        let item = queueService.enhancedQueue[index]
-                        queueService.removeFromQueue(itemId: item.id)
+                        queueService.removeItem(at: index)
                     }
                 }
             }
-            .navigationTitle("Queue (\(queueService.enhancedQueue.count))")
+            .navigationTitle("Queue (\(queueService.queue.count))")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -468,7 +489,7 @@ struct AudioQueueView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarLeading) {
-                    if queueService.enhancedQueue.count > 1 {
+                    if queueService.queue.count > 1 {
                         Button("Clear All") {
                             queueService.clearQueue()
                             dismiss()
@@ -481,33 +502,17 @@ struct AudioQueueView: View {
     }
     
     private func isCurrentlyPlaying(_ item: EnhancedQueueItem) -> Bool {
-        if let currentArticle = audioService.currentArticle {
-            // Check by article ID
-            if let articleID = currentArticle.id, item.articleID == articleID {
-                return true
-            }
-            // Check by audio URL for RSS
-            if let url = currentArticle.url, item.audioUrl?.absoluteString == url {
-                return true
-            }
+        // Check if this item is the current item being played
+        if let currentItem = audioService.currentItem {
+            return currentItem.content.id == item.id
         }
         return false
     }
     
     private func playItem(_ item: EnhancedQueueItem) async {
-        if let audioUrl = item.audioUrl {
-            // RSS Episode
-            await audioService.playRSSEpisode(url: audioUrl, title: item.title, episode: nil)
-        } else if let articleID = item.articleID {
-            // Article - need to fetch it from Core Data
-            let context = PersistenceController.shared.container.viewContext
-            let request: NSFetchRequest<Article> = Article.fetchRequest()
-            request.predicate = NSPredicate(format: "id == %@", articleID as CVarArg)
-            request.fetchLimit = 1
-            
-            if let article = try? context.fetch(request).first {
-                try? await audioService.playArticle(article)
-            }
+        // Find the index of this item in the queue
+        if let index = queueService.queue.firstIndex(where: { $0.id == item.id }) {
+            await queueService.playItem(at: index)
         }
     }
 }

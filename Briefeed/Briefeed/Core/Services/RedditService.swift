@@ -133,7 +133,7 @@ class RedditService: RedditServiceProtocol {
         let headers = ["User-Agent": Constants.Reddit.userAgent]
         
         do {
-            let response: RedditResponse = try await networkService.request(url, method: .get, parameters: nil, headers: headers, timeout: nil)
+            let response: RedditResponse = try await networkService.request(url, method: .get, parameters: nil, headers: headers, timeout: 10.0) // 10 second timeout
             print("✅ Reddit API Success: Got \(response.data.children.count) posts")
             
             // Filter out non-article content

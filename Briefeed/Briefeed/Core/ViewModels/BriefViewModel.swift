@@ -13,10 +13,12 @@ import SwiftUI
 @MainActor
 class BriefViewModel: ObservableObject {
     @Published var queuedArticles: [Article] = []
+    @Published var queue: [EnhancedQueueItem] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
     
     private let audioService = BriefeedAudioService.shared
+    private let queueService = QueueServiceV2.shared
     private let storageService: StorageServiceProtocol
     private let viewContext: NSManagedObjectContext
     private var cancellables = Set<AnyCancellable>()
@@ -33,11 +35,11 @@ class BriefViewModel: ObservableObject {
     }
     
     private func setupPublishers() {
-        // Sync with AudioService queue
-        audioService.$queue
+        // Sync with QueueServiceV2 queue
+        queueService.$queue
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] audioQueue in
-                self?.syncWithAudioQueue(audioQueue)
+            .sink { [weak self] enhancedQueue in
+                self?.queue = enhancedQueue
             }
             .store(in: &cancellables)
         
@@ -65,10 +67,12 @@ class BriefViewModel: ObservableObject {
             
             // Always sync with saved articles (Brief IS the queue)
             self.queuedArticles = articles
-            audioService.queue = articles
             
-            // Restore queue state if app was restarted
-            audioService.restoreQueueState(articles: articles)
+            // Clear and rebuild queue
+            queueService.clearQueue()
+            for article in articles {
+                await queueService.addArticle(article)
+            }
             
             isLoading = false
         } catch {
@@ -83,22 +87,22 @@ class BriefViewModel: ObservableObject {
     
     func playArticle(_ article: Article) {
         Task {
-            do {
-                try await audioService.playNow(article)
-            } catch {
-                errorMessage = "Failed to play article: \(error.localizedDescription)"
-            }
+            await audioService.playNow(article)
         }
     }
     
+    func addToQueue(_ article: Article) async {
+        await queueService.addArticle(article)
+    }
+    
     func removeFromQueue(_ article: Article) {
-        // Remove from local queue
-        queuedArticles.removeAll { $0.id == article.id }
-        
-        // Remove from audio service queue
-        if let index = audioService.queue.firstIndex(where: { $0.id == article.id }) {
-            audioService.removeFromQueue(at: index)
+        // Find and remove from queue
+        if let index = queue.firstIndex(where: { $0.articleID == article.id }) {
+            queueService.removeItem(at: index)
         }
+        
+        // Remove from local articles list
+        queuedArticles.removeAll { $0.id == article.id }
         
         // Optionally unsave the article
         Task {
@@ -110,21 +114,21 @@ class BriefViewModel: ObservableObject {
         }
     }
     
+    func removeFromQueue(at index: Int) {
+        queueService.removeItem(at: index)
+    }
+    
     func moveQueueItems(from source: IndexSet, to destination: Int) {
-        // Move in local array
-        queuedArticles.move(fromOffsets: source, toOffset: destination)
-        
-        // Update audio service queue with reorder method
-        audioService.reorderQueue(from: source, to: destination)
+        // Move in queue service
+        queueService.moveItem(from: source, to: destination)
     }
     
     func clearQueue() {
         queuedArticles.removeAll()
-        audioService.clearQueue()
+        queueService.clearQueue()
     }
     
-    private func syncWithAudioQueue(_ audioQueue: [Article]) {
-        // Don't sync back from audio queue - Brief (saved articles) IS the source of truth
-        // Audio queue follows saved articles, not the other way around
+    func playItemAt(index: Int) async {
+        await queueService.playItem(at: index)
     }
 }

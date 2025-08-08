@@ -12,6 +12,7 @@ struct WaveformView: View {
     let isPlaying: Bool
     
     @State private var animationAmounts: [CGFloat]
+    @State private var animationTimer: Timer?
     
     init(isPlaying: Bool) {
         self.isPlaying = isPlaying
@@ -49,7 +50,7 @@ struct WaveformView: View {
             .onAppear {
                 startAnimating()
             }
-            .onChange(of: isPlaying) { newValue in
+            .onChange(of: isPlaying) { _, newValue in
                 if newValue {
                     startAnimating()
                 } else {
@@ -60,6 +61,9 @@ struct WaveformView: View {
     }
     
     private func startAnimating() {
+        // Cancel any existing timer
+        animationTimer?.invalidate()
+        
         for index in 0..<numberOfBars {
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * 0.02) {
                 withAnimation {
@@ -70,9 +74,10 @@ struct WaveformView: View {
         
         // Continue updating animation values
         if isPlaying {
-            Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
+            animationTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
                 if !isPlaying {
-                    timer.invalidate()
+                    animationTimer?.invalidate()
+                    animationTimer = nil
                     return
                 }
                 
@@ -86,6 +91,9 @@ struct WaveformView: View {
     }
     
     private func stopAnimating() {
+        animationTimer?.invalidate()
+        animationTimer = nil
+        
         for index in 0..<numberOfBars {
             withAnimation(.easeOut(duration: 0.3)) {
                 animationAmounts[index] = 0.3

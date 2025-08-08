@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Scheme
+   LastUpgradeVersion = "1500"
+   version = "1.7">
+   <BuildAction
+      parallelizeBuildables = "YES"
+      buildImplicitDependencies = "YES">
+      <BuildActionEntries>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "YOUR_TARGET_ID"
+               BuildableName = "Briefeed.app"
+               BlueprintName = "Briefeed"
+               ReferencedContainer = "container:Briefeed.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+      </BuildActionEntries>
+   </BuildAction>
+   <TestAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      shouldUseLaunchSchemeArgsEnv = "YES"
+      enableThreadSanitizer = "YES"
+      enableUBSanitizer = "YES"
+      enableAddressSanitizer = "YES">
+      <MacroExpansion>
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "YOUR_TARGET_ID"
+            BuildableName = "Briefeed.app"
+            BlueprintName = "Briefeed"
+            ReferencedContainer = "container:Briefeed.xcodeproj">
+         </BuildableReference>
+      </MacroExpansion>
+      <Testables>
+      </Testables>
+   </TestAction>
+   <LaunchAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      launchStyle = "0"
+      useCustomWorkingDirectory = "NO"
+      ignoresPersistentStateOnLaunch = "NO"
+      debugDocumentVersioning = "YES"
+      debugServiceExtension = "internal"
+      allowLocationSimulation = "YES">
+      <BuildableProductRunnable
+         runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "YOUR_TARGET_ID"
+            BuildableName = "Briefeed.app"
+            BlueprintName = "Briefeed"
+            ReferencedContainer = "container:Briefeed.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+      <EnvironmentVariables>
+         <!-- Memory Debugging -->
+         <EnvironmentVariable
+            key = "DYLD_PRINT_STATISTICS"
+            value = "1"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "MallocStackLogging"
+            value = "1"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <!-- SwiftUI Debugging -->
+         <EnvironmentVariable
+            key = "_SWIFT_DEBUG_ENABLE_REFLECTION_NAME_FILTER"
+            value = "1"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <!-- Core Data Debugging -->
+         <EnvironmentVariable
+            key = "com.apple.CoreData.SQLDebug"
+            value = "1"
+            isEnabled = "NO">
+         </EnvironmentVariable>
+         <!-- Concurrency Debugging -->
+         <EnvironmentVariable
+            key = "LIBDISPATCH_STRICT"
+            value = "1"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
+      <CommandLineArguments>
+         <!-- UI Debugging -->
+         <CommandLineArgument
+            argument = "-UIViewLayoutFeedbackLoopDebuggingThreshold 100"
+            isEnabled = "YES">
+         </CommandLineArgument>
+         <!-- SwiftUI Performance -->
+         <CommandLineArgument
+            argument = "-com.apple.SwiftUI.profileUpdates 1"
+            isEnabled = "YES">
+         </CommandLineArgument>
+      </CommandLineArguments>
+   </LaunchAction>
+</Scheme>

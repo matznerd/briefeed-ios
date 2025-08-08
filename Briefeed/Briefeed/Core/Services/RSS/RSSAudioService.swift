@@ -22,8 +22,8 @@ class RSSAudioService: NSObject, ObservableObject {
     @Published private(set) var lastError: Error?
     
     // MARK: - Private Properties
-    private let networkService = NetworkService.shared
-    private let viewContext = PersistenceController.shared.container.viewContext
+    private lazy var networkService = NetworkService.shared
+    private lazy var viewContext = PersistenceController.shared.container.viewContext
     private var refreshTimer: Timer?
     
     // MARK: - Default Feeds Configuration
@@ -40,10 +40,24 @@ class RSSAudioService: NSObject, ObservableObject {
     ]
     
     // MARK: - Initialization
+    private var hasInitialized = false
+    
     private override init() {
         super.init()
+        // Defer heavy work until actually needed
+    }
+    
+    /// Initialize the service (call this after app is ready)
+    func initialize() {
+        guard !hasInitialized else { return }
+        hasInitialized = true
         loadFeeds()
         setupAutoRefresh()
+    }
+    
+    deinit {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
     }
     
     // MARK: - Public Methods
@@ -53,18 +67,25 @@ class RSSAudioService: NSObject, ObservableObject {
         let fetchRequest: NSFetchRequest<RSSFeed> = RSSFeed.fetchRequest()
         let count = (try? viewContext.count(for: fetchRequest)) ?? 0
         
-        if count == 0 {
+        print("🎙️ RSSAudioService: Checking for RSS feeds, found: \(count)")
+        
+        if count == 0 {  // swiftlint:disable:this empty_count
+            print("🎙️ Creating default RSS feeds...")
             for (id, url, name, frequency, priority) in defaultFeedsConfig {
                 createFeed(id: id, url: url, displayName: name, updateFrequency: frequency, priority: priority)
             }
             
             do {
                 try viewContext.save()
+                print("✅ Successfully created \(defaultFeedsConfig.count) default RSS feeds")
                 loadFeeds()
                 await refreshAllFeeds()
             } catch {
-                print("Error creating default feeds: \(error)")
+                print("❌ Error creating default feeds: \(error)")
             }
+        } else {
+            print("✅ RSS feeds already exist, loading...")
+            loadFeeds()
         }
     }
     
@@ -176,7 +197,7 @@ class RSSAudioService: NSObject, ObservableObject {
     
     /// Parse Player.fm URL to extract RSS feed
     func extractFeedFromPlayerFM(_ urlString: String) async -> String? {
-        guard let url = URL(string: urlString) else { return nil }
+        guard URL(string: urlString) != nil else { return nil }
         
         do {
             // Use Firecrawl to get the page content
@@ -184,7 +205,7 @@ class RSSAudioService: NSObject, ObservableObject {
             let scraped = try await firecrawlService.scrapeURL(urlString)
             
             // Look for RSS feed link in the content
-            let content = scraped.markdown ?? scraped.content ?? ""
+            let content = scraped.markdown ?? scraped.content
             if !content.isEmpty {
                 // Player.fm includes RSS links in the page
                 let pattern = #"(https?://[^"\s]+\.rss|https?://[^"\s]+/rss|https?://[^"\s]+/feed)"#
@@ -290,8 +311,12 @@ class RSSAudioService: NSObject, ObservableObject {
         
         do {
             feeds = try viewContext.fetch(fetchRequest)
+            print("📻 Loaded \(feeds.count) RSS feeds:")
+            for feed in feeds {
+                print("  - \(feed.displayName): \(feed.url) (enabled: \(feed.isEnabled))")
+            }
         } catch {
-            print("Error loading feeds: \(error)")
+            print("❌ Error loading feeds: \(error)")
         }
     }
     
@@ -329,7 +354,7 @@ class RSSAudioService: NSObject, ObservableObject {
         fetchRequest.fetchLimit = 1
         
         let count = (try? viewContext.count(for: fetchRequest)) ?? 0
-        return count > 0
+        return count > 0  // swiftlint:disable:this empty_count
     }
     
     private func cleanupOldEpisodes() {
@@ -354,9 +379,9 @@ class RSSAudioService: NSObject, ObservableObject {
     
     private func setupAutoRefresh() {
         // Refresh feeds periodically based on their update frequency
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 1800, repeats: true) { _ in // 30 minutes
-            Task {
-                await self.refreshStaleFeeds()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 1800, repeats: true) { [weak self] _ in // 30 minutes
+            Task { [weak self] in
+                await self?.refreshStaleFeeds()
             }
         }
     }

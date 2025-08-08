@@ -376,7 +376,7 @@ struct ArticleRowView: View {
         // Add to audio queue if article is being saved
         if isBeingSaved {
             Task { @MainActor in
-                QueueService.shared.addToQueue(article)
+                await QueueServiceV2.shared.addArticle(article)
             }
         }
         

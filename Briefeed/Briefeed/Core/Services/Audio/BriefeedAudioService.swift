@@ -15,30 +15,45 @@ import UIKit
 
 
 // MARK: - Briefeed Audio Service
-@MainActor
 final class BriefeedAudioService: ObservableObject {
     // Singleton
     static let shared = BriefeedAudioService()
     
-    // Audio player
-    private let audioPlayer = QueuedAudioPlayer()
+    // Audio player - lazy to defer initialization
+    private lazy var audioPlayer = QueuedAudioPlayer()
     
-    // Dependencies
-    private let ttsGenerator = TTSGenerator.shared
-    private let cacheManager = AudioCacheManager.shared
-    private let historyManager = PlaybackHistoryManager.shared
-    private let sleepTimer = SleepTimerManager.shared
+    // Dependencies - lazy to defer initialization
+    private lazy var ttsGenerator = TTSGenerator.shared
+    private lazy var cacheManager = AudioCacheManager.shared
+    private lazy var historyManager = PlaybackHistoryManager.shared
+    private lazy var sleepTimer = SleepTimerManager.shared
     
     // Published properties
     @Published private(set) var currentItem: BriefeedAudioItem?
     @Published private(set) var currentPlaybackItem: CurrentPlaybackItem?
     @Published private(set) var playbackContext: PlaybackContext = .direct
     @Published private(set) var isLoading = false
-    @Published private(set) var isPlaying = false
+    @Published private(set) var isPlaying = false {
+        willSet {
+            if isPlaying != newValue {
+                perfLog.logPublisher("BriefeedAudioService.isPlaying", value: "\(isPlaying) -> \(newValue)")
+            }
+            print("🔄 BriefeedAudioService: isPlaying willSet - old: \(isPlaying), new: \(newValue)")
+            if Thread.isMainThread && isPlaying != newValue {
+                perfLog.checkMainThread("BriefeedAudioService.isPlaying change")
+                print("⚠️ WARNING: isPlaying being changed on main thread during potential view update")
+                print("📍 Stack trace: \(Thread.callStackSymbols.prefix(5).joined(separator: "\n"))")
+            }
+        }
+    }
     @Published private(set) var currentTime: TimeInterval = 0
     @Published private(set) var duration: TimeInterval = 0
     @Published private(set) var playbackRate: Float = 1.0
-    @Published private(set) var volume: Float = 1.0
+    @Published var volume: Float = 1.0 {
+        didSet {
+            audioPlayer.volume = volume
+        }
+    }
     
     // Queue management
     @Published private(set) var queue: [BriefeedAudioItem] = []
@@ -48,13 +63,7 @@ final class BriefeedAudioService: ObservableObject {
     @Published private(set) var lastError: Error?
     
     // MARK: - Compatibility Properties (for UI that expects old AudioService)
-    @Published var currentArticle: Article? {
-        didSet {
-            if let article = currentArticle {
-                currentPlaybackItem = CurrentPlaybackItem(from: article)
-            }
-        }
-    }
+    @Published var currentArticle: Article?
     
     // State publishers for UI compatibility
     let state = CurrentValueSubject<AudioPlayerState, Never>(.idle)
@@ -63,18 +72,63 @@ final class BriefeedAudioService: ObservableObject {
     // Private properties
     private var cancellables = Set<AnyCancellable>()
     private let queuePersistenceKey = "BriefeedAudioQueue"
+    private var maintenanceTimerCancellable: AnyCancellable?
+    
+    private var isConfigured = false
+    private let configurationQueue = DispatchQueue(label: "com.briefeed.audioservice.config")
     
     private init() {
+        perfLog.logService("BriefeedAudioService", method: "init", detail: "Started")
+        // Heavy initialization deferred until first actual use
+        perfLog.logService("BriefeedAudioService", method: "init", detail: "Completed")
+    }
+    
+    private func configureIfNeeded() {
+        configurationQueue.async { [weak self] in
+            guard let self = self, !self.isConfigured else {
+                perfLog.log("BriefeedAudioService already configured", category: .audio)
+                return
+            }
+            self.isConfigured = true
+            
+            perfLog.logService("BriefeedAudioService", method: "configureIfNeeded", detail: "Starting configuration")
+            Task {
+                await self.performConfiguration()
+            }
+        }
+    }
+    
+    @MainActor
+    private func performConfiguration() async {
+        perfLog.startOperation("BriefeedAudioService.performConfiguration")
+        
+        perfLog.startOperation("BriefeedAudioService.setupAudioSession")
         setupAudioSession()
+        perfLog.endOperation("BriefeedAudioService.setupAudioSession")
+        
+        perfLog.startOperation("BriefeedAudioService.setupAudioPlayer")
         setupAudioPlayer()
+        perfLog.endOperation("BriefeedAudioService.setupAudioPlayer")
+        
+        perfLog.startOperation("BriefeedAudioService.setupSleepTimer")
         setupSleepTimer()
-        restoreQueue()
+        perfLog.endOperation("BriefeedAudioService.setupSleepTimer")
+        
+        perfLog.startOperation("BriefeedAudioService.restoreQueueAsync")
+        await restoreQueueAsync()
+        perfLog.endOperation("BriefeedAudioService.restoreQueueAsync")
+        
+        perfLog.startOperation("BriefeedAudioService.setupPeriodicMaintenance")
         setupPeriodicMaintenance()
+        perfLog.endOperation("BriefeedAudioService.setupPeriodicMaintenance")
+        
+        perfLog.endOperation("BriefeedAudioService.performConfiguration")
     }
     
     // MARK: - Setup
     
     private func setupAudioSession() {
+        perfLog.logService("BriefeedAudioService", method: "setupAudioSession", detail: "Starting")
         // Configure AVAudioSession
         let audioSession = AVAudioSession.sharedInstance()
         
@@ -85,6 +139,17 @@ final class BriefeedAudioService: ObservableObject {
             print("✅ Audio session configured for BriefeedAudioService")
         } catch {
             print("❌ Failed to configure audio session: \(error)")
+            print("📱 Error code: \((error as NSError).code)")
+            print("📱 Error domain: \((error as NSError).domain)")
+            // Error -50 typically means invalid parameter. Try without setActive
+            if (error as NSError).code == -50 {
+                do {
+                    try audioSession.setCategory(.playback, mode: .default, options: [])
+                    print("✅ Audio session configured with basic options")
+                } catch {
+                    print("❌ Failed to configure audio session with basic options: \(error)")
+                }
+            }
         }
     }
     
@@ -116,15 +181,26 @@ final class BriefeedAudioService: ObservableObject {
     
     /// Play an article (generates TTS if needed)
     func playArticle(_ article: Article, context: PlaybackContext = .direct) async {
-        isLoading = true
-        playbackContext = context
-        lastError = nil
+        perfLog.startOperation("BriefeedAudioService.playArticle")
+        print("📢 BriefeedAudioService: playArticle called")
+        print("  Article: \(article.title ?? "Unknown")")
+        print("  Context: \(context)")
+        perfLog.logService("BriefeedAudioService", method: "playArticle", detail: "Article: \(article.title ?? "Unknown")")
         
-        // Update current article for UI compatibility
-        currentArticle = article
+        // Ensure service is configured
+        configureIfNeeded()
         
-        // Update current playback item immediately for UI
-        currentPlaybackItem = CurrentPlaybackItem(from: article)
+        await MainActor.run {
+            isLoading = true
+            playbackContext = context
+            lastError = nil
+            
+            // Update current article for UI compatibility
+            currentArticle = article
+            
+            // Update current playback item immediately for UI
+            currentPlaybackItem = CurrentPlaybackItem(from: article)
+        }
         
         // Generate or get cached audio
         let result = await ttsGenerator.generateAudio(for: article)
@@ -147,25 +223,36 @@ final class BriefeedAudioService: ObservableObject {
             
         case .failure(let error):
             print("❌ Failed to generate audio: \(error)")
-            lastError = error
-            isLoading = false
+            await MainActor.run {
+                lastError = error
+                isLoading = false
+            }
             await ProcessingStatusService.shared.updateError(error.localizedDescription)
         }
+        
+        perfLog.endOperation("BriefeedAudioService.playArticle")
     }
     
     /// Play an RSS episode
     func playRSSEpisode(_ episode: RSSEpisode, context: PlaybackContext = .direct) async {
+        perfLog.startOperation("BriefeedAudioService.playRSSEpisode")
+        print("📻 BriefeedAudioService: playRSSEpisode called")
+        print("  Episode: \(episode.title)")
+        print("  Context: \(context)")
+        perfLog.logService("BriefeedAudioService", method: "playRSSEpisode", detail: "Episode: \(episode.title)")
         guard let audioURL = URL(string: episode.audioUrl) else {
             print("❌ Invalid audio URL for RSS episode")
             return
         }
         
-        isLoading = true
-        playbackContext = context
-        lastError = nil
-        
-        // Update current playback item
-        currentPlaybackItem = CurrentPlaybackItem(from: episode)
+        await MainActor.run {
+            isLoading = true
+            playbackContext = context
+            lastError = nil
+            
+            // Update current playback item
+            currentPlaybackItem = CurrentPlaybackItem(from: episode)
+        }
         
         // Create audio item
         let audioContent = RSSEpisodeAudioContent(episode: episode)
@@ -177,11 +264,15 @@ final class BriefeedAudioService: ObservableObject {
         
         // Play the item
         await playAudioItem(audioItem)
+        perfLog.endOperation("BriefeedAudioService.playRSSEpisode")
     }
     
     /// Play a specific audio item
     private func playAudioItem(_ item: BriefeedAudioItem) async {
-        currentItem = item
+        perfLog.startOperation("BriefeedAudioService.playAudioItem")
+        await MainActor.run {
+            currentItem = item
+        }
         
         // Load and play the item
         audioPlayer.load(item: item, playWhenReady: true)
@@ -191,6 +282,7 @@ final class BriefeedAudioService: ObservableObject {
         
         // Pregenerate next items if in queue
         pregenerateUpcomingItems()
+        perfLog.endOperation("BriefeedAudioService.playAudioItem")
     }
     
     /// Toggle play/pause
@@ -204,11 +296,17 @@ final class BriefeedAudioService: ObservableObject {
     
     /// Play
     func play() {
+        perfLog.logService("BriefeedAudioService", method: "play", detail: "Current: \(currentItem?.content.title ?? "None")")
+        print("🎵 BriefeedAudioService: play() called")
+        print("  Current item: \(currentItem?.content.title ?? "None")")
+        print("  Queue size: \(queue.count)")
         audioPlayer.play()
     }
     
     /// Pause
     func pause() {
+        perfLog.logService("BriefeedAudioService", method: "pause")
+        print("⏸️ BriefeedAudioService: pause() called")
         audioPlayer.pause()
         
         // Update history
@@ -226,19 +324,23 @@ final class BriefeedAudioService: ObservableObject {
             historyManager.addToHistory(item, position: currentTime, duration: duration)
         }
         
-        currentItem = nil
-        currentPlaybackItem = nil
+        Task { @MainActor in
+            currentItem = nil
+            currentPlaybackItem = nil
+        }
     }
     
     /// Skip forward
     func skipForward() {
         let interval: TimeInterval = currentItem?.content.contentType == .article ? 15 : 30
+        print("⏩ BriefeedAudioService: skipForward(\(interval)s) called")
         seek(to: currentTime + interval)
     }
     
     /// Skip backward
     func skipBackward() {
         let interval: TimeInterval = currentItem?.content.contentType == .article ? 15 : 30
+        print("⏪ BriefeedAudioService: skipBackward(\(interval)s) called")
         seek(to: max(0, currentTime - interval))
     }
     
@@ -271,7 +373,9 @@ final class BriefeedAudioService: ObservableObject {
         let audioItem = BriefeedAudioItem(content: audioContent)
         
         // Insert into queue
-        queue.insert(audioItem, at: insertIndex)
+        Task { @MainActor in
+            queue.insert(audioItem, at: insertIndex)
+        }
         saveQueue()
         
         // Start generating TTS in background
@@ -290,13 +394,18 @@ final class BriefeedAudioService: ObservableObject {
     
     /// Play RSS episode with URL support
     func playRSSEpisode(url: URL, title: String, episode: RSSEpisode?) async {
+        print("📻 BriefeedAudioService: playRSSEpisode(url:) called")
+        print("  URL: \(url)")
+        print("  Title: \(title)")
         if let episode = episode {
             await playRSSEpisode(episode)
         } else {
             // Direct URL playback without episode data
-            isLoading = true
-            playbackContext = .direct
-            lastError = nil
+            await MainActor.run {
+                isLoading = true
+                playbackContext = .direct
+                lastError = nil
+            }
             
             // Create temporary minimal RSS content
             let tempContent = MinimalRSSContent(
@@ -315,7 +424,9 @@ final class BriefeedAudioService: ObservableObject {
             )
             
             // Update current playback item from the temp item
-            currentPlaybackItem = CurrentPlaybackItem(from: tempItem)
+            await MainActor.run {
+                currentPlaybackItem = CurrentPlaybackItem(from: tempItem)
+            }
             
             await playAudioItem(tempItem)
         }
@@ -333,7 +444,9 @@ final class BriefeedAudioService: ObservableObject {
         let audioContent = ArticleAudioContent(article: article)
         let audioItem = BriefeedAudioItem(content: audioContent)
         
-        queue.append(audioItem)
+        Task { @MainActor in
+            queue.append(audioItem)
+        }
         saveQueue()
         
         // Start generating TTS in background
@@ -356,7 +469,9 @@ final class BriefeedAudioService: ObservableObject {
             isTemporary: false
         )
         
-        queue.append(audioItem)
+        Task { @MainActor in
+            queue.append(audioItem)
+        }
         saveQueue()
     }
     
@@ -370,7 +485,9 @@ final class BriefeedAudioService: ObservableObject {
         
         guard queueIndex + 1 < queue.count else { return }
         
-        queueIndex += 1
+        await MainActor.run {
+            queueIndex += 1
+        }
         let nextItem = queue[queueIndex]
         
         // Ensure audio is ready
@@ -389,7 +506,9 @@ final class BriefeedAudioService: ObservableObject {
     func playPrevious() async {
         guard queueIndex > 0 else { return }
         
-        queueIndex -= 1
+        await MainActor.run {
+            queueIndex -= 1
+        }
         let previousItem = queue[queueIndex]
         
         await playAudioItem(previousItem)
@@ -399,15 +518,20 @@ final class BriefeedAudioService: ObservableObject {
     func removeFromQueue(at index: Int) {
         guard index >= 0 && index < queue.count else { return }
         
-        queue.remove(at: index)
+        Task { @MainActor in
+            queue.remove(at: index)
+            
+            // Adjust current index if needed
+            if index < queueIndex {
+                queueIndex -= 1
+            } else if index == queueIndex {
+                // Will handle below
+            }
+        }
         
-        // Adjust current index if needed
-        if index < queueIndex {
-            queueIndex -= 1
-        } else if index == queueIndex {
+        if index == queueIndex {
             // Current item was removed, stop playback
             stop()
-            queueIndex = min(queueIndex, queue.count - 1)
         }
         
         saveQueue()
@@ -415,8 +539,10 @@ final class BriefeedAudioService: ObservableObject {
     
     /// Clear queue
     func clearQueue() {
-        queue.removeAll()
-        queueIndex = -1
+        Task { @MainActor in
+            queue.removeAll()
+            queueIndex = -1
+        }
         saveQueue()
         stop()
     }
@@ -591,10 +717,14 @@ final class BriefeedAudioService: ObservableObject {
         UserDefaults.standard.set(queueIndex, forKey: "\(queuePersistenceKey)_index")
     }
     
-    private func restoreQueue() {
+    private func restoreQueueAsync() async {
+        perfLog.logService("BriefeedAudioService", method: "restoreQueueAsync", detail: "Starting")
         guard let queueData = UserDefaults.standard.array(forKey: queuePersistenceKey) as? [[String: Any]] else {
+            perfLog.log("No saved queue data found", category: .audio)
             return
         }
+        
+        perfLog.log("Restoring \(queueData.count) items from saved queue", category: .audio)
         
         queue = queueData.compactMap { data -> BriefeedAudioItem? in
             guard let contentTypeString = data["contentType"] as? String,
@@ -659,16 +789,20 @@ final class BriefeedAudioService: ObservableObject {
                 try? audioPlayer.jumpToItem(atIndex: queueIndex)
             }
         }
+        
+        perfLog.logService("BriefeedAudioService", method: "restoreQueueAsync", detail: "Restored \(queue.count) items")
     }
 }
 
 // MARK: - SwiftAudioEx Integration
 extension BriefeedAudioService {
     private func setupAudioPlayer() {
+        perfLog.logService("BriefeedAudioService", method: "setupAudioPlayer", detail: "Configuring SwiftAudioEx player")
         // Configure audio player
         audioPlayer.bufferDuration = 2.0
         audioPlayer.automaticallyWaitsToMinimizeStalling = true
         audioPlayer.automaticallyUpdateNowPlayingInfo = true
+        audioPlayer.volume = volume
         
         // Configure remote commands
         audioPlayer.remoteCommands = [
@@ -679,69 +813,92 @@ extension BriefeedAudioService {
             .next, .previous
         ]
         
-        // Subscribe to events
-        audioPlayer.event.stateChange.addListener(self) { [weak self] state in
-            self?.handleStateChange(state)
-        }
-        
-        audioPlayer.event.secondElapse.addListener(self) { [weak self] seconds in
-            self?.currentTime = seconds
-            // Update progress publisher
-            if let duration = self?.duration, duration > 0 {
-                let progressValue = Float(seconds / duration)
-                self?.progress.send(progressValue)
+        // Defer event listeners to avoid immediate triggering
+        Task { @MainActor in
+            // Subscribe to events
+            audioPlayer.event.stateChange.addListener(self) { [weak self] state in
+                self?.handleStateChange(state)
             }
+            
+            audioPlayer.event.secondElapse.addListener(self) { [weak self] seconds in
+                Task { @MainActor in
+                    guard let self = self else { return }
+                    self.currentTime = seconds
+                    // Update progress publisher
+                    if self.duration > 0 {
+                        let progressValue = Float(seconds / self.duration)
+                        self.progress.send(progressValue)
+                    }
+                }
+            }
+            
+            audioPlayer.event.updateDuration.addListener(self) { [weak self] duration in
+                Task { @MainActor in
+                    self?.duration = duration
+                }
+            }
+            
+            audioPlayer.event.currentItem.addListener(self) { [weak self] itemData in
+                // itemData is a tuple (item, index, lastItem, lastIndex, lastPosition)
+                self?.handleCurrentItemChanged(itemData.item as? BriefeedAudioItem)
+            }
+            
+            audioPlayer.event.playbackEnd.addListener(self) { [weak self] reason in
+                self?.handlePlaybackEnd(reason)
+            }
+            
+            // Set up remote command center
+            setupRemoteCommands()
+            
+            // Setup Now Playing info
+            setupNowPlayingInfo()
+            
+            // Handle interruptions
+            setupInterruptionHandling()
         }
-        
-        audioPlayer.event.updateDuration.addListener(self) { [weak self] duration in
-            self?.duration = duration
-        }
-        
-        audioPlayer.event.currentItem.addListener(self) { [weak self] itemData in
-            // itemData is a tuple (item, index, lastItem, lastIndex, lastPosition)
-            self?.handleCurrentItemChanged(itemData.item as? BriefeedAudioItem)
-        }
-        
-        audioPlayer.event.playbackEnd.addListener(self) { [weak self] reason in
-            self?.handlePlaybackEnd(reason)
-        }
-        
-        // Set up remote command center
-        setupRemoteCommands()
-        
-        // Setup Now Playing info
-        setupNowPlayingInfo()
-        
-        // Handle interruptions
-        setupInterruptionHandling()
     }
     
     private func handleStateChange(_ state: AVPlayerWrapperState) {
+        perfLog.logService("BriefeedAudioService", method: "handleStateChange", detail: "State: \(state)")
         // AVPlayerWrapperState from SwiftAudioEx
-        switch state {
-        case .loading:
-            isLoading = true
-            isPlaying = false
-            self.state.send(.loading)
-        case .playing:
-            isLoading = false
-            isPlaying = true
-            self.state.send(.playing)
-        case .paused:
-            isLoading = false
-            isPlaying = false
-            self.state.send(.paused)
-        case .idle, .ready:
-            isLoading = false
-            isPlaying = false
-            self.state.send(.idle)
-        case .failed:
-            isLoading = false
-            isPlaying = false
-            // SwiftAudioEx doesn't provide error details in state
-            self.state.send(.idle)
-        @unknown default:
-            break
+        Task { @MainActor in
+            switch state {
+            case .loading:
+                self.isLoading = true
+                self.isPlaying = false
+                self.state.send(.loading)
+            case .playing:
+                self.isLoading = false
+                self.isPlaying = true
+                self.state.send(.playing)
+            case .paused:
+                self.isLoading = false
+                self.isPlaying = false
+                self.state.send(.paused)
+            case .idle, .ready:
+                self.isLoading = false
+                self.isPlaying = false
+                self.state.send(.idle)
+            case .buffering:
+                self.isLoading = true
+                self.isPlaying = false
+                self.state.send(.loading)
+            case .stopped:
+                self.isLoading = false
+                self.isPlaying = false
+                self.state.send(.idle)
+            case .ended:
+                self.isLoading = false
+                self.isPlaying = false
+                self.state.send(.idle)
+            case .failed:
+                self.isLoading = false
+                self.isPlaying = false
+                // SwiftAudioEx doesn't provide error details in state
+                self.state.send(.idle)
+            @unknown default:
+                break
+            }
         }
     }
     
@@ -768,8 +925,10 @@ extension BriefeedAudioService {
     private func handleCurrentItemChanged(_ item: AudioItem?) {
         // Update current item info
         if let item = item as? BriefeedAudioItem {
-            currentItem = item
-            currentPlaybackItem = CurrentPlaybackItem(from: item)
+            Task { @MainActor in
+                currentItem = item
+                currentPlaybackItem = CurrentPlaybackItem(from: item)
+            }
             
             // Update Now Playing info
             setupNowPlayingInfo()
@@ -901,7 +1060,12 @@ extension BriefeedAudioService {
             // Optionally resume playback
             break
             
-        default:
+        case .categoryChange, .override, .wakeFromSleep, .noSuitableRouteForCategory,
+             .routeConfigurationChange, .unknown:
+            // Handle other known cases
+            break
+            
+        @unknown default:
             break
         }
     }

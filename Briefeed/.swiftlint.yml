@@ -1,0 +1,173 @@
+# SwiftLint Configuration for Briefeed iOS App
+# This configuration helps catch common issues that cause UI freezes and performance problems
+
+# Paths to include
+included:
+  - Briefeed
+
+# Paths to exclude
+excluded:
+  - Briefeed/build
+  - Briefeed/Pods
+  - Briefeed/DerivedData
+  - Briefeed/**/*Tests.swift
+  - Briefeed/**/*Test.swift
+
+# Rules configuration
+opt_in_rules:
+  # Performance & UI Issues
+  - contains_over_filter_count
+  - contains_over_filter_is_empty
+  - contains_over_first_not_nil
+  - contains_over_range_nil_comparison
+  - empty_collection_literal
+  - empty_count
+  - empty_string
+  - first_where
+  - flatmap_over_map_reduce
+  - last_where
+  - reduce_into
+  - sorted_first_last
+  
+  # SwiftUI Best Practices
+  - modifier_order
+  - prefer_self_in_static_references
+  - unneeded_synthesized_initializer
+  
+  # Memory Management
+  - weak_delegate
+  - unowned_variable_capture
+  
+  # Code Quality
+  - attributes
+  - closure_end_indentation
+  - closure_spacing
+  - collection_alignment
+  - discouraged_object_literal
+  - explicit_init
+  - fallthrough
+  - fatal_error_message
+  - file_header
+  - identical_operands
+  - implicit_return
+  - joined_default_parameter
+  - let_var_whitespace
+  - literal_expression_end_indentation
+  - multiline_arguments
+  - multiline_function_chains
+  - multiline_literal_brackets
+  - multiline_parameters
+  - operator_usage_whitespace
+  - overridden_super_call
+  - pattern_matching_keywords
+  - prefer_self_type_over_type_of_self
+  - redundant_nil_coalescing
+  - redundant_type_annotation
+  - single_test_class
+  - sorted_imports
+  - switch_case_on_newline
+  - trailing_closure
+  - unneeded_parentheses_in_closure_argument
+  - vertical_parameter_alignment_on_call
+  - yoda_condition
+  
+  # Debugging & Logging
+  # - no_print_statements  # We'll enable after debugging is done
+  
+disabled_rules:
+  - todo
+  - file_length
+
+# Custom rule configurations
+line_length:
+  warning: 150
+  error: 200
+  ignores_comments: true
+  ignores_urls: true
+
+type_body_length:
+  warning: 500
+  error: 1000
+
+function_body_length:
+  warning: 60
+  error: 100
+
+cyclomatic_complexity:
+  warning: 15
+  error: 20
+
+nesting:
+  type_level: 2
+  function_level: 3
+
+identifier_name:
+  min_length:
+    warning: 2
+    error: 1
+  max_length:
+    warning: 60
+    error: 80
+  excluded:
+    - id
+    - vm
+    - vc
+    - to
+    - x
+    - y
+    - z
+
+# Custom Rules for Common SwiftUI Issues
+custom_rules:
+  avoid_print_in_body:
+    name: "Avoid print in SwiftUI body"
+    regex: 'var\s+body:\s+some\s+View\s*\{[^}]*[^/]\s*print\('
+    message: "Avoid print statements in SwiftUI body as they cause re-renders"
+    severity: error
+    excluded:
+      - ".*TestMinimalView.swift"
+    
+  avoid_state_in_observable:
+    name: "Avoid @State in ObservableObject"
+    regex: 'class[^}]*ObservableObject[^}]*@State'
+    message: "Use @Published instead of @State in ObservableObject classes"
+    severity: error
+    
+  published_private_set:
+    name: "Published properties should have private setters"
+    regex: '@Published\s+var\s+\w+:'
+    message: "Consider using @Published private(set) var for properties that shouldn't be modified externally"
+    severity: warning
+    
+  avoid_force_unwrap:
+    name: "Avoid force unwrapping"
+    regex: '[^!]![^=]'
+    message: "Force unwrapping can cause crashes. Use optional binding or nil-coalescing instead"
+    severity: warning
+    
+  timer_cleanup:
+    name: "Timer cleanup required"
+    regex: 'Timer\.scheduledTimer|Timer\.publish'
+    message: "Ensure timers are invalidated in deinit to prevent memory leaks"
+    severity: warning
+    
+  combine_cleanup:
+    name: "Combine subscription cleanup"
+    regex: '\.sink\s*\{|\.assign\('
+    message: "Store Combine subscriptions in cancellables and clean up in deinit"
+    severity: warning
+    
+  main_actor_required:
+    name: "UI updates need @MainActor"
+    regex: '@Published[^@]*class(?!.*@MainActor)'
+    message: "Classes with @Published properties that update UI should be marked with @MainActor"
+    severity: warning
+    
+  avoid_continuous_updates:
+    name: "Avoid continuous UI updates"
+    regex: 'Timer\.scheduledTimer.*TimeInterval:\s*0\.[0-2]'
+    message: "Timers with intervals < 0.3s can cause UI performance issues"
+    severity: warning
+
+# Reporter type (xcode, json, csv, markdown, github-actions-logging)
+reporter: "xcode"

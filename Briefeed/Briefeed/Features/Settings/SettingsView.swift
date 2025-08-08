@@ -13,7 +13,7 @@ struct SettingsView: View {
     @State private var showingDocumentPicker = false
     @State private var showingProcessingHistory = false
     @Environment(\.colorScheme) var colorScheme
-    @StateObject private var featureFlags = FeatureFlagManager.shared
+    // MIGRATION: Feature flags removed - using new services directly
     
     var body: some View {
         NavigationStack {
@@ -119,27 +119,28 @@ struct SettingsView: View {
                 // MARK: - Developer Settings Section
                 #if DEBUG
                 Section {
-                    Toggle("Use New Audio System", isOn: $featureFlags.useNewAudioService)
+                    // MIGRATION: Feature flags removed
+                    // Toggle("Use New Audio System", isOn: $featureFlags.useNewAudioService)
                     
-                    Toggle("Use New Audio Player UI", isOn: $featureFlags.useNewAudioPlayerUI)
+                    // Toggle("Use New Audio Player UI", isOn: $featureFlags.useNewAudioPlayerUI)
                     
-                    Toggle("Enable Playback History", isOn: $featureFlags.enablePlaybackHistory)
+                    // Toggle("Enable Playback History", isOn: $featureFlags.enablePlaybackHistory)
                     
-                    Toggle("Enable Audio Caching", isOn: $featureFlags.enableAudioCaching)
+                    // Toggle("Enable Audio Caching", isOn: $featureFlags.enableAudioCaching)
                     
-                    Toggle("Enable Sleep Timer", isOn: $featureFlags.enableSleepTimer)
+                    // Toggle("Enable Sleep Timer", isOn: $featureFlags.enableSleepTimer)
                     
                     HStack {
                         Text("Rollout Percentage")
                         Spacer()
-                        Text("\(featureFlags.rolloutPercentage)%")
+                        Text("100%") // All features enabled
                             .foregroundColor(.secondary)
                     }
                     
                     Slider(
                         value: Binding(
-                            get: { Double(featureFlags.rolloutPercentage) },
-                            set: { featureFlags.rolloutPercentage = Int($0) }
+                            get: { 100.0 },
+                            set: { _ in } // No-op, all features enabled
                         ),
                         in: 0...100,
                         step: 10
@@ -147,13 +148,13 @@ struct SettingsView: View {
                     
                     HStack(spacing: 12) {
                         Button("Enable All") {
-                            featureFlags.enableAllNewFeatures()
+                            // All features already enabled
                         }
                         .buttonStyle(.bordered)
                         .foregroundColor(.green)
                         
                         Button("Disable All") {
-                            featureFlags.disableAllNewFeatures()
+                            // Feature flags removed
                         }
                         .buttonStyle(.bordered)
                         .foregroundColor(.red)

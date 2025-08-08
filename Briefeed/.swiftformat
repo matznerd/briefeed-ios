@@ -1,0 +1,93 @@
+# SwiftFormat Configuration
+# Ensures consistent code formatting across the project
+
+# Format Options
+--swiftversion 5.9
+--self remove # Remove unnecessary self
+--importgrouping testable-bottom # Group @testable imports at bottom
+--commas always # Always use trailing commas in multi-line
+--trimwhitespace always # Remove trailing whitespace
+--indent 4 # 4 spaces
+--indentcase false # Don't indent case statements
+--ifdef no-indent # Don't indent compiler directives
+--stripunusedargs closure-only # Remove unused closure args
+--maxwidth 150 # Line width limit
+
+# Wrap Options
+--wraparguments before-first
+--wrapparameters before-first
+--wrapcollections before-first
+--closingparen balanced
+
+# Rules to enable
+--enable andOperator
+--enable anyObjectProtocol
+--enable blankLinesAroundMark
+--enable blankLinesAtEndOfScope
+--enable blankLinesAtStartOfScope
+--enable blankLinesBetweenScopes
+--enable consecutiveBlankLines
+--enable consecutiveSpaces
+--enable duplicateImports
+--enable elseOnSameLine
+--enable emptyBraces
+--enable enumNamespaces
+--enable extensionAccessControl
+--enable hoistPatternLet
+--enable indent
+--enable isEmpty
+--enable leadingDelimiters
+--enable linebreakAtEndOfFile
+--enable markTypes
+--enable numberFormatting
+--enable preferKeyPath
+--enable redundantBackticks
+--enable redundantBreak
+--enable redundantExtensionACL
+--enable redundantFileprivate
+--enable redundantGet
+--enable redundantInit
+--enable redundantLet
+--enable redundantLetError
+--enable redundantNilInit
+--enable redundantObjc
+--enable redundantParens
+--enable redundantPattern
+--enable redundantRawValues
+--enable redundantReturn
+--enable redundantSelf
+--enable redundantType
+--enable redundantVoidReturnType
+--enable semicolons
+--enable sortedImports
+--enable spaceAroundBraces
+--enable spaceAroundBrackets
+--enable spaceAroundComments
+--enable spaceAroundGenerics
+--enable spaceAroundOperators
+--enable spaceAroundParens
+--enable spaceInsideBraces
+--enable spaceInsideBrackets
+--enable spaceInsideComments
+--enable spaceInsideGenerics
+--enable spaceInsideParens
+--enable strongOutlets
+--enable todos
+--enable trailingClosures
+--enable trailingCommas
+--enable trailingSpace
+--enable typeSugar
+--enable unusedArguments
+--enable void
+--enable yodaConditions
+
+# Rules to disable
+--disable blankLinesAroundMark
+--disable wrapMultilineStatementBraces
+
+# Exclude paths
+--exclude Pods
+--exclude .build
+--exclude build
+--exclude DerivedData
+--exclude Package.swift

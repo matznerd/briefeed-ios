@@ -10,11 +10,16 @@ import CoreData
 import Combine
 
 /// Modern queue service that manages the app's playback queue
-@MainActor
 class QueueServiceV2: ObservableObject {
     
     // MARK: - Singleton
-    static let shared = QueueServiceV2()
+    private static var _shared: QueueServiceV2?
+    static var shared: QueueServiceV2 {
+        if _shared == nil {
+            _shared = QueueServiceV2()
+        }
+        return _shared!
+    }
     
     // MARK: - Published Properties
     @Published private(set) var queue: [EnhancedQueueItem] = []
@@ -25,23 +30,52 @@ class QueueServiceV2: ObservableObject {
     private let userDefaults = UserDefaults.standard
     private let queueKey = "EnhancedAudioQueueV2"
     private let indexKey = "EnhancedAudioQueueIndexV2"
-    private let audioService = BriefeedAudioService.shared
+    private lazy var audioService = BriefeedAudioService.shared
     private let geminiService = GeminiService()
     private var cancellables = Set<AnyCancellable>()
     
     // Background TTS generation
     private var ttsGenerationTasks: [UUID: Task<Void, Never>] = [:]
     
+    // Deferred sync timer to avoid UI freezes
+    private var deferredSyncTimer: Timer?
+    private var needsSync = false
+    
     // MARK: - Initialization
+    private var hasInitialized = false
+    
     private init() {
-        loadQueue()
+        perfLog.logService("QueueServiceV2", method: "init", detail: "Started")
+        // Don't do ANY initialization here
+        // Everything will be done in initialize() method
+    }
+    
+    /// Call this after views are rendered
+    func initialize() {
+        guard !hasInitialized else { 
+            perfLog.log("QueueServiceV2.initialize: Already initialized", category: .warning)
+            return 
+        }
+        hasInitialized = true
+        
+        perfLog.startOperation("QueueServiceV2.initialize")
+        
+        // Setup observers immediately
         setupObservers()
+        
+        // Load queue asynchronously to avoid blocking
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.loadQueue()
+        }
+        
+        perfLog.endOperation("QueueServiceV2.initialize")
     }
     
     // MARK: - Setup
     private func setupObservers() {
         // Observe when BriefeedAudioService finishes playing an item
         audioService.$currentItem
+            .dropFirst() // Skip initial value to avoid immediate update
             .sink { [weak self] currentItem in
                 self?.updateCurrentIndex(for: currentItem)
             }
@@ -52,20 +86,25 @@ class QueueServiceV2: ObservableObject {
     
     /// Add an article to the queue
     func addArticle(_ article: Article, playNext: Bool = false) async {
+        print("📥 QueueServiceV2: Adding article to queue")
+        print("  Title: \(article.title ?? "Unknown")")
+        print("  PlayNext: \(playNext)")
         guard let articleID = article.id else { return }
         
         // Check if already in queue
-        if queue.contains(where: { $0.articleID == articleID }) {
+        if await MainActor.run(body: { queue.contains(where: { $0.articleID == articleID }) }) {
             return
         }
         
         // Create enhanced queue item
         let item = EnhancedQueueItem(from: article)
         
-        if playNext && currentIndex >= 0 {
-            queue.insert(item, at: currentIndex + 1)
-        } else {
-            queue.append(item)
+        await MainActor.run {
+            if playNext && currentIndex >= 0 {
+                queue.insert(item, at: currentIndex + 1)
+            } else {
+                queue.append(item)
+            }
         }
         
         saveQueue()
@@ -73,12 +112,17 @@ class QueueServiceV2: ObservableObject {
         // Start background TTS generation
         startTTSGeneration(for: article)
         
-        // Sync with audio service
-        await syncToAudioService()
+        // Schedule deferred sync to avoid UI freeze
+        await MainActor.run {
+            scheduleDeferredSync()
+        }
     }
     
     /// Add an RSS episode to the queue
     func addRSSEpisode(_ episode: RSSEpisode, playNext: Bool = false) {
+        print("📥 QueueServiceV2: Adding RSS episode to queue")
+        print("  Title: \(episode.title)")
+        print("  PlayNext: \(playNext)")
         // Check if already in queue
         if queue.contains(where: { $0.audioUrl?.absoluteString == episode.audioUrl }) {
             return
@@ -95,10 +139,8 @@ class QueueServiceV2: ObservableObject {
         
         saveQueue()
         
-        // RSS episodes don't need TTS generation
-        Task {
-            await syncToAudioService()
-        }
+        // Schedule deferred sync to avoid UI freeze
+        scheduleDeferredSync()
     }
     
     /// Remove an item from the queue
@@ -124,9 +166,8 @@ class QueueServiceV2: ObservableObject {
         
         saveQueue()
         
-        Task {
-            await syncToAudioService()
-        }
+        // Schedule deferred sync to avoid UI freeze
+        scheduleDeferredSync()
     }
     
     /// Reorder the queue
@@ -142,21 +183,24 @@ class QueueServiceV2: ObservableObject {
         
         saveQueue()
         
-        Task {
-            await syncToAudioService()
-        }
+        // Schedule deferred sync to avoid UI freeze
+        scheduleDeferredSync()
     }
     
     /// Clear the entire queue
     func clearQueue() {
-        // Cancel all TTS generation tasks
-        for task in ttsGenerationTasks.values {
-            task.cancel()
+        Task { @MainActor in
+            print("🗑️ QueueServiceV2: Clearing queue")
+            print("  Previous size: \(queue.count)")
+            // Cancel all TTS generation tasks
+            for task in ttsGenerationTasks.values {
+                task.cancel()
+            }
+            ttsGenerationTasks.removeAll()
+            
+            queue.removeAll()
+            currentIndex = -1
         }
-        ttsGenerationTasks.removeAll()
-        
-        queue.removeAll()
-        currentIndex = -1
         saveQueue()
         
         audioService.clearQueue()
@@ -176,6 +220,9 @@ class QueueServiceV2: ObservableObject {
     
     /// Play the next item in the queue
     func playNext() async {
+        print("⏭️ QueueServiceV2: playNext() called")
+        print("  Queue size: \(queue.count)")
+        print("  Current index: \(currentIndex)")
         guard currentIndex + 1 < queue.count else { return }
         
         currentIndex += 1
@@ -224,7 +271,7 @@ class QueueServiceV2: ObservableObject {
                 // Play directly from URL if episode not found
                 await audioService.playRSSEpisode(
                     url: audioUrl,
-                    title: item.title ?? "Unknown",
+                    title: item.title,
                     episode: nil
                 )
             }
@@ -298,10 +345,10 @@ class QueueServiceV2: ObservableObject {
             var data: [String: Any] = [
                 "id": item.id.uuidString,
                 "type": item.type.rawValue,
-                "dateAdded": item.dateAdded
+                "dateAdded": item.addedDate
             ]
             
-            if let title = item.title { data["title"] = title }
+            data["title"] = item.title
             if let author = item.author { data["author"] = author }
             if let articleID = item.articleID { data["articleID"] = articleID.uuidString }
             if let audioUrl = item.audioUrl { data["audioUrl"] = audioUrl.absoluteString }
@@ -315,12 +362,21 @@ class QueueServiceV2: ObservableObject {
     }
     
     private func loadQueue() {
-        // Load queue items
-        guard let queueData = userDefaults.array(forKey: queueKey) as? [[String: Any]] else {
+        perfLog.startOperation("QueueServiceV2.loadQueue")
+        print("📋 QueueServiceV2: Loading queue from UserDefaults...")
+        
+        // Load queue items from UserDefaults
+        guard let queueData = self.userDefaults.array(forKey: self.queueKey) as? [[String: Any]] else {
+            print("  ⚠️ No saved queue data found")
+            perfLog.log("No saved queue data found", category: .queue)
+            perfLog.endOperation("QueueServiceV2.loadQueue")
             return
         }
         
-        queue = queueData.compactMap { data -> EnhancedQueueItem? in
+        perfLog.log("Found \(queueData.count) items in saved queue", category: .queue)
+        print("  📦 Found \(queueData.count) items in saved queue")
+        
+        let loadedQueue = queueData.compactMap { data -> EnhancedQueueItem? in
             guard let idString = data["id"] as? String,
                   let id = UUID(uuidString: idString),
                   let typeString = data["type"] as? String,
@@ -347,54 +403,134 @@ class QueueServiceV2: ObservableObject {
             )
         }
         
-        currentIndex = userDefaults.integer(forKey: indexKey)
+        let loadedIndex = self.userDefaults.integer(forKey: self.indexKey)
+        
+        // Update on main thread if needed
+        if Thread.isMainThread {
+            self.queue = loadedQueue
+            self.currentIndex = loadedIndex
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.queue = loadedQueue
+                self.currentIndex = loadedIndex
+            }
+        }
+        
+        print("  ✅ Loaded \(loadedQueue.count) items into queue")
+        print("  📍 Current index from storage: \(loadedIndex)")
         
         // Validate current index
-        if currentIndex >= queue.count {
-            currentIndex = queue.isEmpty ? -1 : 0
+        var finalIndex = loadedIndex
+        if !loadedQueue.isEmpty && loadedIndex == -1 {
+            // If we have items but no current index, set to first item
+            finalIndex = 0
+            print("  🔧 Setting current index to 0 since queue has items")
+        } else if loadedIndex >= loadedQueue.count {
+            finalIndex = loadedQueue.isEmpty ? -1 : 0
+            print("  🔧 Adjusted current index to: \(finalIndex)")
         }
         
-        // Sync with audio service on startup
-        Task {
-            await syncToAudioService()
+        if finalIndex != loadedIndex {
+            if Thread.isMainThread {
+                self.currentIndex = finalIndex
+            } else {
+                DispatchQueue.main.async { [weak self] in
+                    self?.currentIndex = finalIndex
+                }
+            }
         }
+        
+        // Schedule initial sync after UI is ready
+        DispatchQueue.main.async { [weak self] in
+            self?.scheduleDeferredSync(delay: 2.0)
+        }
+        
+        perfLog.endOperation("QueueServiceV2.loadQueue")
     }
     
     // MARK: - Core Data Helpers
     
     private func fetchArticle(id: UUID) async -> Article? {
-        let context = PersistenceController.shared.container.viewContext
-        let request: NSFetchRequest<Article> = Article.fetchRequest()
-        request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
-        request.fetchLimit = 1
-        
-        do {
-            let articles = try context.fetch(request)
-            return articles.first
-        } catch {
-            print("Failed to fetch article: \(error)")
-            return nil
+        return await MainActor.run {
+            let context = PersistenceController.shared.container.viewContext
+            let request: NSFetchRequest<Article> = Article.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
+            request.fetchLimit = 1
+            
+            do {
+                let articles = try context.fetch(request)
+                return articles.first
+            } catch {
+                print("Failed to fetch article: \(error)")
+                return nil
+            }
         }
     }
     
     private func fetchRSSEpisode(audioUrl: String) async -> RSSEpisode? {
-        let context = PersistenceController.shared.container.viewContext
-        let request: NSFetchRequest<RSSEpisode> = RSSEpisode.fetchRequest()
-        request.predicate = NSPredicate(format: "audioUrl == %@", audioUrl)
-        request.fetchLimit = 1
-        
-        do {
-            let episodes = try context.fetch(request)
-            return episodes.first
-        } catch {
-            print("Failed to fetch RSS episode: \(error)")
-            return nil
+        return await MainActor.run {
+            let context = PersistenceController.shared.container.viewContext
+            let request: NSFetchRequest<RSSEpisode> = RSSEpisode.fetchRequest()
+            request.predicate = NSPredicate(format: "audioUrl == %@", audioUrl)
+            request.fetchLimit = 1
+            
+            do {
+                let episodes = try context.fetch(request)
+                return episodes.first
+            } catch {
+                print("Failed to fetch RSS episode: \(error)")
+                return nil
+            }
         }
     }
 }
 
 // MARK: - Convenience Methods
+// MARK: - Deferred Sync
+
 extension QueueServiceV2 {
+    
+    /// Schedule a deferred sync to avoid UI freezes
+    private func scheduleDeferredSync(delay: TimeInterval = 0.5) {
+        perfLog.log("QueueServiceV2.scheduleDeferredSync: Scheduling sync with delay \(delay)s", category: .queue)
+        needsSync = true
+        
+        // Cancel existing timer
+        if deferredSyncTimer != nil {
+            perfLog.log("QueueServiceV2.scheduleDeferredSync: Cancelling existing timer", category: .queue)
+        }
+        deferredSyncTimer?.invalidate()
+        
+        // Schedule new sync
+        deferredSyncTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            perfLog.log("QueueServiceV2.deferredSyncTimer fired", category: .queue)
+            guard let self = self, self.needsSync else { 
+                perfLog.log("QueueServiceV2.deferredSyncTimer: No sync needed", category: .queue)
+                return 
+            }
+            
+            Task {
+                await self.performDeferredSync()
+            }
+        }
+    }
+    
+    /// Perform the actual sync in a way that won't freeze UI
+    private func performDeferredSync() async {
+        guard needsSync else { 
+            perfLog.log("QueueServiceV2.performDeferredSync: No sync needed", category: .queue)
+            return 
+        }
+        needsSync = false
+        
+        perfLog.startOperation("QueueServiceV2.performDeferredSync")
+        // Perform sync on background queue
+        await Task.detached(priority: .background) {
+            await self.syncToAudioService()
+        }.value
+        perfLog.endOperation("QueueServiceV2.performDeferredSync")
+    }
     
     /// Check if an article is in the queue
     func isArticleInQueue(_ articleID: UUID) -> Bool {
