@@ -174,10 +174,12 @@ final class AppViewModel: ObservableObject {
     private func setupCombineSubscriptions() {
         guard !hasSetupSubscriptions else {
             print("⚠️ AppViewModel: Subscriptions already set up, skipping...")
+            perfLog.log("Subscriptions already set up", category: .warning)
             return
         }
         hasSetupSubscriptions = true
         
+        perfLog.startOperation("AppViewModel.setupCombineSubscriptions")
         print("🔄 AppViewModel: Setting up Combine subscriptions...")
         
         // Subscribe to audio service changes with throttling
@@ -280,6 +282,8 @@ final class AppViewModel: ObservableObject {
         }
         
         print("✅ AppViewModel: Combine subscriptions setup complete")
+        perfLog.endOperation("AppViewModel.setupCombineSubscriptions")
+        perfLog.log("✅ Subscriptions setup complete - UI should now be reactive", category: .general)
     }
     
     // MARK: - Service Connection
@@ -301,65 +305,77 @@ final class AppViewModel: ObservableObject {
         print("🚀 AppViewModel: Connecting to services...")
         perfLog.logService("AppViewModel", method: "connectToServices", detail: "Starting service connections")
         
-        // Get services (singletons are already initialized)
-        perfLog.startOperation("Get BriefeedAudioService")
-        print("  🎵 Getting BriefeedAudioService...")
-        audioService = BriefeedAudioService.shared
-        perfLog.endOperation("Get BriefeedAudioService")
-        
-        perfLog.startOperation("Get QueueServiceV2")
-        print("  📋 Getting QueueServiceV2...")
-        queueService = QueueServiceV2.shared
-        perfLog.endOperation("Get QueueServiceV2")
-        
-        perfLog.startOperation("Get ArticleStateManager")
-        print("  📊 Getting ArticleStateManager...")
-        stateManager = ArticleStateManager.shared
-        perfLog.endOperation("Get ArticleStateManager")
-        
-        perfLog.startOperation("Get ProcessingStatusService")
-        print("  ⚙️ Getting ProcessingStatusService...")
-        statusService = ProcessingStatusService.shared
-        perfLog.endOperation("Get ProcessingStatusService")
-        
-        perfLog.startOperation("Get RSSAudioService")
-        print("  📻 Getting RSSAudioService...")
-        rssService = RSSAudioService.shared
-        perfLog.endOperation("Get RSSAudioService")
-        
-        // Initialize services (these are lightweight operations)
-        perfLog.startOperation("Initialize services")
-        queueService?.initialize()
-        stateManager?.initialize()
-        rssService?.initialize()
-        perfLog.endOperation("Initialize services")
-        
-        // DISABLED: Polling causes UI freezes
-        // startPolling()
-        
-        // Initial state sync only
-        perfLog.startOperation("Initial state sync")
-        await syncState()
-        perfLog.endOperation("Initial state sync")
-        
-        // TEMPORARILY DISABLED to test if this causes freeze
-        // setupCombineSubscriptions()
-        
-        // Load initial data on background thread
-        await Task.detached(priority: .userInitiated) {
-            perfLog.startOperation("Load initial data")
-            await self.loadArticles()
-            await self.loadRSSFeeds()
-            perfLog.endOperation("Load initial data")
-            
-            // Initialize RSS features (moved from BriefeedApp.init)
-            perfLog.startOperation("Initialize RSS features")
-            await self.initializeRSSFeatures()
-            perfLog.endOperation("Initialize RSS features")
-        }.value
-        
+        // Mark as connected immediately so UI can render
         servicesConnected = true
-        isConnectingServices = false
+        
+        // Move ALL heavy initialization to background thread
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self = self else { return }
+            
+            // Get service singletons in background (even this can be slow!)
+            perfLog.startOperation("Get services")
+            
+            // Time each service access to find the slow one
+            let audioStart = CFAbsoluteTimeGetCurrent()
+            let audio = BriefeedAudioService.shared
+            print("⏱️ BriefeedAudioService.shared: \(CFAbsoluteTimeGetCurrent() - audioStart)s")
+            
+            let queueStart = CFAbsoluteTimeGetCurrent()
+            let queue = QueueServiceV2.shared
+            print("⏱️ QueueServiceV2.shared: \(CFAbsoluteTimeGetCurrent() - queueStart)s")
+            
+            // SKIP THESE FOR NOW - They're causing the 11+ second hang
+            // let state = await ArticleStateManager.shared
+            // let status = ProcessingStatusService.shared
+            // let rss = await RSSAudioService.shared
+            
+            print("🔴 SKIPPING ArticleStateManager, ProcessingStatusService, and RSSAudioService to test")
+            
+            perfLog.endOperation("Get services")
+            
+            // Set services and setup subscriptions on MainActor
+            await MainActor.run {
+                self.audioService = audio
+                self.queueService = queue
+                // SKIP: self.stateManager = state
+                // SKIP: self.statusService = status
+                // SKIP: self.rssService = rss
+                self.setupCombineSubscriptions()
+            }
+            
+            // Initialize services in background
+            perfLog.startOperation("Initialize services")
+            queue.initialize()
+            // SKIP: await state.initialize()
+            // SKIP: await rss.initialize()
+            perfLog.endOperation("Initialize services")
+            
+            // Initial state sync
+            perfLog.startOperation("Initial state sync")
+            await self.syncState()
+            perfLog.endOperation("Initial state sync")
+            
+            // SKIP LOADING DATA FOR NOW - This might be the issue
+            // perfLog.startOperation("Load initial data")
+            // await self.loadArticles()
+            // await self.loadRSSFeeds()
+            // perfLog.endOperation("Load initial data")
+            
+            // SKIP RSS FEATURES FOR NOW
+            // perfLog.startOperation("Initialize RSS features")
+            // await self.initializeRSSFeatures()
+            // perfLog.endOperation("Initialize RSS features")
+            
+            print("🔴 SKIPPING data loading and RSS features to isolate hang")
+            
+            // Update loading state when done
+            await MainActor.run {
+                self.isConnectingServices = false
+                perfLog.log("✅ Background initialization complete", category: .general)
+            }
+        }
+        // Keep loading flag true until background task completes
+        // isConnectingServices = false // This will be set by the background task
         print("✅ AppViewModel: Connected and initialized")
         perfLog.logService("AppViewModel", method: "connectToServices", detail: "Completed successfully")
         perfLog.endOperation("AppViewModel.connectToServices")

@@ -525,10 +525,10 @@ extension QueueServiceV2 {
         needsSync = false
         
         perfLog.startOperation("QueueServiceV2.performDeferredSync")
-        // Perform sync on background queue
-        await Task.detached(priority: .background) {
+        // Perform sync on background queue WITHOUT blocking with .value
+        Task.detached(priority: .background) {
             await self.syncToAudioService()
-        }.value
+        }
         perfLog.endOperation("QueueServiceV2.performDeferredSync")
     }
     
