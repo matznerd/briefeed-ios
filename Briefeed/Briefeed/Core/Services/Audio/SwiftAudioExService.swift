@@ -120,9 +120,15 @@ final class SwiftAudioExService: NSObject {
     
     private func setupPlayer() {
         // Configure player events
-        player.event.stateChange.addListener(self, handleStateChange)
-        player.event.playbackEnd.addListener(self, handlePlaybackEnd)
-        player.event.fail.addListener(self, handlePlaybackFailure)
+        player.event.stateChange.addListener(self) { [weak self] state in
+            self?.handleStateChange(state: state)
+        }
+        player.event.playbackEnd.addListener(self) { [weak self] reason in
+            self?.handlePlaybackEnd(reason: reason)
+        }
+        player.event.fail.addListener(self) { [weak self] error in
+            self?.handlePlaybackFailure(error: error)
+        }
         
         // Enable remote control
         player.remoteCommands = [
@@ -130,8 +136,7 @@ final class SwiftAudioExService: NSObject {
             .pause,
             .skipForward(preferredIntervals: [30]),
             .skipBackward(preferredIntervals: [15]),
-            .changePlaybackPosition,
-            .changePlaybackRate
+            .changePlaybackPosition
         ]
         
         // Configure buffer
@@ -204,10 +209,10 @@ final class SwiftAudioExService: NSObject {
         // Create audio item with metadata
         let audioItem = DefaultAudioItem(
             audioUrl: url.absoluteString,
-            sourceType: url.isFileURL ? .file : .stream,
+            artist: "TTS",
             title: url.lastPathComponent,
             albumTitle: "Briefeed",
-            artist: "TTS",
+            sourceType: url.isFileURL ? .file : .stream,
             artwork: nil
         )
         
@@ -275,28 +280,25 @@ final class SwiftAudioExService: NSObject {
         queue = urls
         currentIndex = -1
         
-        // Create audio items
-        let items = urls.map { url in
-            DefaultAudioItem(
-                audioUrl: url.absoluteString,
-                sourceType: url.isFileURL ? .file : .stream,
-                title: url.lastPathComponent,
-                albumTitle: "Briefeed",
-                artist: "TTS",
-                artwork: nil
-            )
-        }
-        
-        // Load queue
-        if !items.isEmpty {
-            player.load(items: items, playWhenReady: false)
-        }
+        // For SwiftAudioEx, we'll manage the queue ourselves
+        // and load items individually when needed
     }
     
     func playNext() {
         if currentIndex < queue.count - 1 {
             currentIndex += 1
-            player.next()
+            let url = queue[currentIndex]
+            
+            // Create and load next item
+            let audioItem = DefaultAudioItem(
+                audioUrl: url.absoluteString,
+                artist: "TTS",
+                title: url.lastPathComponent,
+                albumTitle: "Briefeed",
+                sourceType: url.isFileURL ? .file : .stream,
+                artwork: nil
+            )
+            player.load(item: audioItem, playWhenReady: true)
             startProgressTimer()
         }
     }
@@ -304,7 +306,18 @@ final class SwiftAudioExService: NSObject {
     func playPrevious() {
         if currentIndex > 0 {
             currentIndex -= 1
-            player.previous()
+            let url = queue[currentIndex]
+            
+            // Create and load previous item
+            let audioItem = DefaultAudioItem(
+                audioUrl: url.absoluteString,
+                artist: "TTS",
+                title: url.lastPathComponent,
+                albumTitle: "Briefeed",
+                sourceType: url.isFileURL ? .file : .stream,
+                artwork: nil
+            )
+            player.load(item: audioItem, playWhenReady: true)
             startProgressTimer()
         }
     }
@@ -317,16 +330,12 @@ final class SwiftAudioExService: NSObject {
             self.state = .idle
         case .loading:
             self.state = .loading
-        case .ready:
-            self.state = .paused
         case .playing:
             self.state = .playing
         case .paused:
             self.state = .paused
         case .stopped:
             self.state = .stopped
-        case .failed:
-            self.state = .error(TTSError.generationFailed)
         }
     }
     
@@ -348,6 +357,14 @@ final class SwiftAudioExService: NSObject {
         case .jumpedToIndex:
             // Continue playing
             break
+        case .cleared:
+            // Queue was cleared
+            state = .stopped
+            delegate?.audioDidFinishPlaying(successfully: false)
+        case .failed:
+            // Playback failed
+            state = .error(TTSError.generationFailed)
+            delegate?.audioDidFinishPlaying(successfully: false)
         @unknown default:
             break
         }
