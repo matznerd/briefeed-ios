@@ -34,11 +34,24 @@ class UnifiedQueueItem: ObservableObject, Identifiable {
         case rssEpisode
     }
     
-    enum GenerationState {
+    enum GenerationState: Equatable {
         case pending
         case generating
         case ready
         case failed(Error)
+        
+        static func == (lhs: GenerationState, rhs: GenerationState) -> Bool {
+            switch (lhs, rhs) {
+            case (.pending, .pending), 
+                 (.generating, .generating), 
+                 (.ready, .ready):
+                return true
+            case (.failed(_), .failed(_)):
+                return true
+            default:
+                return false
+            }
+        }
     }
     
     init(article: Article) {
@@ -56,7 +69,11 @@ class UnifiedQueueItem: ObservableObject, Identifiable {
         self.type = .rssEpisode
         self.title = episode.title ?? "Untitled Episode"
         self.content = episode.episodeDescription
-        self.audioURL = URL(string: episode.audioUrl ?? "")
+        if let audioUrlString = episode.audioUrl {
+            self.audioURL = URL(string: audioUrlString)
+        } else {
+            self.audioURL = nil
+        }
         self.article = nil
         self.episode = episode
     }

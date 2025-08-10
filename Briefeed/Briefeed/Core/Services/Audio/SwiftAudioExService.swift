@@ -324,7 +324,7 @@ final class SwiftAudioExService: NSObject {
     
     // MARK: - Private Methods
     
-    private func handleStateChange(state: AudioPlayerState) {
+    private func handleStateChange(state: AVPlayerWrapperState) {
         switch state {
         case .idle:
             self.state = .idle
@@ -336,6 +336,8 @@ final class SwiftAudioExService: NSObject {
             self.state = .paused
         case .stopped:
             self.state = .stopped
+        case .error(_):
+            self.state = .error(TTSError.generationFailed)
         }
     }
     
