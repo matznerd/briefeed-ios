@@ -10,7 +10,7 @@ import CoreData
 
 struct CombinedFeedView: View {
     @StateObject private var viewModel = CombinedFeedViewModel()
-    @StateObject private var stateManager = ArticleStateManager.shared
+    @EnvironmentObject var appViewModel: AppViewModel
     @State private var selectedFeedId: String = "all"
     @State private var selectedArticle: Article?
     @State private var showingAddFeed = false

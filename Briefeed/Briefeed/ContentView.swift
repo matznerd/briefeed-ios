@@ -10,7 +10,7 @@ import SwiftUI
 struct ContentView: View {
     @State private var selectedTab = 0
     @EnvironmentObject var userDefaultsManager: UserDefaultsManager
-    @ObservedObject private var audioService = AudioService.shared
+    @EnvironmentObject var audioPlayerViewModel: AudioPlayerViewModel
     @ObservedObject private var statusService = ProcessingStatusService.shared
     
     var body: some View {
@@ -53,7 +53,7 @@ struct ContentView: View {
                 .accentColor(.briefeedRed)
                 
                 // Audio player always visible
-                MiniAudioPlayer()
+                MiniAudioPlayerV3()
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             .onAppear {

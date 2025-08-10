@@ -11,6 +11,7 @@ import Combine
 
 struct SavedArticlesView: View {
     @StateObject private var viewModel = SavedArticlesViewModel()
+    @EnvironmentObject var appViewModel: AppViewModel
     @State private var selectedArticle: Article?
     
     var body: some View {

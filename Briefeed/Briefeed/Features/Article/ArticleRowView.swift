@@ -13,11 +13,12 @@ struct ArticleRowView: View {
     let onSave: () -> Void
     let onDelete: () -> Void
     
-    @StateObject private var stateManager = ArticleStateManager.shared
+    @EnvironmentObject var appViewModel: AppViewModel
     @State private var offset: CGFloat = 0
     @State private var isSwiped = false
     @State private var hasTriggeredHaptic = false
     @State private var isDragging = false
+    @State private var justCompletedSwipe = false
     @State private var waveformPhase: CGFloat = 0
     @State private var showActionButtons = false
     @State private var actionButtonsTimer: Timer?
@@ -60,7 +61,7 @@ struct ArticleRowView: View {
             articleContent
                 .background(Color.briefeedBackground)
                 .offset(x: offset)
-                .opacity(stateManager.isArchived(article) ? 0.5 : 1.0)
+                .opacity(appViewModel.isArticleArchived(article) ? 0.5 : 1.0)
                 .simultaneousGesture(swipeGesture)
                 .allowsHitTesting(!isDragging) // Disable tap while dragging
             
@@ -70,11 +71,8 @@ struct ArticleRowView: View {
             }
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.7, blendDuration: 0), value: offset)
-        .animation(.easeInOut(duration: 0.2), value: stateManager.isArchived(article))
+        .animation(.easeInOut(duration: 0.2), value: appViewModel.isArticleArchived(article))
         .animation(.easeInOut(duration: 0.2), value: showActionButtons)
-        .onAppear {
-            startWaveformAnimation()
-        }
         .onDisappear {
             actionButtonsTimer?.invalidate()
         }
@@ -84,8 +82,8 @@ struct ArticleRowView: View {
     
     private var articleContent: some View {
         Button(action: {
-            // Only trigger tap if we're not swiping
-            if !isDragging && offset == 0 {
+            // Only trigger tap if we're not swiping and didn't just complete a swipe
+            if !isDragging && offset == 0 && !justCompletedSwipe {
                 onTap()
             }
         }) {
@@ -150,18 +148,21 @@ struct ArticleRowView: View {
                     // Indicators
                     HStack(spacing: 12) {
                         // Playing indicator
-                        if stateManager.isPlaying(article) {
+                        if appViewModel.isArticlePlaying(article) {
                             HStack(spacing: 4) {
-                                if stateManager.isPlaying(article, withState: .playing) {
+                                if appViewModel.isPlaying {
                                     WaveformAnimationView(phase: $waveformPhase)
                                         .frame(width: 16, height: 12)
-                                } else if stateManager.isPlaying(article, withState: .paused) {
+                                        .onAppear {
+                                            startWaveformAnimation()
+                                        }
+                                } else {
                                     Image(systemName: "pause.fill")
                                         .font(.caption2)
                                         .foregroundColor(.briefeedRed)
-                                } else if stateManager.isPlaying(article, withState: .loading) {
-                                    ProgressView()
-                                        .scaleEffect(0.6)
+                                        .onAppear {
+                                            waveformPhase = 0
+                                        }
                                 }
                                 Text("Playing")
                                     .font(.caption2)
@@ -170,7 +171,7 @@ struct ArticleRowView: View {
                             .transition(.scale.combined(with: .opacity))
                         }
                         
-                        if !article.isRead && !stateManager.isPlaying(article) {
+                        if !article.isRead && !appViewModel.isArticlePlaying(article) {
                             HStack(spacing: 4) {
                                 Circle()
                                     .fill(Color.briefeedRed)
@@ -192,8 +193,8 @@ struct ArticleRowView: View {
                             }
                         }
                         
-                        if stateManager.isQueued(article) && !stateManager.isPlaying(article) {
-                            if let position = stateManager.queuePosition(for: article) {
+                        if appViewModel.isArticleQueued(article) && !appViewModel.isArticlePlaying(article) {
+                            if let position = appViewModel.queuePosition(for: article) {
                                 HStack(spacing: 4) {
                                     Image(systemName: "list.number")
                                         .font(.caption2)
@@ -205,7 +206,7 @@ struct ArticleRowView: View {
                             }
                         }
                         
-                        if stateManager.isArchived(article) {
+                        if appViewModel.isArticleArchived(article) {
                             HStack(spacing: 4) {
                                 Image(systemName: "archivebox.fill")
                                     .font(.caption2)
@@ -216,8 +217,8 @@ struct ArticleRowView: View {
                             }
                         }
                     }
-                    .animation(.easeInOut(duration: 0.2), value: stateManager.isPlaying(article))
-                    .animation(.easeInOut(duration: 0.2), value: stateManager.isQueued(article))
+                    .animation(.easeInOut(duration: 0.2), value: appViewModel.isArticlePlaying(article))
+                    .animation(.easeInOut(duration: 0.2), value: appViewModel.isArticleQueued(article))
                 }
                 
                 Spacer()
@@ -345,6 +346,11 @@ struct ArticleRowView: View {
                                 // Archive action
                                 performArchiveAction()
                             }
+                            justCompletedSwipe = true
+                            // Reset flag after a delay
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                justCompletedSwipe = false
+                            }
                         }
                         
                         // Reset position
@@ -376,7 +382,7 @@ struct ArticleRowView: View {
         // Add to audio queue if article is being saved
         if isBeingSaved {
             Task { @MainActor in
-                QueueService.shared.addToQueue(article)
+                await appViewModel.queueArticle(article)
             }
         }
         
@@ -389,13 +395,15 @@ struct ArticleRowView: View {
         HapticManager.shared.archiveAction()
         
         // Archive the article
-        Task { @MainActor in
-            stateManager.toggleArchiveState(for: article)
+        if appViewModel.isArticleArchived(article) {
+            appViewModel.unarchiveArticle(article)
+        } else {
+            appViewModel.archiveArticle(article)
         }
     }
     
     private func startWaveformAnimation() {
-        guard stateManager.isPlaying(article, withState: .playing) else { return }
+        guard appViewModel.isArticlePlaying(article) && appViewModel.isPlaying else { return }
         
         withAnimation(.linear(duration: 0.5).repeatForever(autoreverses: false)) {
             waveformPhase = 1.0
@@ -458,11 +466,7 @@ struct ArticleRowView: View {
         actionButtonsTimer?.invalidate()
         
         Task { @MainActor in
-            do {
-                try await AudioService.shared.playNow(article)
-            } catch {
-                print("Failed to play article: \(error)")
-            }
+            await appViewModel.play(article: article)
         }
     }
     
@@ -471,7 +475,8 @@ struct ArticleRowView: View {
         actionButtonsTimer?.invalidate()
         
         Task { @MainActor in
-            AudioService.shared.playAfterCurrent(article)
+            // Queue article immediately after current item
+            await appViewModel.queueArticle(article)
         }
     }
 }

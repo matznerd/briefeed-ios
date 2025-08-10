@@ -12,11 +12,19 @@ import AVFoundation
 struct BriefeedApp: App {
     let persistenceController = PersistenceController.shared
     @StateObject private var userDefaultsManager = UserDefaultsManager.shared
-    @StateObject private var queueService = QueueService.shared
+    @StateObject private var audioPlayerViewModel = AudioPlayerViewModel()
+    @StateObject private var appViewModel: AppViewModel
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     init() {
         print("🚀 BriefeedApp initializing...")
+        
+        // Create audio player view model
+        let audioVM = AudioPlayerViewModel()
+        _audioPlayerViewModel = StateObject(wrappedValue: audioVM)
+        
+        // Create app view model with audio player
+        _appViewModel = StateObject(wrappedValue: AppViewModel(audioPlayerViewModel: audioVM))
         
         // Initialize UserDefaults on app launch
         UserDefaultsManager.shared.loadSettings()
@@ -27,8 +35,14 @@ struct BriefeedApp: App {
         // Initialize RSS features
         initializeRSSFeatures()
         
-        // Create default feeds on first launch
+        // Initialize V2 services asynchronously (no UI freeze!)
         Task {
+            // Initialize services in background
+            await AudioServiceV2.shared.initialize()
+            await QueueServiceV2.shared.initialize()
+            await ArticleStateManagerV2.shared.initialize()
+            
+            // Create default feeds
             do {
                 try await DefaultDataService.shared.createDefaultFeedsIfNeeded()
             } catch {
@@ -44,17 +58,31 @@ struct BriefeedApp: App {
             ContentView()
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
                 .environmentObject(userDefaultsManager)
+                .environmentObject(audioPlayerViewModel)
+                .environmentObject(appViewModel)
                 .preferredColorScheme(userDefaultsManager.isDarkMode ? .dark : .light)
                 .onAppear {
                     print("🎯 ContentView appeared")
                     // Apply theme settings when window is ready
                     applyThemeSettings()
+                    
+                    // Connect ViewModels to services
+                    Task {
+                        await audioPlayerViewModel.connect()
+                        await appViewModel.connect()
+                    }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-                    queueService.handleAppDidBecomeActive()
+                    // Handle app becoming active with V2 services
+                    Task {
+                        await QueueServiceV2.shared.loadQueue()
+                    }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
-                    queueService.handleAppWillResignActive()
+                    // Handle app resigning active with V2 services
+                    Task {
+                        await QueueServiceV2.shared.saveQueue()
+                    }
                 }
         }
     }

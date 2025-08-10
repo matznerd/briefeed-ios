@@ -10,8 +10,8 @@ import CoreData
 
 struct BriefView: View {
     @StateObject private var viewModel = BriefViewModel()
-    @StateObject private var audioService = AudioService.shared
-    @StateObject private var stateManager = ArticleStateManager.shared
+    @EnvironmentObject var appViewModel: AppViewModel
+    @EnvironmentObject var audioPlayerViewModel: AudioPlayerViewModel
     @State private var editMode = EditMode.inactive
     @State private var showingClearQueueAlert = false
     
@@ -108,19 +108,21 @@ struct BriefView: View {
     @ViewBuilder
     private func queueRowForArticle(_ article: Article, at index: Int) -> some View {
         let queuePosition = viewModel.queuedArticles.count - index
-        let isPlaying = audioService.currentArticle?.id == article.id
-        let isNext = audioService.queueIndex > 0 && index == audioService.queueIndex - 1
+        let isPlaying = appViewModel.isArticlePlaying(article)
+        let isNext = audioPlayerViewModel.currentQueueIndex == index + 1
         
         QueuedArticleRow(
             article: article,
             queuePosition: queuePosition,
             isCurrentlyPlaying: isPlaying,
-            audioState: stateManager.audioState,
+            audioState: isPlaying && appViewModel.isPlaying ? .playing : .paused,
             isNextToPlay: isNext
         )
         .contentShape(Rectangle())
         .onTapGesture {
-            viewModel.playArticle(article)
+            Task {
+                await appViewModel.play(article: article)
+            }
         }
         .listRowInsets(EdgeInsets())
         .listRowSeparator(.hidden)

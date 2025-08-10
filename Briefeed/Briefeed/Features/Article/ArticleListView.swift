@@ -10,7 +10,7 @@ import SwiftUI
 struct ArticleListView: View {
     let feed: Feed
     @StateObject private var viewModel: ArticleListViewModel
-    @StateObject private var stateManager = ArticleStateManager.shared
+    @EnvironmentObject var appViewModel: AppViewModel
     @State private var showSavedOnly = false
     @State private var showUnreadOnly = false
     @State private var selectedArticle: Article?

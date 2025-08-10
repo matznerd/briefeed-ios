@@ -1,0 +1,351 @@
+//
+//  AudioStreamingService.swift
+//  Briefeed
+//
+//  High-performance audio streaming service supporting 4x playback speed
+//
+
+import Foundation
+import AVFoundation
+import SwiftAudioEx
+
+// MARK: - AudioStreamingService
+// Uses SwiftAudioEx for high-speed playback support (up to 4x)
+
+final class AudioStreamingService: NSObject {
+    
+    // MARK: - Singleton
+    static let shared = AudioStreamingService()
+    
+    // MARK: - Properties
+    private let player: AudioPlayer
+    private var currentItem: AudioItem?
+    
+    // State (no @Published!)
+    private(set) var state: AudioPlayerState = .idle {
+        didSet {
+            delegate?.streamingStateChanged(to: state, from: oldValue)
+        }
+    }
+    
+    private(set) var playbackRate: Float = 1.0 {
+        didSet {
+            delegate?.streamingRateChanged(to: playbackRate)
+        }
+    }
+    
+    private(set) var currentTime: TimeInterval = 0
+    private(set) var duration: TimeInterval = 0
+    private(set) var progress: Float = 0
+    
+    // Delegate
+    weak var delegate: AudioStreamingServiceDelegate?
+    
+    // MARK: - Initialization (LIGHTWEIGHT!)
+    private override init() {
+        // Configure audio player
+        let configuration = AudioConfiguration()
+        configuration.bufferDuration = 2.0 // Optimize for streaming
+        configuration.automaticallyUpdateNotificationCenter = true
+        
+        self.player = AudioPlayer(configuration: configuration)
+        
+        super.init()
+        
+        // Setup player delegate
+        player.delegate = self
+        
+        // Safety checks
+        SafetyMonitor.shared.checkSingletonNotObservable(self)
+        SafetyMonitor.shared.checkNoPublishedInService(self)
+    }
+    
+    // MARK: - Async Initialization
+    func initialize() async {
+        SafetyMonitor.shared.assertNotMainThread()
+        
+        // Configure audio session for high-quality playback
+        do {
+            try await configureAudioSession()
+        } catch {
+            print("⚠️ Failed to configure audio session: \(error)")
+        }
+        
+        // Setup remote commands
+        setupRemoteCommands()
+    }
+    
+    // MARK: - Audio Session Configuration
+    private func configureAudioSession() async throws {
+        let session = AVAudioSession.sharedInstance()
+        
+        try session.setCategory(
+            .playback,
+            mode: .default, // Use default mode for music/podcast playback
+            options: [.allowBluetooth, .allowBluetoothA2DP, .allowAirPlay]
+        )
+        
+        try session.setActive(true)
+    }
+    
+    // MARK: - Playback Control
+    
+    func load(url: URL, title: String? = nil, artist: String? = nil) async throws {
+        // Create audio item
+        let item = DefaultAudioItem(
+            audioUrl: url,
+            title: title ?? "Unknown",
+            artist: artist ?? "Briefeed",
+            sourceType: .stream
+        )
+        
+        currentItem = item
+        
+        // Load into player
+        try player.load(item: item)
+        
+        state = .loading
+        
+        // Wait for item to be ready
+        await waitForReady()
+    }
+    
+    func play() {
+        SafetyMonitor.shared.measureBlock(name: "AudioStreaming.play") {
+            player.play()
+            state = .playing
+        }
+    }
+    
+    func pause() {
+        SafetyMonitor.shared.measureBlock(name: "AudioStreaming.pause") {
+            player.pause()
+            state = .paused
+        }
+    }
+    
+    func stop() {
+        player.stop()
+        currentItem = nil
+        state = .stopped
+        progress = 0
+        currentTime = 0
+        duration = 0
+    }
+    
+    func seek(to time: TimeInterval) {
+        player.seek(to: time)
+        currentTime = time
+        updateProgress()
+    }
+    
+    func skipForward(seconds: TimeInterval = 15) {
+        let newTime = min(currentTime + seconds, duration)
+        seek(to: newTime)
+    }
+    
+    func skipBackward(seconds: TimeInterval = 15) {
+        let newTime = max(currentTime - seconds, 0)
+        seek(to: newTime)
+    }
+    
+    // MARK: - Playback Speed (Supports up to 4x!)
+    
+    func setRate(_ rate: Float) {
+        // SwiftAudioEx supports rates from 0.5x to 4.0x
+        let clampedRate = max(0.5, min(rate, 4.0))
+        
+        player.rate = clampedRate
+        playbackRate = clampedRate
+        
+        SafetyMonitor.shared.log("🎯 Set playback rate to \(clampedRate)x")
+    }
+    
+    func increaseSpeed() {
+        let speeds: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 3.5, 4.0]
+        if let currentIndex = speeds.firstIndex(where: { $0 >= playbackRate }),
+           currentIndex < speeds.count - 1 {
+            setRate(speeds[currentIndex + 1])
+        }
+    }
+    
+    func decreaseSpeed() {
+        let speeds: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 3.5, 4.0]
+        if let currentIndex = speeds.firstIndex(where: { $0 >= playbackRate }),
+           currentIndex > 0 {
+            setRate(speeds[currentIndex - 1])
+        }
+    }
+    
+    // MARK: - Volume Control
+    
+    func setVolume(_ volume: Float) {
+        player.volume = max(0.0, min(volume, 1.0))
+    }
+    
+    // MARK: - Queue Management
+    
+    func loadQueue(items: [URL]) {
+        let audioItems = items.map { url in
+            DefaultAudioItem(
+                audioUrl: url,
+                title: url.lastPathComponent,
+                artist: "Briefeed",
+                sourceType: .stream
+            )
+        }
+        
+        try? player.load(items: audioItems)
+    }
+    
+    func next() {
+        player.next()
+    }
+    
+    func previous() {
+        player.previous()
+    }
+    
+    // MARK: - Remote Commands
+    
+    private func setupRemoteCommands() {
+        player.remoteCommandController.handlePlayCommand = { [weak self] in
+            self?.play()
+            return .success
+        }
+        
+        player.remoteCommandController.handlePauseCommand = { [weak self] in
+            self?.pause()
+            return .success
+        }
+        
+        player.remoteCommandController.handleStopCommand = { [weak self] in
+            self?.stop()
+            return .success
+        }
+        
+        player.remoteCommandController.handleNextCommand = { [weak self] in
+            self?.next()
+            return .success
+        }
+        
+        player.remoteCommandController.handlePreviousCommand = { [weak self] in
+            self?.previous()
+            return .success
+        }
+        
+        player.remoteCommandController.handleChangePlaybackPositionCommand = { [weak self] position in
+            self?.seek(to: position)
+            return .success
+        }
+    }
+    
+    // MARK: - Private Helpers
+    
+    private func waitForReady() async {
+        // Wait for player to be ready
+        while player.playerState == .loading {
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second
+        }
+        
+        // Update duration once ready
+        duration = player.duration ?? 0
+        state = .ready
+    }
+    
+    private func updateProgress() {
+        if duration > 0 {
+            progress = Float(currentTime / duration)
+        } else {
+            progress = 0
+        }
+        
+        delegate?.streamingProgressUpdated(
+            progress: progress,
+            currentTime: currentTime,
+            duration: duration
+        )
+    }
+}
+
+// MARK: - AudioPlayerDelegate
+
+extension AudioStreamingService: AudioPlayerDelegate {
+    
+    func audioPlayerStateChanged(state: AudioPlayerState) {
+        switch state {
+        case .idle:
+            self.state = .idle
+        case .loading:
+            self.state = .loading
+        case .ready:
+            self.state = .ready
+        case .playing:
+            self.state = .playing
+        case .paused:
+            self.state = .paused
+        case .stopped:
+            self.state = .stopped
+        case .error(let error):
+            self.state = .error(error)
+        case .buffering:
+            self.state = .buffering
+        }
+    }
+    
+    func audioPlayerProgressChanged(progress: Float, currentTime: TimeInterval, duration: TimeInterval) {
+        self.currentTime = currentTime
+        self.duration = duration
+        self.progress = progress
+        
+        updateProgress()
+    }
+    
+    func audioPlayerDidFinishPlaying(successfully: Bool) {
+        state = .stopped
+        delegate?.streamingDidFinishPlaying(successfully: successfully)
+    }
+    
+    func audioPlayerDecodeError(_ error: Error?) {
+        state = .error(error ?? AudioServiceError.decodingError)
+        delegate?.streamingDecodeError(error)
+    }
+}
+
+// MARK: - Delegate Protocol
+
+protocol AudioStreamingServiceDelegate: AnyObject {
+    func streamingStateChanged(to newState: AudioPlayerState, from oldState: AudioPlayerState)
+    func streamingProgressUpdated(progress: Float, currentTime: TimeInterval, duration: TimeInterval)
+    func streamingRateChanged(to rate: Float)
+    func streamingDidFinishPlaying(successfully: Bool)
+    func streamingDecodeError(_ error: Error?)
+}
+
+// MARK: - Audio Item Implementation
+
+private class DefaultAudioItem: AudioItem {
+    var audioUrl: URL
+    var title: String?
+    var artist: String?
+    var sourceType: SourceType
+    
+    init(audioUrl: URL, title: String?, artist: String?, sourceType: SourceType) {
+        self.audioUrl = audioUrl
+        self.title = title
+        self.artist = artist
+        self.sourceType = sourceType
+    }
+}
+
+// MARK: - Extended Audio Player State
+
+extension AudioPlayerState {
+    static let buffering = AudioPlayerState.loading // Map buffering to loading
+}
+
+// MARK: - Audio Service Error Extension
+
+extension AudioServiceError {
+    static let decodingError = AudioServiceError.speechSynthesizerUnavailable
+}
