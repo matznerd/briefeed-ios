@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		8C3D090E2E48490400819F12 /* SwiftAudioEx in Frameworks */ = {isa = PBXBuildFile; productRef = 8C3D090D2E48490400819F12 /* SwiftAudioEx */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		8CA65EFB2E075E5F005E6FC0 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8C3D090E2E48490400819F12 /* SwiftAudioEx in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +117,7 @@
 			);
 			name = Briefeed;
 			packageProductDependencies = (
+				8C3D090D2E48490400819F12 /* SwiftAudioEx */,
 			);
 			productName = Briefeed;
 			productReference = 8CA65EE52E075E5C005E6FC0 /* Briefeed.app */;
@@ -195,6 +201,9 @@
 			);
 			mainGroup = 8CA65EDC2E075E5C005E6FC0;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				8C3D090C2E48490400819F12 /* XCRemoteSwiftPackageReference "SwiftAudioEx" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 8CA65EE62E075E5C005E6FC0 /* Products */;
 			projectDirPath = "";
@@ -558,6 +567,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		8C3D090C2E48490400819F12 /* XCRemoteSwiftPackageReference "SwiftAudioEx" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/doublesymmetry/SwiftAudioEx";
+			requirement = {
+				kind = exactVersion;
+				version = 1.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		8C3D090D2E48490400819F12 /* SwiftAudioEx */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8C3D090C2E48490400819F12 /* XCRemoteSwiftPackageReference "SwiftAudioEx" */;
+			productName = SwiftAudioEx;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 8CA65EDD2E075E5C005E6FC0 /* Project object */;
 }

@@ -93,7 +93,7 @@ class GeminiTTSService: ObservableObject {
     static let shared = GeminiTTSService()
     
     // MARK: - Properties
-    private let modelName = "models/gemini-2.5-flash-lite-tts"
+    private let modelName = "models/gemini-2.5-flash-preview-tts"
     private let defaultVoice = "Autonoe"
     
     // Available Gemini voices

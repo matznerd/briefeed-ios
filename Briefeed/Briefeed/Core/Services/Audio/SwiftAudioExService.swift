@@ -8,7 +8,8 @@
 
 import Foundation
 import AVFoundation
-// import SwiftAudioEx // Uncomment when ready to integrate
+import SwiftAudioEx
+import MediaPlayer
 
 // MARK: - Audio Player State
 
@@ -48,9 +49,13 @@ final class SwiftAudioExService: NSObject {
     
     // MARK: - Properties
     
-    // private let player = AudioPlayer() // SwiftAudioEx player
+    /// The SwiftAudioEx player instance
+    private let player = AudioPlayer()
+    
+    /// Delegate for state updates
     weak var delegate: SwiftAudioExServiceDelegate?
     
+    /// Current state
     private(set) var state: SwiftAudioPlayerState = .idle {
         didSet {
             if state != oldValue {
@@ -59,44 +64,134 @@ final class SwiftAudioExService: NSObject {
         }
     }
     
-    private(set) var isPlaying: Bool = false
-    private(set) var currentTime: TimeInterval = 0
-    private(set) var duration: TimeInterval = 0
-    private(set) var rate: Float = 1.0
+    /// Playback properties
+    var currentTime: TimeInterval {
+        return player.currentTime
+    }
+    
+    var duration: TimeInterval {
+        return player.duration
+    }
+    
+    var rate: Float {
+        return player.rate
+    }
+    
+    var isPlaying: Bool {
+        return player.playerState == .playing
+    }
+    
+    /// Queue management
+    private var queue: [URL] = []
+    private var currentIndex: Int = -1
+    
+    /// Progress timer
+    private var progressTimer: Timer?
+    
+    /// Background playback support
     private(set) var backgroundPlaybackEnabled: Bool = true
     
     // MARK: - Initialization
     
     override init() {
         super.init()
+        setupAudioSession()
         setupPlayer()
-        setupRemoteControl()
+        setupRemoteCommands()
         setupNotifications()
     }
     
-    private func setupPlayer() {
-        // Configure SwiftAudioEx player
-        // player.delegate = self
-        // player.bufferDuration = 2.0
-        // player.automaticallyUpdateNowPlayingInfo = true
+    deinit {
+        progressTimer?.invalidate()
+        NotificationCenter.default.removeObserver(self)
     }
     
-    private func setupRemoteControl() {
-        // Setup remote control commands
-        // let commandCenter = MPRemoteCommandCenter.shared()
-        // commandCenter.playCommand.addTarget { [weak self] _ in
-        //     self?.resume()
-        //     return .success
-        // }
-        // etc...
+    // MARK: - Setup
+    
+    private func setupAudioSession() {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .spokenAudio, options: [.allowBluetooth, .allowAirPlay])
+            try session.setActive(true)
+        } catch {
+            print("[SwiftAudioEx] Failed to setup audio session: \(error)")
+        }
+    }
+    
+    private func setupPlayer() {
+        // Configure player events
+        player.event.stateChange.addListener(self, handleStateChange)
+        player.event.playbackEnd.addListener(self, handlePlaybackEnd)
+        player.event.fail.addListener(self, handlePlaybackFailure)
+        
+        // Enable remote control
+        player.remoteCommands = [
+            .play,
+            .pause,
+            .skipForward(preferredIntervals: [30]),
+            .skipBackward(preferredIntervals: [15]),
+            .changePlaybackPosition,
+            .changePlaybackRate
+        ]
+        
+        // Configure buffer
+        player.bufferDuration = 2.0
+        player.automaticallyUpdateNowPlayingInfo = false // We'll manage this ourselves
+    }
+    
+    private func setupRemoteCommands() {
+        let commandCenter = MPRemoteCommandCenter.shared()
+        
+        commandCenter.playCommand.addTarget { [weak self] _ in
+            self?.resume()
+            return .success
+        }
+        
+        commandCenter.pauseCommand.addTarget { [weak self] _ in
+            self?.pause()
+            return .success
+        }
+        
+        commandCenter.skipForwardCommand.preferredIntervals = [30]
+        commandCenter.skipForwardCommand.addTarget { [weak self] _ in
+            self?.skipForward()
+            return .success
+        }
+        
+        commandCenter.skipBackwardCommand.preferredIntervals = [15]
+        commandCenter.skipBackwardCommand.addTarget { [weak self] _ in
+            self?.skipBackward()
+            return .success
+        }
+        
+        commandCenter.changePlaybackRateCommand.supportedPlaybackRates = [0.5, 1.0, 1.5, 2.0, 4.0, 8.0, 16.0, 20.0]
+        commandCenter.changePlaybackRateCommand.addTarget { [weak self] event in
+            if let rateEvent = event as? MPChangePlaybackRateCommandEvent {
+                self?.setRate(rateEvent.playbackRate)
+            }
+            return .success
+        }
+        
+        commandCenter.changePlaybackPositionCommand.addTarget { [weak self] event in
+            if let positionEvent = event as? MPChangePlaybackPositionCommandEvent {
+                self?.seek(to: positionEvent.positionTime)
+            }
+            return .success
+        }
     }
     
     private func setupNotifications() {
-        // Handle app lifecycle
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleInterruption),
             name: AVAudioSession.interruptionNotification,
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleRouteChange),
+            name: AVAudioSession.routeChangeNotification,
             object: nil
         )
     }
@@ -106,86 +201,195 @@ final class SwiftAudioExService: NSObject {
     func play(url: URL) async throws {
         state = .loading
         
-        // Create audio item
-        // let item = DefaultAudioItem(
-        //     audioUrl: url.absoluteString,
-        //     sourceType: url.isFileURL ? .file : .stream
-        // )
+        // Create audio item with metadata
+        let audioItem = DefaultAudioItem(
+            audioUrl: url.absoluteString,
+            sourceType: url.isFileURL ? .file : .stream,
+            title: url.lastPathComponent,
+            albumTitle: "Briefeed",
+            artist: "TTS",
+            artwork: nil
+        )
         
         // Load and play
-        // try await player.load(item: item)
-        // player.play()
+        player.load(item: audioItem, playWhenReady: true)
         
-        state = .playing
-        isPlaying = true
-    }
-    
-    func play(data: Data) async throws {
-        // Save data to temp file and play
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("mp3")
+        // Store in queue
+        if !queue.contains(url) {
+            queue.append(url)
+            currentIndex = queue.count - 1
+        }
         
-        try data.write(to: tempURL)
-        try await play(url: tempURL)
+        // Start progress timer
+        startProgressTimer()
     }
     
     func pause() {
-        // player.pause()
-        state = .paused
-        isPlaying = false
+        player.pause()
+        progressTimer?.invalidate()
     }
     
     func resume() {
-        // player.play()
-        state = .playing
-        isPlaying = true
+        player.play()
+        startProgressTimer()
     }
     
     func stop() {
-        // player.stop()
+        player.stop()
+        progressTimer?.invalidate()
         state = .stopped
-        isPlaying = false
-        currentTime = 0
     }
     
-    func seek(to time: TimeInterval) {
-        // player.seek(to: time)
-        currentTime = time
-    }
+    // MARK: - Speed Control
     
     func setRate(_ newRate: Float) {
-        // SwiftAudioEx supports up to 32x, we limit to 20x
-        let clampedRate = max(0.25, min(newRate, 20.0))
-        // player.rate = clampedRate
-        rate = clampedRate
+        // SwiftAudioEx supports rates from 0.25 to 32.0
+        // We limit to 0.5 to 20.0 for TTS clarity
+        let clampedRate = max(0.5, min(20.0, newRate))
+        player.rate = clampedRate
         delegate?.audioRateChanged(to: clampedRate)
+        
+        // Update Now Playing info
+        updateNowPlayingInfo()
+    }
+    
+    // MARK: - Seeking
+    
+    func seek(to time: TimeInterval) {
+        player.seek(to: time)
+    }
+    
+    func skipForward(_ seconds: TimeInterval = 30) {
+        let newTime = min(currentTime + seconds, duration)
+        seek(to: newTime)
+    }
+    
+    func skipBackward(_ seconds: TimeInterval = 15) {
+        let newTime = max(currentTime - seconds, 0)
+        seek(to: newTime)
     }
     
     // MARK: - Queue Management
     
-    func loadQueue(_ items: [URL]) async throws {
-        // Load multiple items
-        // let audioItems = items.map { url in
-        //     DefaultAudioItem(
-        //         audioUrl: url.absoluteString,
-        //         sourceType: url.isFileURL ? .file : .stream
-        //     )
-        // }
-        // try await player.load(items: audioItems)
+    func loadQueue(_ urls: [URL]) async throws {
+        queue = urls
+        currentIndex = -1
+        
+        // Create audio items
+        let items = urls.map { url in
+            DefaultAudioItem(
+                audioUrl: url.absoluteString,
+                sourceType: url.isFileURL ? .file : .stream,
+                title: url.lastPathComponent,
+                albumTitle: "Briefeed",
+                artist: "TTS",
+                artwork: nil
+            )
+        }
+        
+        // Load queue
+        if !items.isEmpty {
+            player.load(items: items, playWhenReady: false)
+        }
     }
     
     func playNext() {
-        // player.next()
+        if currentIndex < queue.count - 1 {
+            currentIndex += 1
+            player.next()
+            startProgressTimer()
+        }
     }
     
     func playPrevious() {
-        // player.previous()
+        if currentIndex > 0 {
+            currentIndex -= 1
+            player.previous()
+            startProgressTimer()
+        }
     }
     
-    // MARK: - Interruption Handling
+    // MARK: - Private Methods
     
-    @objc private func handleInterruption(_ notification: Notification) {
+    private func handleStateChange(state: AudioPlayerState) {
+        switch state {
+        case .idle:
+            self.state = .idle
+        case .loading:
+            self.state = .loading
+        case .ready:
+            self.state = .paused
+        case .playing:
+            self.state = .playing
+        case .paused:
+            self.state = .paused
+        case .stopped:
+            self.state = .stopped
+        case .failed:
+            self.state = .error(TTSError.generationFailed)
+        }
+    }
+    
+    private func handlePlaybackEnd(reason: PlaybackEndedReason) {
+        progressTimer?.invalidate()
+        
+        switch reason {
+        case .playedUntilEnd:
+            delegate?.audioDidFinishPlaying(successfully: true)
+            // Auto-play next if in queue
+            if currentIndex < queue.count - 1 {
+                playNext()
+            }
+        case .playerStopped:
+            delegate?.audioDidFinishPlaying(successfully: false)
+        case .skippedToNext, .skippedToPrevious:
+            // Continue playing
+            break
+        case .jumpedToIndex:
+            // Continue playing
+            break
+        @unknown default:
+            break
+        }
+    }
+    
+    private func handlePlaybackFailure(error: Error?) {
+        progressTimer?.invalidate()
+        state = .error(error ?? TTSError.generationFailed)
+        delegate?.audioDidFinishPlaying(successfully: false)
+    }
+    
+    private func startProgressTimer() {
+        progressTimer?.invalidate()
+        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.updateProgress()
+        }
+    }
+    
+    private func updateProgress() {
+        let progress = duration > 0 ? Float(currentTime / duration) : 0
+        delegate?.audioProgressUpdated(
+            progress: progress,
+            currentTime: currentTime,
+            duration: duration
+        )
+        updateNowPlayingInfo()
+    }
+    
+    private func updateNowPlayingInfo() {
+        var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+        
+        info[MPMediaItemPropertyPlaybackDuration] = duration
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
+        info[MPNowPlayingInfoPropertyPlaybackRate] = rate
+        info[MPMediaItemPropertyTitle] = queue.isEmpty ? "Briefeed" : queue[max(0, currentIndex)].lastPathComponent
+        info[MPMediaItemPropertyAlbumTitle] = "Briefeed"
+        info[MPMediaItemPropertyArtist] = "TTS"
+        
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+    
+    @objc private func handleInterruption(notification: Notification) {
         guard let info = notification.userInfo,
               let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
@@ -206,279 +410,23 @@ final class SwiftAudioExService: NSObject {
             break
         }
     }
-}
-
-// MARK: - SwiftAudioEx Player Delegate
-
-// extension SwiftAudioExService: AudioPlayerDelegate {
-//     func audioPlayer(_ player: AudioPlayer, didChangeState state: AudioPlayerState) {
-//         // Map SwiftAudioEx state to our state
-//     }
-//     
-//     func audioPlayer(_ player: AudioPlayer, didUpdateProgress progress: TimeInterval, duration: TimeInterval) {
-//         currentTime = progress
-//         self.duration = duration
-//         let progressFloat = duration > 0 ? Float(progress / duration) : 0
-//         delegate?.audioProgressUpdated(progress: progressFloat, currentTime: progress, duration: duration)
-//     }
-//     
-//     func audioPlayer(_ player: AudioPlayer, didFinishPlaying successfully: Bool) {
-//         delegate?.audioDidFinishPlaying(successfully: successfully)
-//     }
-// }
-
-// MARK: - TTS Generator Service
-
-final class TTSGeneratorService {
     
-    enum TTSError: Error {
-        case emptyText
-        case generationFailed
-        case fileWriteFailed
-    }
-    
-    private let cacheDirectory: URL
-    
-    init() {
-        // Setup cache directory
-        let cachePath = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        cacheDirectory = cachePath.appendingPathComponent("tts_audio", isDirectory: true)
-        
-        // Create directory if needed
-        try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
-    }
-    
-    func generateAudioFile(from text: String) async throws -> URL {
-        guard !text.isEmpty else {
-            throw TTSError.emptyText
+    @objc private func handleRouteChange(notification: Notification) {
+        guard let info = notification.userInfo,
+              let reasonValue = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else {
+            return
         }
         
-        // Check cache first
-        let cacheKey = text.hash
-        let cachedURL = cacheDirectory
-            .appendingPathComponent("\(cacheKey)")
-            .appendingPathExtension("mp3")
-        
-        if FileManager.default.fileExists(atPath: cachedURL.path) {
-            return cachedURL
-        }
-        
-        // Generate with Gemini TTS
-        let audioData = try await generateWithGeminiTTS(text: text)
-        
-        // Save to cache
-        try audioData.write(to: cachedURL)
-        
-        return cachedURL
-    }
-    
-    private func generateWithGeminiTTS(text: String) async throws -> Data {
-        // Call Gemini TTS service
-        // This will use the existing GeminiTTSService
-        // For now, return dummy data for testing
-        return Data()
-    }
-    
-    func clearCache() throws {
-        try FileManager.default.removeItem(at: cacheDirectory)
-        try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
-    }
-    
-    var cacheSize: Int64 {
-        let files = try? FileManager.default.contentsOfDirectory(
-            at: cacheDirectory,
-            includingPropertiesForKeys: [.fileSizeKey]
-        )
-        
-        return files?.reduce(0) { total, url in
-            let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
-            return total + Int64(size ?? 0)
-        } ?? 0
-    }
-}
-
-// MARK: - Unified Audio Player
-
-final class UnifiedAudioPlayer: ObservableObject {
-    
-    enum QueueItem {
-        case article(Article)
-        case rssEpisode(RSSEpisode)
-        
-        var title: String {
-            switch self {
-            case .article(let article):
-                return article.title ?? "Unknown"
-            case .rssEpisode(let episode):
-                return episode.title
-            }
-        }
-    }
-    
-    // MARK: - Properties
-    
-    private let audioService = SwiftAudioExService()
-    private let ttsGenerator = TTSGeneratorService()
-    
-    @Published private(set) var isPlaying: Bool = false
-    @Published private(set) var currentTitle: String?
-    @Published private(set) var currentAudioURL: URL?
-    @Published private(set) var currentIndex: Int = 0
-    @Published private(set) var currentTime: TimeInterval = 0
-    @Published private(set) var duration: TimeInterval = 0
-    @Published private(set) var isStreaming: Bool = false
-    
-    private var queue: [QueueItem] = []
-    
-    var rate: Float {
-        get { audioService.rate }
-        set { audioService.setRate(newValue) }
-    }
-    
-    var cacheSize: Int64 {
-        ttsGenerator.cacheSize
-    }
-    
-    // MARK: - Initialization
-    
-    init() {
-        audioService.delegate = self
-    }
-    
-    // MARK: - Playback
-    
-    func play(article: Article) async throws {
-        guard let content = article.content else { return }
-        
-        currentTitle = article.title
-        isStreaming = false
-        
-        // Generate TTS audio file
-        let audioFile = try await ttsGenerator.generateAudioFile(from: content)
-        currentAudioURL = audioFile
-        
-        // Play with SwiftAudioEx
-        try await audioService.play(url: audioFile)
-        isPlaying = true
-    }
-    
-    func play(episode: RSSEpisode) async throws {
-        guard let url = URL(string: episode.audioUrl) else { return }
-        
-        currentTitle = episode.title
-        currentAudioURL = url
-        isStreaming = true
-        
-        // Stream directly with SwiftAudioEx
-        try await audioService.play(url: url)
-        isPlaying = true
-    }
-    
-    func play() async throws {
-        guard currentIndex < queue.count else { return }
-        
-        let item = queue[currentIndex]
-        switch item {
-        case .article(let article):
-            try await play(article: article)
-        case .rssEpisode(let episode):
-            try await play(episode: episode)
-        }
-    }
-    
-    func playNext() async throws {
-        guard currentIndex < queue.count - 1 else { return }
-        currentIndex += 1
-        try await play()
-    }
-    
-    func pause() {
-        audioService.pause()
-        isPlaying = false
-    }
-    
-    func resume() {
-        audioService.resume()
-        isPlaying = true
-    }
-    
-    func seek(to time: TimeInterval) {
-        audioService.seek(to: time)
-        currentTime = time
-    }
-    
-    // MARK: - Queue Management
-    
-    func setQueue(_ items: [QueueItem]) async throws {
-        queue = items
-        currentIndex = 0
-    }
-    
-    // MARK: - State Persistence
-    
-    struct PlayerState: Codable {
-        let currentTime: TimeInterval
-        let playbackRate: Float
-        let currentItemTitle: String?
-        let currentIndex: Int
-        let queueItems: [String] // Simplified for example
-    }
-    
-    func saveState() -> PlayerState {
-        PlayerState(
-            currentTime: currentTime,
-            playbackRate: rate,
-            currentItemTitle: currentTitle,
-            currentIndex: currentIndex,
-            queueItems: queue.map { $0.title }
-        )
-    }
-    
-    func restoreState(_ state: PlayerState) async throws {
-        currentTime = state.currentTime
-        rate = state.playbackRate
-        currentTitle = state.currentItemTitle
-        currentIndex = state.currentIndex
-        // Note: Would need to restore actual queue items from Core Data
-        
-        if currentTime > 0 {
-            audioService.seek(to: currentTime)
+        switch reason {
+        case .oldDeviceUnavailable:
+            // Headphones were unplugged
+            pause()
+        default:
+            break
         }
     }
 }
 
-// MARK: - SwiftAudioExServiceDelegate
-
-extension UnifiedAudioPlayer: SwiftAudioExServiceDelegate {
-    func audioStateChanged(to newState: SwiftAudioPlayerState, from oldState: SwiftAudioPlayerState) {
-        DispatchQueue.main.async { [weak self] in
-            switch newState {
-            case .playing:
-                self?.isPlaying = true
-            case .paused, .stopped:
-                self?.isPlaying = false
-            default:
-                break
-            }
-        }
-    }
-    
-    func audioProgressUpdated(progress: Float, currentTime: TimeInterval, duration: TimeInterval) {
-        DispatchQueue.main.async { [weak self] in
-            self?.currentTime = currentTime
-            self?.duration = duration
-        }
-    }
-    
-    func audioRateChanged(to rate: Float) {
-        // Handle rate change if needed
-    }
-    
-    func audioDidFinishPlaying(successfully: Bool) {
-        if successfully {
-            Task { [weak self] in
-                try? await self?.playNext()
-            }
-        }
-    }
-}
+// MARK: - Unified Audio Player (moved to separate file for clarity)
+// This should be in UnifiedAudioPlayer.swift
