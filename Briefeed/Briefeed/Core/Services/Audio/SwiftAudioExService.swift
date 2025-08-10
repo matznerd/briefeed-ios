@@ -12,7 +12,7 @@ import AVFoundation
 
 // MARK: - Audio Player State
 
-enum AudioPlayerState: Equatable {
+enum SwiftAudioPlayerState: Equatable {
     case idle
     case loading
     case playing
@@ -20,7 +20,7 @@ enum AudioPlayerState: Equatable {
     case stopped
     case error(Error)
     
-    static func == (lhs: AudioPlayerState, rhs: AudioPlayerState) -> Bool {
+    static func == (lhs: SwiftAudioPlayerState, rhs: SwiftAudioPlayerState) -> Bool {
         switch (lhs, rhs) {
         case (.idle, .idle), (.loading, .loading), (.playing, .playing),
              (.paused, .paused), (.stopped, .stopped):
@@ -36,7 +36,7 @@ enum AudioPlayerState: Equatable {
 // MARK: - Delegate Protocol
 
 protocol SwiftAudioExServiceDelegate: AnyObject {
-    func audioStateChanged(to newState: AudioPlayerState, from oldState: AudioPlayerState)
+    func audioStateChanged(to newState: SwiftAudioPlayerState, from oldState: SwiftAudioPlayerState)
     func audioProgressUpdated(progress: Float, currentTime: TimeInterval, duration: TimeInterval)
     func audioRateChanged(to rate: Float)
     func audioDidFinishPlaying(successfully: Bool)
@@ -51,7 +51,7 @@ final class SwiftAudioExService: NSObject {
     // private let player = AudioPlayer() // SwiftAudioEx player
     weak var delegate: SwiftAudioExServiceDelegate?
     
-    private(set) var state: AudioPlayerState = .idle {
+    private(set) var state: SwiftAudioPlayerState = .idle {
         didSet {
             if state != oldValue {
                 delegate?.audioStateChanged(to: state, from: oldValue)
@@ -363,8 +363,7 @@ final class UnifiedAudioPlayer: ObservableObject {
     }
     
     func play(episode: RSSEpisode) async throws {
-        guard let urlString = episode.audioUrl,
-              let url = URL(string: urlString) else { return }
+        guard let url = URL(string: episode.audioUrl) else { return }
         
         currentTitle = episode.title
         currentAudioURL = url
@@ -451,7 +450,7 @@ final class UnifiedAudioPlayer: ObservableObject {
 // MARK: - SwiftAudioExServiceDelegate
 
 extension UnifiedAudioPlayer: SwiftAudioExServiceDelegate {
-    func audioStateChanged(to newState: AudioPlayerState, from oldState: AudioPlayerState) {
+    func audioStateChanged(to newState: SwiftAudioPlayerState, from oldState: SwiftAudioPlayerState) {
         DispatchQueue.main.async { [weak self] in
             switch newState {
             case .playing:

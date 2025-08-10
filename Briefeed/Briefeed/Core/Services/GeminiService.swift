@@ -131,7 +131,7 @@ protocol GeminiServiceProtocol {
 class GeminiService: GeminiServiceProtocol {
     private let networkService: NetworkServiceProtocol
     private let apiKey: String
-    private let model = "gemini-2.0-flash-exp" // Latest fast model for summarization
+    private let model = "gemini-2.5-flash-lite" // Updated to faster model for better performance
     private var currentUsage: GeminiUsage?
     
     init(networkService: NetworkServiceProtocol = NetworkService.shared, apiKey: String? = nil) {

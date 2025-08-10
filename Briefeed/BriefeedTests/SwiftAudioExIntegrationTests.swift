@@ -9,6 +9,7 @@
 import XCTest
 import AVFoundation
 import CoreData
+import MediaPlayer
 @testable import Briefeed
 // @testable import SwiftAudioEx // Will be imported when enabled
 
@@ -23,10 +24,10 @@ class SwiftAudioExIntegrationTests: XCTestCase {
     override func setUp() {
         super.setUp()
         
-        // Will initialize services when implemented
-        // audioService = SwiftAudioExService()
-        // ttsService = TTSGeneratorService()
-        // unifiedPlayer = UnifiedAudioPlayer()
+        // Initialize services for testing
+        audioService = SwiftAudioExService()
+        ttsService = TTSGeneratorService()
+        unifiedPlayer = UnifiedAudioPlayer()
         
         testBundle = Bundle(for: type(of: self))
         testContext = PersistenceController.preview.container.viewContext
@@ -65,7 +66,7 @@ class SwiftAudioExIntegrationTests: XCTestCase {
         // Then: Audio should be playing
         XCTAssertTrue(audioService.isPlaying)
         XCTAssertGreaterThan(audioService.duration, 0)
-        XCTAssertEqual(audioService.state, .playing)
+        XCTAssertEqual(audioService.state, SwiftAudioPlayerState.playing)
     }
     
     // MARK: - Test 3: Speed Control (Up to 20x)
@@ -172,8 +173,8 @@ class SwiftAudioExIntegrationTests: XCTestCase {
         let episode = createTestRSSEpisode(title: "Episode 1", audioURL: "https://example.com/ep1.mp3")
         
         let queue = [
-            QueueItem.article(article),
-            QueueItem.rssEpisode(episode)
+            UnifiedAudioPlayer.QueueItem.article(article),
+            UnifiedAudioPlayer.QueueItem.rssEpisode(episode)
         ]
         
         // When: Playing through queue
@@ -300,7 +301,7 @@ class SwiftAudioExIntegrationTests: XCTestCase {
             XCTFail("Should throw error for invalid URL")
         } catch {
             XCTAssertNotNil(error)
-            XCTAssertEqual(audioService.state, .error(error))
+            XCTAssertEqual(audioService.state, SwiftAudioPlayerState.error(error))
         }
         
         // Test 2: Empty text for TTS
@@ -322,8 +323,20 @@ class SwiftAudioExIntegrationTests: XCTestCase {
         class TestDelegate: SwiftAudioExServiceDelegate {
             var onProgress: ((Float) -> Void)?
             
+            func audioStateChanged(to newState: SwiftAudioPlayerState, from oldState: SwiftAudioPlayerState) {
+                // Not needed for this test
+            }
+            
             func audioProgressUpdated(progress: Float, currentTime: TimeInterval, duration: TimeInterval) {
                 onProgress?(progress)
+            }
+            
+            func audioRateChanged(to rate: Float) {
+                // Not needed for this test
+            }
+            
+            func audioDidFinishPlaying(successfully: Bool) {
+                // Not needed for this test
             }
         }
         
