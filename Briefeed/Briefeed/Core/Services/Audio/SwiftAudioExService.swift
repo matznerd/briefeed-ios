@@ -336,8 +336,14 @@ final class SwiftAudioExService: NSObject {
             self.state = .paused
         case .stopped:
             self.state = .stopped
-        case .error(_):
+        case .failed:
             self.state = .error(TTSError.generationFailed)
+        case .ended:
+            self.state = .stopped
+        case .buffering:
+            self.state = .loading
+        case .ready:
+            self.state = .idle
         }
     }
     

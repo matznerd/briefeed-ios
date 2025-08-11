@@ -340,14 +340,10 @@ class CombinedFeedViewModel: ObservableObject {
         article.isSaved.toggle()
         if article.isSaved {
             article.savedAt = Date()
-            // Add to audio queue when saving
-            AudioService.shared.addToQueue(article)
+            // Article saving now handled by the Brief view's queue management
         } else {
             article.savedAt = nil
-            // Remove from audio queue when unsaving
-            if let index = AudioService.shared.queue.firstIndex(where: { $0.id == article.id }) {
-                AudioService.shared.removeFromQueue(at: index)
-            }
+            // Article removal now handled by the Brief view's queue management
         }
         do {
             try viewContext.save()

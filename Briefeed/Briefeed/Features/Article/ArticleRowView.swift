@@ -14,6 +14,7 @@ struct ArticleRowView: View {
     let onDelete: () -> Void
     
     @EnvironmentObject var appViewModel: AppViewModel
+    @EnvironmentObject var audioPlayerViewModel: AudioPlayerViewModelV2
     @State private var offset: CGFloat = 0
     @State private var isSwiped = false
     @State private var hasTriggeredHaptic = false
@@ -26,6 +27,24 @@ struct ArticleRowView: View {
     
     private let swipeThreshold: CGFloat = 100
     private let actionIconSize: CGFloat = 24
+    
+    // Computed properties for audio state
+    private var isArticlePlaying: Bool {
+        guard audioPlayerViewModel.currentQueueIndex >= 0,
+              audioPlayerViewModel.currentQueueIndex < audioPlayerViewModel.queueItems.count else {
+            return false
+        }
+        let currentItem = audioPlayerViewModel.queueItems[audioPlayerViewModel.currentQueueIndex]
+        return currentItem.article?.id == article.id
+    }
+    
+    private var isArticleQueued: Bool {
+        audioPlayerViewModel.queueItems.contains { $0.article?.id == article.id }
+    }
+    
+    private var queuePosition: Int? {
+        audioPlayerViewModel.queueItems.firstIndex { $0.article?.id == article.id }
+    }
     
     // Computed properties for swipe state
     private var swipeProgress: CGFloat {
@@ -148,9 +167,9 @@ struct ArticleRowView: View {
                     // Indicators
                     HStack(spacing: 12) {
                         // Playing indicator
-                        if appViewModel.isArticlePlaying(article) {
+                        if isArticlePlaying {
                             HStack(spacing: 4) {
-                                if appViewModel.isPlaying {
+                                if audioPlayerViewModel.isPlaying {
                                     WaveformAnimationView(phase: $waveformPhase)
                                         .frame(width: 16, height: 12)
                                         .onAppear {
@@ -171,7 +190,7 @@ struct ArticleRowView: View {
                             .transition(.scale.combined(with: .opacity))
                         }
                         
-                        if !article.isRead && !appViewModel.isArticlePlaying(article) {
+                        if !article.isRead && !isArticlePlaying {
                             HStack(spacing: 4) {
                                 Circle()
                                     .fill(Color.briefeedRed)
@@ -193,8 +212,8 @@ struct ArticleRowView: View {
                             }
                         }
                         
-                        if appViewModel.isArticleQueued(article) && !appViewModel.isArticlePlaying(article) {
-                            if let position = appViewModel.queuePosition(for: article) {
+                        if isArticleQueued && !isArticlePlaying {
+                            if let position = queuePosition {
                                 HStack(spacing: 4) {
                                     Image(systemName: "list.number")
                                         .font(.caption2)
@@ -217,8 +236,8 @@ struct ArticleRowView: View {
                             }
                         }
                     }
-                    .animation(.easeInOut(duration: 0.2), value: appViewModel.isArticlePlaying(article))
-                    .animation(.easeInOut(duration: 0.2), value: appViewModel.isArticleQueued(article))
+                    .animation(.easeInOut(duration: 0.2), value: isArticlePlaying)
+                    .animation(.easeInOut(duration: 0.2), value: isArticleQueued)
                 }
                 
                 Spacer()
@@ -382,7 +401,7 @@ struct ArticleRowView: View {
         // Add to audio queue if article is being saved
         if isBeingSaved {
             Task { @MainActor in
-                await appViewModel.queueArticle(article)
+                await audioPlayerViewModel.addToQueue(article)
             }
         }
         
@@ -403,7 +422,7 @@ struct ArticleRowView: View {
     }
     
     private func startWaveformAnimation() {
-        guard appViewModel.isArticlePlaying(article) && appViewModel.isPlaying else { return }
+        guard isArticlePlaying && audioPlayerViewModel.isPlaying else { return }
         
         withAnimation(.linear(duration: 0.5).repeatForever(autoreverses: false)) {
             waveformPhase = 1.0
@@ -466,7 +485,7 @@ struct ArticleRowView: View {
         actionButtonsTimer?.invalidate()
         
         Task { @MainActor in
-            await appViewModel.play(article: article)
+            await audioPlayerViewModel.play(article: article)
         }
     }
     
@@ -476,7 +495,7 @@ struct ArticleRowView: View {
         
         Task { @MainActor in
             // Queue article immediately after current item
-            await appViewModel.queueArticle(article)
+            await audioPlayerViewModel.addToQueue(article)
         }
     }
 }
@@ -553,4 +572,5 @@ struct WaveformAnimationView: View {
         )
     }
     .background(Color.briefeedBackground)
+    .environmentObject(AudioPlayerViewModelV2())
 }

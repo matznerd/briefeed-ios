@@ -1,8 +1,8 @@
 //
-//  BriefeedApp+RSS.swift
+//  BriefeedApp+RSSV2.swift
 //  Briefeed
 //
-//  Created by Briefeed Team on 7/13/25.
+//  Updated to use new audio system
 //
 
 import SwiftUI
@@ -29,17 +29,6 @@ extension BriefeedApp {
                     await RSSAudioService.shared.initializeDefaultFeedsIfNeeded()
                     print("✅ RSS feeds initialized")
                     
-                    // Load enhanced queue
-                    await MainActor.run {
-                        QueueService.shared.loadEnhancedQueue()
-                        
-                        // Migrate legacy queue if needed
-                        if QueueService.shared.enhancedQueue.isEmpty && !QueueService.shared.queuedItems.isEmpty {
-                            QueueService.shared.migrateLegacyQueue()
-                        }
-                    }
-                    print("✅ Queue loaded")
-                    
                     // Handle auto-play if enabled
                     if UserDefaultsManager.shared.autoPlayLiveNewsOnOpen {
                         // Wait a moment for UI to be ready
@@ -56,24 +45,17 @@ extension BriefeedApp {
                 }
             }
             
-            // Schedule periodic cleanup of expired episodes
-            scheduleRSSCleanup()
+            // Schedule periodic cleanup (handled by new cache manager)
+            scheduleRSSRefresh()
             
         } catch {
             print("❌ Fatal error initializing RSS features: \(error)")
         }
     }
     
-    /// Schedule periodic cleanup tasks
-    private func scheduleRSSCleanup() {
-        // Clean up expired items every hour
-        Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
-            Task { @MainActor in
-                QueueService.shared.cleanupExpiredItems()
-            }
-        }
-        
-        // Refresh stale feeds every 30 minutes
+    /// Schedule periodic feed refresh
+    private func scheduleRSSRefresh() {
+        // Refresh feeds every 30 minutes
         Timer.scheduledTimer(withTimeInterval: 1800, repeats: true) { _ in
             Task {
                 await RSSAudioService.shared.refreshAllFeeds()
@@ -93,11 +75,7 @@ extension BriefeedApp {
         
         do {
             let feeds = try viewContext.fetch(fetchRequest)
-            
-            // Clear queue first
-            await MainActor.run {
-                QueueService.shared.clearQueue()
-            }
+            var episodesToPlay: [RSSEpisode] = []
             
             // Add the latest unlistened episode from each feed
             for feed in feeds {
@@ -106,16 +84,20 @@ extension BriefeedApp {
                         .filter({ !$0.isListened })
                         .sorted(by: { $0.pubDate > $1.pubDate })
                         .first {
-                        await MainActor.run {
-                            QueueService.shared.addRSSEpisode(latestEpisode)
-                        }
+                        episodesToPlay.append(latestEpisode)
                     }
                 }
             }
             
-            // Start playing
-            await MainActor.run {
-                QueueService.shared.playNext()
+            // Play all episodes using the new audio system
+            if !episodesToPlay.isEmpty {
+                await MainActor.run {
+                    Task {
+                        // Access the audio player through the app's instance
+                        // This will be available when ContentView sets up
+                        await AudioPlayerViewModelV2().playQueue(episodes: episodesToPlay)
+                    }
+                }
             }
         } catch {
             print("❌ Error playing live news radio: \(error)")

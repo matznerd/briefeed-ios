@@ -32,20 +32,18 @@ class ArticleViewModel: ObservableObject {
     private let storageService: StorageServiceProtocol
     private let firecrawlService: FirecrawlServiceProtocol
     private let geminiService: GeminiServiceProtocol
-    private let audioService: AudioServiceProtocol
+    // Audio service removed - now handled through AppViewModel
     
     private var cancellables: Set<AnyCancellable> = []
     
     init(article: Article,
          storageService: StorageServiceProtocol = StorageService.shared,
          firecrawlService: FirecrawlServiceProtocol = FirecrawlService(),
-         geminiService: GeminiServiceProtocol = GeminiService(),
-         audioService: AudioServiceProtocol? = nil) {
+         geminiService: GeminiServiceProtocol = GeminiService()) {
         self.article = article
         self.storageService = storageService
         self.firecrawlService = firecrawlService
         self.geminiService = geminiService
-        self.audioService = audioService ?? AudioService.shared
         
         // Load initial values
         self.articleContent = article.content
@@ -54,8 +52,7 @@ class ArticleViewModel: ObservableObject {
         // Load user preferences
         loadUserPreferences()
         
-        // Subscribe to audio service state
-        setupAudioSubscriptions()
+        // Audio subscriptions now handled through AppViewModel
     }
     
     private func loadUserPreferences() {
@@ -69,29 +66,7 @@ class ArticleViewModel: ObservableObject {
     }
     
     private func setupAudioSubscriptions() {
-        // Subscribe to audio state changes
-        audioService.state
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] state in
-                self?.audioState = state
-            }
-            .store(in: &cancellables)
-        
-        // Subscribe to audio progress
-        audioService.progress
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] progress in
-                self?.audioProgress = progress
-            }
-            .store(in: &cancellables)
-        
-        // Subscribe to speech rate
-        audioService.currentRate
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] rate in
-                self?.audioRate = rate
-            }
-            .store(in: &cancellables)
+        // Audio subscriptions removed - now handled through AppViewModel
     }
     
     func loadArticleContent() async {
@@ -257,67 +232,23 @@ class ArticleViewModel: ObservableObject {
     // MARK: - Audio Playback Methods
     
     func startAudioPlayback() async {
-        // Check if we have a summary to read
-        let textToRead: String
-        
-        if let structuredSummary = structuredSummary, let story = structuredSummary.story {
-            // Use the structured summary story
-            textToRead = story
-        } else if let summary = summary, !summary.isEmpty {
-            // Use plain text summary
-            textToRead = summary
-        } else {
-            // No summary available, generate one first
-            errorMessage = "Generating summary before playback..."
+        // Audio playback is now handled through AppViewModel
+        // Generate summary if needed for the audio system
+        if summary == nil || summary?.isEmpty == true {
             await generateStructuredSummary()
-            
-            // Check again after generation
-            if let structuredSummary = structuredSummary, let story = structuredSummary.story {
-                textToRead = story
-            } else {
-                errorMessage = "Failed to generate summary for audio playback"
-                return
-            }
-        }
-        
-        do {
-            // Use the proper play method that handles queue
-            if let audioService = audioService as? AudioService {
-                try await audioService.playNow(article)
-            } else {
-                // Fallback to speak method
-                try await audioService.speak(
-                    text: textToRead,
-                    title: article.title,
-                    author: article.author
-                )
-            }
-        } catch {
-            errorMessage = "Failed to start audio playback: \(error.localizedDescription)"
         }
     }
     
     func toggleAudioPlayback() {
-        switch audioState {
-        case .playing:
-            audioService.pause()
-        case .paused:
-            audioService.play()
-        case .idle, .stopped:
-            Task {
-                await startAudioPlayback()
-            }
-        default:
-            break
-        }
+        // Audio playback is now handled through AppViewModel
     }
     
     func stopAudioPlayback() {
-        audioService.stop()
+        // Audio playback is now handled through AppViewModel
     }
     
     func setAudioRate(_ rate: Float) {
-        audioService.setSpeechRate(rate)
+        // Audio rate is now handled through AppViewModel
     }
     
     var isAudioPlaying: Bool {

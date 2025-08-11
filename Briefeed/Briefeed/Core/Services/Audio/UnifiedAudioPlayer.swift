@@ -69,11 +69,7 @@ class UnifiedQueueItem: ObservableObject, Identifiable {
         self.type = .rssEpisode
         self.title = episode.title ?? "Untitled Episode"
         self.content = episode.episodeDescription
-        if let audioUrlString = episode.audioUrl {
-            self.audioURL = URL(string: audioUrlString)
-        } else {
-            self.audioURL = nil
-        }
+        self.audioURL = URL(string: episode.audioUrl)
         self.article = nil
         self.episode = episode
     }
@@ -353,10 +349,46 @@ final class UnifiedAudioPlayer: ObservableObject {
         if let article = item.article {
             item.generationState = .generating
             isGenerating = true
-            generationProgress = "Generating audio for \(item.title)..."
+            generationProgress = "Generating summary for \(item.title)..."
             
             do {
-                // Format text for TTS
+                // Check if article needs summary generation
+                if article.summary == nil || article.summary?.isEmpty == true {
+                    // Generate summary first
+                    generationProgress = "Generating summary..."
+                    
+                    // Get article content for summarization
+                    var contentToSummarize = ""
+                    if let content = article.content, !content.isEmpty {
+                        contentToSummarize = content.stripHTML
+                    } else if let url = article.url {
+                        // Fetch content from URL if needed
+                        generationProgress = "Fetching article content..."
+                        let firecrawlService = FirecrawlService()
+                        if let firecrawlData = try? await firecrawlService.fetchArticleContent(from: url) {
+                            contentToSummarize = firecrawlData.content ?? ""
+                        }
+                    }
+                    
+                    if !contentToSummarize.isEmpty {
+                        // Generate summary using Gemini
+                        generationProgress = "Creating summary..."
+                        let geminiService = GeminiService()
+                        let summary = try await geminiService.summarize(
+                            text: contentToSummarize,
+                            length: .standard
+                        )
+                        
+                        // Save summary to article
+                        await MainActor.run {
+                            article.summary = summary
+                            try? context.save()
+                        }
+                    }
+                }
+                
+                // Now format text for TTS (will include the summary)
+                generationProgress = "Generating audio..."
                 let text = formatArticleForTTS(article)
                 
                 // Generate audio file
@@ -418,21 +450,13 @@ final class UnifiedAudioPlayer: ObservableObject {
             text += "\(title). "
         }
         
-        // Prefer summary over content
+        // Check if we have a pre-generated summary
         if let summary = article.summary, !summary.isEmpty {
             text += summary
-        } else if let content = article.content {
-            // Clean HTML from content
-            let cleanContent = content.stripHTML
-                .replacingOccurrences(of: "\n\n", with: ". ")
-                .replacingOccurrences(of: "\n", with: " ")
-            
-            // Limit length for TTS
-            if cleanContent.count > 5000 {
-                text += String(cleanContent.prefix(5000)) + "... Content truncated."
-            } else {
-                text += cleanContent
-            }
+        } else {
+            // No summary yet - we'll need to generate one
+            // For now, return a placeholder that will be replaced by the actual summary generation
+            text += "[Article content needs summary generation]"
         }
         
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -488,38 +512,44 @@ final class UnifiedAudioPlayer: ObservableObject {
 
 // MARK: - SwiftAudioExService Delegate
 
-extension UnifiedAudioPlayer: SwiftAudioExServiceDelegate {
+extension UnifiedAudioPlayer: @preconcurrency SwiftAudioExServiceDelegate {
     
-    func audioStateChanged(to newState: SwiftAudioPlayerState, from oldState: SwiftAudioPlayerState) {
-        switch newState {
-        case .playing:
-            isPlaying = true
-            startProgressTimer()
-        case .paused:
-            isPlaying = false
-            playbackProgressTimer?.invalidate()
-        case .stopped:
-            isPlaying = false
-            playbackProgressTimer?.invalidate()
-        case .error(let error):
-            isPlaying = false
-            playbackProgressTimer?.invalidate()
-            print("[UnifiedPlayer] Audio error: \(error)")
-        default:
-            break
+    nonisolated func audioStateChanged(to newState: SwiftAudioPlayerState, from oldState: SwiftAudioPlayerState) {
+        Task { @MainActor in
+            switch newState {
+            case .playing:
+                isPlaying = true
+                startProgressTimer()
+            case .paused:
+                isPlaying = false
+                playbackProgressTimer?.invalidate()
+            case .stopped:
+                isPlaying = false
+                playbackProgressTimer?.invalidate()
+            case .error(let error):
+                isPlaying = false
+                playbackProgressTimer?.invalidate()
+                print("[UnifiedPlayer] Audio error: \(error)")
+            default:
+                break
+            }
         }
     }
     
-    func audioProgressUpdated(progress: Float, currentTime: TimeInterval, duration: TimeInterval) {
-        self.currentTime = currentTime
-        self.duration = duration
+    nonisolated func audioProgressUpdated(progress: Float, currentTime: TimeInterval, duration: TimeInterval) {
+        Task { @MainActor in
+            self.currentTime = currentTime
+            self.duration = duration
+        }
     }
     
-    func audioRateChanged(to rate: Float) {
-        self.playbackRate = rate
+    nonisolated func audioRateChanged(to rate: Float) {
+        Task { @MainActor in
+            self.playbackRate = rate
+        }
     }
     
-    func audioDidFinishPlaying(successfully: Bool) {
+    nonisolated func audioDidFinishPlaying(successfully: Bool) {
         if successfully {
             // Auto-play next item
             Task {

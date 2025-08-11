@@ -16,7 +16,7 @@ class BriefViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     
-    private let audioService = AudioService.shared
+    // Audio service is now handled through AppViewModel and AudioPlayerViewModelV2
     private let storageService: StorageServiceProtocol
     private let viewContext: NSManagedObjectContext
     private var cancellables = Set<AnyCancellable>()
@@ -33,14 +33,6 @@ class BriefViewModel: ObservableObject {
     }
     
     private func setupPublishers() {
-        // Sync with AudioService queue
-        audioService.$queue
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] audioQueue in
-                self?.syncWithAudioQueue(audioQueue)
-            }
-            .store(in: &cancellables)
-        
         // Listen for changes to saved articles in Core Data
         NotificationCenter.default.publisher(for: .NSManagedObjectContextObjectsDidChange, object: viewContext)
             .sink { [weak self] _ in
@@ -63,12 +55,8 @@ class BriefViewModel: ObservableObject {
         do {
             let articles = try viewContext.fetch(fetchRequest)
             
-            // Always sync with saved articles (Brief IS the queue)
+            // Queue management is now handled through AudioPlayerViewModelV2
             self.queuedArticles = articles
-            audioService.queue = articles
-            
-            // Restore queue state if app was restarted
-            audioService.restoreQueueState(articles: articles)
             
             isLoading = false
         } catch {
@@ -82,23 +70,13 @@ class BriefViewModel: ObservableObject {
     }
     
     func playArticle(_ article: Article) {
-        Task {
-            do {
-                try await audioService.playNow(article)
-            } catch {
-                errorMessage = "Failed to play article: \(error.localizedDescription)"
-            }
-        }
+        // Playback is now handled through AppViewModel
+        // This method can be removed once all UI references are updated
     }
     
     func removeFromQueue(_ article: Article) {
         // Remove from local queue
         queuedArticles.removeAll { $0.id == article.id }
-        
-        // Remove from audio service queue
-        if let index = audioService.queue.firstIndex(where: { $0.id == article.id }) {
-            audioService.removeFromQueue(at: index)
-        }
         
         // Optionally unsave the article
         Task {
@@ -114,17 +92,12 @@ class BriefViewModel: ObservableObject {
         // Move in local array
         queuedArticles.move(fromOffsets: source, toOffset: destination)
         
-        // Update audio service queue with reorder method
-        audioService.reorderQueue(from: source, to: destination)
+        // Queue reordering is now handled through AudioPlayerViewModelV2
     }
     
     func clearQueue() {
         queuedArticles.removeAll()
-        audioService.clearQueue()
+        // Queue clearing is now handled through AudioPlayerViewModelV2
     }
     
-    private func syncWithAudioQueue(_ audioQueue: [Article]) {
-        // Don't sync back from audio queue - Brief (saved articles) IS the source of truth
-        // Audio queue follows saved articles, not the other way around
-    }
 }

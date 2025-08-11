@@ -10,7 +10,7 @@ import SwiftUI
 struct ContentView: View {
     @State private var selectedTab = 0
     @EnvironmentObject var userDefaultsManager: UserDefaultsManager
-    @EnvironmentObject var audioPlayerViewModel: AudioPlayerViewModel
+    @EnvironmentObject var audioPlayerViewModel: AudioPlayerViewModelV2
     @ObservedObject private var statusService = ProcessingStatusService.shared
     
     var body: some View {
@@ -38,7 +38,7 @@ struct ContentView: View {
                         }
                         .tag(1)
                     
-                    LiveNewsView()
+                    LiveNewsViewV2()
                         .tabItem {
                             Label("Live News", systemImage: "dot.radiowaves.left.and.right")
                         }
@@ -53,7 +53,7 @@ struct ContentView: View {
                 .accentColor(.briefeedRed)
                 
                 // Audio player always visible
-                MiniAudioPlayerV3()
+                MiniAudioPlayerV4()
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             .onAppear {

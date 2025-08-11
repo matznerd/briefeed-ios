@@ -24,7 +24,7 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var playbackSpeed: Float = 1.0
     
     // Queue State
-    @Published private(set) var queueItems: [EnhancedQueueItem] = []
+    @Published private(set) var queueItems: [UnifiedQueueItem] = []
     @Published private(set) var queueCount: Int = 0
     
     // Article State
@@ -38,12 +38,12 @@ final class AppViewModel: ObservableObject {
     
     // MARK: - Private Properties
     
-    private let audioPlayerViewModel: AudioPlayerViewModel
+    private let audioPlayerViewModel: AudioPlayerViewModelV2
     private var cancellables = Set<AnyCancellable>()
     
     // MARK: - Initialization
     
-    init(audioPlayerViewModel: AudioPlayerViewModel) {
+    init(audioPlayerViewModel: AudioPlayerViewModelV2) {
         self.audioPlayerViewModel = audioPlayerViewModel
         setupBindings()
     }
@@ -219,15 +219,18 @@ final class AppViewModel: ObservableObject {
     }
     
     func retry() async {
-        await audioPlayerViewModel.retry()
+        // Clear error and try to resume playback if needed
+        lastError = nil
+        if !isPlaying && currentTitle != nil {
+            audioPlayerViewModel.togglePlayPause()
+        }
     }
     
     // MARK: - Connection
     
     func connect() async {
-        await audioPlayerViewModel.connect()
-        
-        // Load initial article state
+        // AudioPlayerViewModelV2 doesn't need connect - it's lightweight
+        // Just load initial article state
         await loadArticleState()
     }
     
@@ -254,8 +257,8 @@ final class AppViewModel: ObservableObject {
         queueItems.isEmpty
     }
     
-    var nextInQueue: EnhancedQueueItem? {
-        guard audioPlayerViewModel.currentQueueIndex < queueItems.count else { return nil }
-        return queueItems[audioPlayerViewModel.currentQueueIndex]
+    var nextInQueue: UnifiedQueueItem? {
+        guard audioPlayerViewModel.currentQueueIndex + 1 < queueItems.count else { return nil }
+        return queueItems[audioPlayerViewModel.currentQueueIndex + 1]
     }
 }

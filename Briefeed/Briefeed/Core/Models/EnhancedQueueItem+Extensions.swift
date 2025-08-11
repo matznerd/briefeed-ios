@@ -1,0 +1,99 @@
+//
+//  EnhancedQueueItem+Extensions.swift
+//  Briefeed
+//
+//  Conversion between UnifiedQueueItem and EnhancedQueueItem
+//
+
+import Foundation
+import CoreData
+
+// MARK: - UnifiedQueueItem to EnhancedQueueItem conversion
+extension UnifiedQueueItem {
+    /// Convert UnifiedQueueItem to EnhancedQueueItem for UI display
+    @MainActor
+    func toEnhancedQueueItem() -> EnhancedQueueItem {
+        let source: QueueItemSource
+        let articleID: UUID?
+        let audioUrl: URL?
+        
+        switch type {
+        case .article:
+            source = .article(source: article?.feed?.name ?? "Unknown")
+            articleID = article?.id
+            audioUrl = nil
+        case .rssEpisode:
+            source = .rss(
+                feedId: episode?.feed?.id ?? "",
+                feedName: episode?.feed?.displayName ?? "Unknown"
+            )
+            articleID = nil
+            audioUrl = self.audioURL
+        }
+        
+        return EnhancedQueueItem(
+            id: UUID(uuidString: id) ?? UUID(),
+            title: title,
+            source: source,
+            addedDate: Date(),
+            expiresAt: nil,
+            articleID: articleID,
+            audioUrl: audioUrl,
+            duration: Int(duration),
+            isListened: false,
+            lastPosition: 0.0
+        )
+    }
+    
+    /// Computed property for convenience
+    var articleID: UUID? {
+        article?.id
+    }
+}
+
+// MARK: - Enhanced Queue Item Extensions
+extension EnhancedQueueItem {
+    /// Create from Article
+    init(from article: Article) {
+        self.init(
+            id: article.id ?? UUID(),
+            title: article.title ?? "Untitled",
+            source: .article(source: article.feed?.name ?? "Unknown"),
+            addedDate: Date(),
+            expiresAt: nil,
+            articleID: article.id,
+            audioUrl: nil,
+            duration: nil,
+            isListened: false,
+            lastPosition: 0.0
+        )
+    }
+    
+    /// Create from RSS Episode
+    init(from episode: RSSEpisode) {
+        self.init(
+            id: UUID(uuidString: episode.id ?? "") ?? UUID(),
+            title: episode.title ?? "Untitled Episode",
+            source: .rss(
+                feedId: episode.feed?.id ?? "",
+                feedName: episode.feed?.displayName ?? "Unknown"
+            ),
+            addedDate: Date(),
+            expiresAt: nil,
+            articleID: nil,
+            audioUrl: URL(string: episode.audioUrl),
+            duration: nil,
+            isListened: episode.isListened,
+            lastPosition: 0.0
+        )
+    }
+}
+
+// MARK: - Collection Extension for Array Conversion
+extension Array where Element == UnifiedQueueItem {
+    /// Convert array of UnifiedQueueItems to EnhancedQueueItems
+    @MainActor
+    func toEnhancedQueueItems() -> [EnhancedQueueItem] {
+        self.map { $0.toEnhancedQueueItem() }
+    }
+}

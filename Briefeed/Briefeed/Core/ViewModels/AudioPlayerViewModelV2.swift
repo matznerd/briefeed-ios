@@ -56,8 +56,7 @@ final class AudioPlayerViewModelV2: ObservableObject {
     
     // MARK: - Initialization
     
-    override init() {
-        super.init()
+    init() {
         setupBindings()
         loadSavedState()
     }
@@ -97,9 +96,10 @@ final class AudioPlayerViewModelV2: ObservableObject {
             }
             .assign(to: &$progress)
         
-        // Update current item info
-        unifiedPlayer.$currentItem
-            .sink { [weak self] item in
+        // Update current item info when queue or index changes
+        Publishers.CombineLatest(unifiedPlayer.$queue, unifiedPlayer.$currentIndex)
+            .sink { [weak self] queue, index in
+                let item = (index >= 0 && index < queue.count) ? queue[index] : nil
                 self?.updateCurrentItemInfo(item)
             }
             .store(in: &cancellables)
@@ -286,15 +286,35 @@ final class AudioPlayerViewModelV2: ObservableObject {
         await unifiedPlayer.addToQueue(episode)
     }
     
-    func removeFromQueue(at index: Int) {
+    func queueArticle(_ article: Article) async {
+        await addToQueue(article)
+    }
+    
+    func queueEpisode(_ episode: RSSEpisode) async {
+        await addToQueue(episode)
+    }
+    
+    func removeFromQueue(at index: Int) async {
         unifiedPlayer.removeFromQueue(at: index)
     }
     
-    func clearQueue() {
+    func clearQueue() async {
         unifiedPlayer.clearQueue()
     }
     
-    func reorderQueue(from source: IndexSet, to destination: Int) {
+    func playNextInQueue() {
+        Task {
+            await playNext()
+        }
+    }
+    
+    func playPreviousInQueue() {
+        Task {
+            await playPrevious()
+        }
+    }
+    
+    func reorderQueue(from source: IndexSet, to destination: Int) async {
         // Convert IndexSet to array of items to move
         var newQueue = queueItems
         
@@ -313,11 +333,9 @@ final class AudioPlayerViewModelV2: ObservableObject {
         }
         
         // Update queue
-        Task {
-            await unifiedPlayer.loadMixedQueue(items: newQueue.compactMap { item in
-                item.article ?? item.episode
-            })
-        }
+        await unifiedPlayer.loadMixedQueue(items: newQueue.compactMap { item in
+            item.article ?? item.episode
+        })
     }
     
     // MARK: - Private Methods
@@ -418,9 +436,16 @@ extension AudioPlayerViewModelV2 {
 #if DEBUG
 extension AudioPlayerViewModelV2 {
     func loadTestQueue() async {
-        await unifiedPlayer.loadTestQueue()
-        if !queueItems.isEmpty {
-            await unifiedPlayer.play(at: 0)
-        }
+        // Create test items for debugging
+        let testArticles = [
+            "Test Article 1",
+            "Test Article 2",
+            "Test Article 3"
+        ]
+        
+        // For now, just set up test items
+        // This would need actual Article objects in a real implementation
+        print("[AudioPlayerViewModelV2] Test queue loading not fully implemented")
     }
 }
+#endif

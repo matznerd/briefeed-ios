@@ -233,32 +233,58 @@ final class TTSGeneratorService {
         return try await withCheckedThrowingContinuation { continuation in
             Task { @MainActor in
                 do {
-                    // Create synthesizer
+                    // Create synthesizer and delegate handler
                     let synthesizer = AVSpeechSynthesizer()
                     let utterance = AVSpeechUtterance(string: text)
                     
-                    // Configure voice
-                    utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
-                    utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+                    // Configure voice for best quality
+                    if let voice = AVSpeechSynthesisVoice(language: "en-US") {
+                        utterance.voice = voice
+                    }
+                    utterance.rate = 0.5 // Default rate
+                    utterance.pitchMultiplier = 1.0
+                    utterance.volume = 1.0
                     
-                    // Create temporary file
-                    let tempURL = FileManager.default.temporaryDirectory
+                    // Create output file URL
+                    let outputURL = FileManager.default.temporaryDirectory
                         .appendingPathComponent(UUID().uuidString)
                         .appendingPathExtension("caf")
                     
-                    // Write to file using AVAudioRecorder
-                    // Note: This is a simplified version. In production, you'd need to:
-                    // 1. Set up audio session
-                    // 2. Use AVSpeechSynthesizer delegate to capture audio
-                    // 3. Convert to MP3 format
+                    // Write to file using write method
+                    var writeError: Error?
+                    synthesizer.write(utterance) { buffer in
+                        guard let pcmBuffer = buffer as? AVAudioPCMBuffer else { return }
+                        
+                        do {
+                            // Create audio file for writing
+                            let audioFile = try AVAudioFile(
+                                forWriting: outputURL,
+                                settings: pcmBuffer.format.settings,
+                                commonFormat: .pcmFormatFloat32,
+                                interleaved: false
+                            )
+                            
+                            // Write buffer to file
+                            try audioFile.write(from: pcmBuffer)
+                        } catch {
+                            writeError = error
+                        }
+                    }
                     
-                    // For now, create a placeholder file
-                    let audioData = try self.generatePlaceholderAudio(for: text)
+                    if let error = writeError {
+                        throw error
+                    }
+                    
+                    // Read the file data and save to cache
+                    let audioData = try Data(contentsOf: outputURL)
                     let cachedURL = try self.cacheManager.saveAudioToCache(
                         audioData,
                         for: text,
                         voice: "AVSpeech"
                     )
+                    
+                    // Clean up temp file
+                    try? FileManager.default.removeItem(at: outputURL)
                     
                     continuation.resume(returning: cachedURL)
                 } catch {

@@ -12,18 +12,18 @@ import AVFoundation
 struct BriefeedApp: App {
     let persistenceController = PersistenceController.shared
     @StateObject private var userDefaultsManager = UserDefaultsManager.shared
-    @StateObject private var audioPlayerViewModel = AudioPlayerViewModel()
+    @StateObject private var audioPlayerViewModel = AudioPlayerViewModelV2()
     @StateObject private var appViewModel: AppViewModel
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     init() {
         print("🚀 BriefeedApp initializing...")
         
-        // Create audio player view model
-        let audioVM = AudioPlayerViewModel()
+        // Create NEW audio player view model V2
+        let audioVM = AudioPlayerViewModelV2()
         _audioPlayerViewModel = StateObject(wrappedValue: audioVM)
         
-        // Create app view model with audio player
+        // Create app view model with the SAME V2 audio player
         _appViewModel = StateObject(wrappedValue: AppViewModel(audioPlayerViewModel: audioVM))
         
         // Initialize UserDefaults on app launch
@@ -32,7 +32,7 @@ struct BriefeedApp: App {
         // Apply dark mode preference early
         applyThemeSettings()
         
-        // Initialize RSS features
+        // Initialize RSS features (using V2 version)
         initializeRSSFeatures()
         
         // Initialize V2 services asynchronously (no UI freeze!)
@@ -68,7 +68,7 @@ struct BriefeedApp: App {
                     
                     // Connect ViewModels to services
                     Task {
-                        await audioPlayerViewModel.connect()
+                        // AudioPlayerViewModelV2 doesn't need connect - it's lightweight
                         await appViewModel.connect()
                     }
                 }

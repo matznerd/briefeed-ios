@@ -296,7 +296,8 @@ extension AudioServiceV2: AVAudioPlayerDelegate {
     }
     
     func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
-        state = .error(error ?? AudioServiceError.speechSynthesizerUnavailable)
+        let errorMessage = error?.localizedDescription ?? "Speech synthesizer unavailable"
+        state = .error(errorMessage)
         delegate?.audioDecodeError(error)
     }
 }

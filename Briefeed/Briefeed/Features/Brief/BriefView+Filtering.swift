@@ -8,20 +8,13 @@
 import SwiftUI
 import CoreData
 
-// MARK: - Brief View Filter Extension
-extension BriefView {
-    
-    /// Create a filtered version of BriefView with RSS support
-    static func createFilteredBriefView() -> some View {
-        FilteredBriefView()
-    }
-}
+// BriefView extension removed - using FilteredBriefView directly
 
 // MARK: - Filtered Brief View
 struct FilteredBriefView: View {
     @StateObject private var viewModel = BriefViewModel()
-    @StateObject private var audioService = AudioService.shared
-    @StateObject private var queueService = QueueService.shared
+    @EnvironmentObject var audioPlayerViewModel: AudioPlayerViewModelV2
+    @EnvironmentObject var appViewModel: AppViewModel
     @State private var editMode = EditMode.inactive
     @State private var showingClearQueueAlert = false
     @State private var currentFilter: QueueFilter = .all
@@ -33,7 +26,17 @@ struct FilteredBriefView: View {
     }
     
     var filteredQueue: [EnhancedQueueItem] {
-        queueService.getFilteredQueue(filter: currentFilter)
+        // Convert UnifiedQueueItems to EnhancedQueueItems and apply filter
+        audioPlayerViewModel.queueItems.toEnhancedQueueItems().filter { item in
+            switch currentFilter {
+            case .all:
+                return true
+            case .articles:
+                return item.articleID != nil
+            case .liveNews:
+                return item.audioUrl != nil && item.articleID == nil
+            }
+        }
     }
     
     var body: some View {
@@ -58,7 +61,7 @@ struct FilteredBriefView: View {
             .onAppear {
                 Task {
                     await viewModel.loadQueuedArticles()
-                    queueService.loadEnhancedQueue()
+                    // Queue is already loaded by AudioPlayerViewModelV2
                 }
             }
             .navigationTitle("Brief")
@@ -239,10 +242,18 @@ struct FilteredBriefView: View {
     }
     
     private func removeItem(_ item: EnhancedQueueItem) {
-        queueService.removeFromEnhancedQueue { $0.id == item.id }
-        queueService.saveEnhancedQueue()
+        // Find the index of the item in the queue by matching IDs
+        if let index = audioPlayerViewModel.queueItems.firstIndex(where: { 
+            UUID(uuidString: $0.id) == item.id ||
+            $0.article?.id == item.articleID ||
+            $0.audioURL?.absoluteString == item.audioUrl?.absoluteString
+        }) {
+            Task {
+                await audioPlayerViewModel.removeFromQueue(at: index)
+            }
+        }
         
-        // Update audio service if needed
+        // Update view model if needed
         if let articleID = item.articleID,
            let article = viewModel.queuedArticles.first(where: { $0.id == articleID }) {
             viewModel.removeFromQueue(article)
@@ -251,49 +262,44 @@ struct FilteredBriefView: View {
     
     private func saveItem(_ item: EnhancedQueueItem) {
         // Remove expiration for saved items
-        if let index = queueService.enhancedQueue.firstIndex(where: { $0.id == item.id }) {
-            // Create a new item with nil expiration since EnhancedQueueItem has let properties
-            let currentItem = queueService.enhancedQueue[index]
-            let newItem = EnhancedQueueItem(
-                id: currentItem.id,
-                title: currentItem.title,
-                source: currentItem.source,
-                addedDate: currentItem.addedDate,
-                expiresAt: nil,
-                articleID: currentItem.articleID,
-                audioUrl: currentItem.audioUrl,
-                duration: currentItem.duration,
-                isListened: currentItem.isListened,
-                lastPosition: currentItem.lastPosition
-            )
-            queueService.updateEnhancedQueue(
-                queueService.enhancedQueue.enumerated().map { i, item in
-                    i == index ? newItem : item
-                }
-            )
-            queueService.saveEnhancedQueue()
+        if let index = audioPlayerViewModel.queueItems.firstIndex(where: { 
+            UUID(uuidString: $0.id) == item.id ||
+            $0.article?.id == item.articleID ||
+            $0.audioURL?.absoluteString == item.audioUrl?.absoluteString
+        }) {
+            // TODO: Add method to update expiration in AudioPlayerViewModelV2
+            // For now, items don't expire in the new system
+            print("Saving item at index \(index)")
         }
     }
     
     private func clearQueue() {
-        queueService.updateEnhancedQueue([])
-        queueService.saveEnhancedQueue()
-        viewModel.clearQueue()
+        Task {
+            await audioPlayerViewModel.clearQueue()
+            viewModel.clearQueue()
+        }
     }
 }
 
 // MARK: - Enhanced Queue Row
 struct EnhancedQueueRow: View {
     let item: EnhancedQueueItem
-    @StateObject private var audioService = AudioService.shared
+    @EnvironmentObject var audioPlayerViewModel: AudioPlayerViewModelV2
     
     private var isCurrentlyPlaying: Bool {
         // Check if this item is currently playing
+        guard audioPlayerViewModel.currentQueueIndex >= 0,
+              audioPlayerViewModel.currentQueueIndex < audioPlayerViewModel.queueItems.count else {
+            return false
+        }
+        
+        let currentItem = audioPlayerViewModel.queueItems[audioPlayerViewModel.currentQueueIndex]
+        
+        // Match by article ID or audio URL
         if let articleID = item.articleID {
-            return audioService.currentArticle?.id == articleID
+            return currentItem.article?.id == articleID
         } else if let audioUrl = item.audioUrl {
-            return audioService.isPlayingRSS && 
-                   audioService.currentArticle?.url == audioUrl.absoluteString
+            return currentItem.audioURL?.absoluteString == audioUrl.absoluteString
         }
         return false
     }
@@ -303,7 +309,7 @@ struct EnhancedQueueRow: View {
             HStack(spacing: 12) {
                 // Play/Pause Button
                 Button(action: playItem) {
-                    Image(systemName: isCurrentlyPlaying && audioService.state.value == .playing ? "pause.circle.fill" : "play.circle.fill")
+                    Image(systemName: isCurrentlyPlaying && audioPlayerViewModel.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                         .font(.system(size: 32))
                         .foregroundColor(.briefeedRed)
                 }
@@ -369,16 +375,14 @@ struct EnhancedQueueRow: View {
     }
     
     private func playItem() {
-        if isCurrentlyPlaying && audioService.state.value == .playing {
+        if isCurrentlyPlaying && audioPlayerViewModel.isPlaying {
             // Pause if currently playing
-            audioService.pause()
+            audioPlayerViewModel.pause()
         } else if let audioUrl = item.audioUrl {
             // Play RSS episode
             Task {
                 if let episode = fetchRSSEpisode(audioUrl: audioUrl) {
-                    await audioService.playRSSEpisode(url: audioUrl, title: item.title ?? "Unknown", episode: episode)
-                } else {
-                    await audioService.playRSSEpisode(url: audioUrl, title: item.title ?? "Unknown")
+                    await audioPlayerViewModel.play(episode: episode)
                 }
             }
         } else if let articleID = item.articleID {
@@ -387,7 +391,7 @@ struct EnhancedQueueRow: View {
             fetchRequest.predicate = NSPredicate(format: "id == %@", articleID as CVarArg)
             if let article = try? PersistenceController.shared.container.viewContext.fetch(fetchRequest).first {
                 Task {
-                    try? await audioService.playNow(article)
+                    await audioPlayerViewModel.play(article: article)
                 }
             }
         }

@@ -27,7 +27,7 @@ struct SpeedPickerV2: View {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                     isExpanded.toggle()
                 }
-                HapticManager.shared.impact(style: .light)
+                HapticManager.shared.lightImpact()
             }) {
                 HStack(spacing: 6) {
                     Image(systemName: speedIcon(for: selectedSpeed))
@@ -65,7 +65,7 @@ struct SpeedPickerV2: View {
                         selectedSpeed: $selectedSpeed,
                         onSelect: { 
                             isExpanded = false
-                            HapticManager.shared.impact(style: .light)
+                            HapticManager.shared.lightImpact()
                         }
                     )
                     
@@ -79,7 +79,7 @@ struct SpeedPickerV2: View {
                         selectedSpeed: $selectedSpeed,
                         onSelect: { 
                             isExpanded = false
-                            HapticManager.shared.impact(style: .medium)
+                            HapticManager.shared.mediumImpact()
                         }
                     )
                     
@@ -93,7 +93,7 @@ struct SpeedPickerV2: View {
                         selectedSpeed: $selectedSpeed,
                         onSelect: { 
                             isExpanded = false
-                            HapticManager.shared.impact(style: .heavy)
+                            HapticManager.shared.heavyImpact()
                         }
                     )
                 }
@@ -291,7 +291,7 @@ struct HorizontalSpeedSelector: View {
                             isSelected: speed == selectedSpeed,
                             action: {
                                 selectedSpeed = speed
-                                HapticManager.shared.impact(style: .light)
+                                HapticManager.shared.lightImpact()
                             }
                         )
                     }
@@ -301,7 +301,7 @@ struct HorizontalSpeedSelector: View {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                             showAllSpeeds.toggle()
                         }
-                        HapticManager.shared.impact(style: .light)
+                        HapticManager.shared.lightImpact()
                     }) {
                         Image(systemName: showAllSpeeds ? "chevron.left.circle.fill" : "ellipsis.circle.fill")
                             .font(.system(size: 16, weight: .medium))

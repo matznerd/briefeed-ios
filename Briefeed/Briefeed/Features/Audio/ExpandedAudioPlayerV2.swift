@@ -2,464 +2,485 @@
 //  ExpandedAudioPlayerV2.swift
 //  Briefeed
 //
-//  Migrated version using AudioPlayerViewModel
+//  Full-screen audio player using AudioPlayerViewModelV2
+//  Supports up to 20x playback speed with SwiftAudioEx
 //
 
 import SwiftUI
-import Combine
-import CoreData
 
 struct ExpandedAudioPlayerV2: View {
-    @EnvironmentObject var audioPlayerViewModel: AudioPlayerViewModel
-    @EnvironmentObject var userDefaultsManager: UserDefaultsManager
-    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var viewModel: AudioPlayerViewModelV2
+    @Environment(\.dismiss) var dismiss
     @State private var isDraggingSlider = false
-    @State private var draggedProgress: Float = 0
+    @State private var dragProgress: Float = 0
+    @State private var showSpeedPicker = false
     @State private var showQueue = false
     
-    private var isPlaying: Bool {
-        audioPlayerViewModel.isPlaying
-    }
-    
-    private var currentProgress: Float {
-        isDraggingSlider ? draggedProgress : audioPlayerViewModel.progress
-    }
-    
     var body: some View {
-        NavigationView {
-            ZStack {
-                // Background gradient
-                LinearGradient(
-                    gradient: Gradient(colors: [
-                        Color(UIColor.systemBackground),
-                        Color(UIColor.secondarySystemBackground)
-                    ]),
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
+        NavigationStack {
+            VStack(spacing: 0) {
+                // Header
+                header
                 
-                VStack(spacing: 0) {
-                    // Navigation bar
-                    navigationBar
-                    
-                    ScrollView {
-                        VStack(spacing: 32) {
-                            // Waveform visualization
-                            waveformSection
-                            
-                            // Article info
-                            articleInfoSection
-                            
-                            // Progress slider
-                            progressSection
-                            
-                            // Playback controls
-                            playbackControlsSection
-                            
-                            // Speed and volume controls
-                            secondaryControlsSection
-                        }
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 40)
+                ScrollView {
+                    VStack(spacing: 24) {
+                        // Artwork/Waveform
+                        artworkSection
+                            .padding(.top, 20)
+                        
+                        // Title and Artist
+                        titleSection
+                        
+                        // Progress Bar
+                        progressSection
+                        
+                        // Main Controls
+                        mainControls
+                        
+                        // Speed Control
+                        speedControl
+                        
+                        // Queue Info
+                        queueInfo
+                        
+                        Spacer(minLength: 20)
                     }
+                    .padding(.horizontal, 24)
                 }
             }
-            .navigationBarHidden(true)
-        }
-        .sheet(isPresented: $showQueue) {
-            AudioQueueViewV2()
-                .environmentObject(audioPlayerViewModel)
-                .environmentObject(userDefaultsManager)
+            .background(Color(UIColor.systemBackground))
+            .sheet(isPresented: $showQueue) {
+                QueueView()
+                    .environmentObject(viewModel)
+            }
         }
     }
     
-    // MARK: - Navigation Bar
-    private var navigationBar: some View {
+    // MARK: - Header
+    private var header: some View {
         HStack {
             Button(action: { dismiss() }) {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 20, weight: .medium))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.primary)
                     .frame(width: 44, height: 44)
-                    .background(Color.gray.opacity(0.1))
-                    .clipShape(Circle())
             }
             
             Spacer()
             
             Text("Now Playing")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
             
             Spacer()
             
             Button(action: { showQueue = true }) {
-                ZStack(alignment: .topTrailing) {
-                    Image(systemName: "list.bullet")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundColor(.primary)
-                        .frame(width: 44, height: 44)
-                        .background(Color.gray.opacity(0.1))
-                        .clipShape(Circle())
-                    
-                    if audioPlayerViewModel.queueItems.count > 1 {
-                        Text("\(audioPlayerViewModel.queueItems.count)")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundColor(.white)
-                            .padding(4)
-                            .background(Color.accentColor)
-                            .clipShape(Circle())
-                            .offset(x: 4, y: -4)
-                    }
-                }
+                Image(systemName: "list.bullet")
+                    .font(.system(size: 18))
+                    .foregroundColor(.primary)
+                    .frame(width: 44, height: 44)
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
-        .background(Color(UIColor.systemBackground).opacity(0.95))
+        .padding(.horizontal, 4)
+        .overlay(
+            Divider()
+                .background(Color.gray.opacity(0.3)),
+            alignment: .bottom
+        )
     }
     
-    // MARK: - Waveform Section
-    private var waveformSection: some View {
-        VStack(spacing: 16) {
-            // Animated waveform
-            WaveformView(isPlaying: isPlaying)
-                .frame(height: 120)
-                .padding(.horizontal, 20)
-                .background(
-                    RoundedRectangle(cornerRadius: 20)
-                        .fill(
-                            LinearGradient(
-                                gradient: Gradient(colors: [
-                                    Color.accentColor.opacity(0.05),
-                                    Color.accentColor.opacity(0.1)
-                                ]),
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20)
-                        .stroke(Color.accentColor.opacity(0.2), lineWidth: 1)
-                )
-        }
-        .padding(.top, 20)
-    }
-    
-    // MARK: - Article Info Section
-    private var articleInfoSection: some View {
-        VStack(spacing: 12) {
-            if let title = audioPlayerViewModel.currentTitle {
-                Text(title)
-                    .font(.system(size: 24, weight: .bold))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(3)
-                
-                if let artist = audioPlayerViewModel.currentArtist {
-                    Text(artist)
-                        .font(.system(size: 18, weight: .medium))
+    // MARK: - Artwork Section
+    private var artworkSection: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Color.gray.opacity(0.1))
+                .frame(height: 320)
+            
+            if viewModel.isGenerating {
+                VStack(spacing: 16) {
+                    ProgressView()
+                        .scaleEffect(1.5)
+                    
+                    Text("Generating Audio...")
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.secondary)
-                }
-                
-                // Show source indicator for RSS content
-                if audioPlayerViewModel.currentURL != nil {
-                    HStack(spacing: 4) {
-                        Image(systemName: "dot.radiowaves.left.and.right")
-                            .font(.system(size: 14))
-                            .foregroundColor(.secondary)
-                        Text("RSS Podcast")
-                            .font(.system(size: 14))
-                            .foregroundColor(.secondary)
+                    
+                    if !viewModel.generationProgress.isEmpty {
+                        Text(viewModel.generationProgress)
+                            .font(.system(size: 12))
+                            .foregroundColor(.orange)
                     }
                 }
+            } else if viewModel.isPlaying {
+                WaveformView(isPlaying: true)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 200)
             } else {
-                Text("No story playing")
-                    .font(.system(size: 24, weight: .bold))
+                Image(systemName: itemIcon)
+                    .font(.system(size: 80))
+                    .foregroundColor(.secondary.opacity(0.5))
+            }
+        }
+    }
+    
+    // MARK: - Title Section
+    private var titleSection: some View {
+        VStack(spacing: 8) {
+            Text(viewModel.currentTitle ?? "Not Playing")
+                .font(.system(size: 22, weight: .bold))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+            
+            if let artist = viewModel.currentArtist {
+                Text(artist)
+                    .font(.system(size: 16))
                     .foregroundColor(.secondary)
             }
+            
+            if viewModel.currentItemType != .none {
+                Label(itemTypeText, systemImage: itemIcon)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.accentColor)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    .background(Color.accentColor.opacity(0.1))
+                    .cornerRadius(12)
+            }
         }
-        .padding(.horizontal, 16)
     }
     
     // MARK: - Progress Section
     private var progressSection: some View {
         VStack(spacing: 8) {
-            // Progress slider
+            // Progress Slider
             ZStack(alignment: .leading) {
-                // Track
                 RoundedRectangle(cornerRadius: 4)
                     .fill(Color.gray.opacity(0.2))
-                    .frame(height: 8)
+                    .frame(height: 6)
                 
-                // Progress
                 RoundedRectangle(cornerRadius: 4)
                     .fill(Color.accentColor)
-                    .frame(width: UIScreen.main.bounds.width * CGFloat(currentProgress) * 0.85, height: 8)
+                    .frame(width: progressWidth, height: 6)
                 
-                // Thumb
                 Circle()
                     .fill(Color.accentColor)
-                    .frame(width: 20, height: 20)
-                    .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
-                    .offset(x: UIScreen.main.bounds.width * CGFloat(currentProgress) * 0.85 - 10)
+                    .frame(width: 16, height: 16)
+                    .offset(x: progressWidth - 8)
             }
+            .frame(height: 16)
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
                         isDraggingSlider = true
-                        let progress = min(max(0, value.location.x / (UIScreen.main.bounds.width * 0.85)), 1)
-                        draggedProgress = Float(progress)
+                        let progress = Float(value.location.x / UIScreen.main.bounds.width - 48)
+                        dragProgress = max(0, min(1, progress))
                     }
-                    .onEnded { value in
-                        let progress = min(max(0, value.location.x / (UIScreen.main.bounds.width * 0.85)), 1)
-                        audioPlayerViewModel.seek(to: Double(progress))
+                    .onEnded { _ in
+                        viewModel.seek(to: dragProgress)
                         isDraggingSlider = false
                     }
             )
             
-            // Time labels
+            // Time Labels
             HStack {
-                Text(formatTime(audioPlayerViewModel.currentTime))
-                    .font(.system(size: 13, weight: .medium))
+                Text(viewModel.formattedCurrentTime)
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.secondary)
-                    .monospacedDigit()
                 
                 Spacer()
                 
-                Text(formatTimeRemaining(audioPlayerViewModel.currentTime, audioPlayerViewModel.duration))
-                    .font(.system(size: 13, weight: .medium))
+                Text(viewModel.formattedRemainingTime)
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.secondary)
-                    .monospacedDigit()
             }
         }
     }
     
-    // MARK: - Playback Controls Section
-    private var playbackControlsSection: some View {
+    // MARK: - Main Controls
+    private var mainControls: some View {
         HStack(spacing: 40) {
-            // Previous button
+            // Skip Backward
             Button(action: {
-                audioPlayerViewModel.playPreviousInQueue()
+                viewModel.skipBackward(15)
             }) {
-                Image(systemName: "backward.fill")
-                    .font(.system(size: 28))
-                    .foregroundColor(audioPlayerViewModel.canPlayPrevious ? .primary : .gray)
-            }
-            .disabled(!audioPlayerViewModel.canPlayPrevious)
-            
-            // Skip backward 15s
-            Button(action: {
-                audioPlayerViewModel.skipBackward()
-            }) {
-                ZStack {
-                    Image(systemName: "gobackward")
+                VStack(spacing: 2) {
+                    Image(systemName: "gobackward.15")
                         .font(.system(size: 32))
-                    Text("15")
-                        .font(.system(size: 11, weight: .bold))
-                        .offset(y: 1)
+                    Text("15s")
+                        .font(.system(size: 10, weight: .medium))
                 }
                 .foregroundColor(.primary)
             }
             
-            // Play/Pause button
-            Button(action: { audioPlayerViewModel.togglePlayPause() }) {
+            // Previous
+            Button(action: {
+                Task {
+                    await viewModel.playPrevious()
+                }
+            }) {
+                Image(systemName: "backward.fill")
+                    .font(.system(size: 28))
+                    .foregroundColor(viewModel.canPlayPrevious ? .primary : .secondary.opacity(0.5))
+            }
+            .disabled(!viewModel.canPlayPrevious)
+            
+            // Play/Pause
+            Button(action: {
+                viewModel.togglePlayPause()
+            }) {
                 ZStack {
                     Circle()
                         .fill(Color.accentColor)
                         .frame(width: 72, height: 72)
-                        .shadow(color: Color.accentColor.opacity(0.3), radius: 8, x: 0, y: 4)
                     
-                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 32))
-                        .foregroundColor(.white)
-                        .offset(x: isPlaying ? 0 : 2)
+                    if viewModel.isLoading || viewModel.isGenerating {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.2)
+                    } else {
+                        Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 30, weight: .bold))
+                            .foregroundColor(.white)
+                            .offset(x: viewModel.isPlaying ? 0 : 2)
+                    }
                 }
             }
-            .buttonStyle(ScaleButtonStyle())
             
-            // Skip forward 30s
+            // Next
             Button(action: {
-                audioPlayerViewModel.skipForward()
-            }) {
-                ZStack {
-                    Image(systemName: "goforward")
-                        .font(.system(size: 32))
-                    Text("30")
-                        .font(.system(size: 11, weight: .bold))
-                        .offset(y: 1)
+                Task {
+                    await viewModel.playNext()
                 }
-                .foregroundColor(.primary)
-            }
-            
-            // Next button
-            Button(action: {
-                audioPlayerViewModel.playNextInQueue()
             }) {
                 Image(systemName: "forward.fill")
                     .font(.system(size: 28))
-                    .foregroundColor(audioPlayerViewModel.canPlayNext ? .primary : .gray)
+                    .foregroundColor(viewModel.canPlayNext ? .primary : .secondary.opacity(0.5))
             }
-            .disabled(!audioPlayerViewModel.canPlayNext)
+            .disabled(!viewModel.canPlayNext)
+            
+            // Skip Forward
+            Button(action: {
+                viewModel.skipForward(30)
+            }) {
+                VStack(spacing: 2) {
+                    Image(systemName: "goforward.30")
+                        .font(.system(size: 32))
+                    Text("30s")
+                        .font(.system(size: 10, weight: .medium))
+                }
+                .foregroundColor(.primary)
+            }
         }
     }
     
-    // MARK: - Secondary Controls Section
-    private var secondaryControlsSection: some View {
-        VStack(spacing: 24) {
-            // Speed control
-            VStack(spacing: 12) {
-                HStack {
-                    Image(systemName: "speedometer")
-                        .font(.system(size: 16))
-                        .foregroundColor(.secondary)
-                    
-                    Text("Playback Speed")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.secondary)
-                    
-                    Spacer()
-                    
-                    Text(String(format: "%.1fx", audioPlayerViewModel.playbackSpeed))
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.primary)
-                }
+    // MARK: - Speed Control
+    private var speedControl: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text("Playback Speed")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.secondary)
                 
-                CompactSpeedPicker(selectedSpeed: Binding(
-                    get: { audioPlayerViewModel.playbackSpeed },
-                    set: { audioPlayerViewModel.setSpeed($0) }
-                ))
+                Spacer()
+                
+                Button(action: { showSpeedPicker.toggle() }) {
+                    HStack(spacing: 4) {
+                        Text(formatSpeed(viewModel.playbackSpeed))
+                            .font(.system(size: 16, weight: .semibold))
+                        
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .medium))
+                            .rotationEffect(.degrees(showSpeedPicker ? 90 : 0))
+                    }
+                    .foregroundColor(.accentColor)
+                }
             }
             
-            // Volume control
-            VStack(spacing: 12) {
-                HStack {
-                    Image(systemName: "speaker.wave.2.fill")
-                        .font(.system(size: 16))
-                        .foregroundColor(.secondary)
+            if showSpeedPicker {
+                HorizontalSpeedSelector(selectedSpeed: $viewModel.playbackSpeed)
+                    .transition(.asymmetric(
+                        insertion: .scale(scale: 0.9).combined(with: .opacity),
+                        removal: .scale(scale: 0.9).combined(with: .opacity)
+                    ))
+            }
+        }
+        .padding()
+        .background(Color.gray.opacity(0.05))
+        .cornerRadius(12)
+    }
+    
+    // MARK: - Queue Info
+    private var queueInfo: some View {
+        Group {
+            if !viewModel.queueItems.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Queue")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.secondary)
+                        
+                        Spacer()
+                        
+                        Text("\(viewModel.currentQueueIndex + 1) of \(viewModel.queueItems.count)")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.secondary)
+                    }
                     
-                    Text("Volume")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.secondary)
-                    
-                    Spacer()
+                    if viewModel.canPlayNext,
+                       viewModel.currentQueueIndex + 1 < viewModel.queueItems.count {
+                        HStack {
+                            Text("Next:")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                            
+                            Text(viewModel.queueItems[viewModel.currentQueueIndex + 1].title)
+                                .font(.system(size: 12, weight: .medium))
+                                .lineLimit(1)
+                        }
+                    }
                 }
-                
-                HStack(spacing: 16) {
-                    Image(systemName: "speaker.fill")
-                        .font(.system(size: 14))
-                        .foregroundColor(.secondary)
-                    
-                    Slider(value: Binding(
-                        get: { audioPlayerViewModel.volume },
-                        set: { audioPlayerViewModel.setVolume($0) }
-                    ), in: 0...1)
-                    .accentColor(.accentColor)
-                    
-                    Image(systemName: "speaker.wave.3.fill")
-                        .font(.system(size: 14))
-                        .foregroundColor(.secondary)
+                .padding()
+                .background(Color.gray.opacity(0.05))
+                .cornerRadius(12)
+                .onTapGesture {
+                    showQueue = true
                 }
             }
         }
-        .padding(20)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.gray.opacity(0.05))
-        )
     }
     
-    // MARK: - Helper Functions
-    private func formatTime(_ time: TimeInterval) -> String {
-        let minutes = Int(time) / 60
-        let seconds = Int(time) % 60
-        return String(format: "%d:%02d", minutes, seconds)
+    // MARK: - Computed Properties
+    
+    private var progressWidth: CGFloat {
+        let totalWidth = UIScreen.main.bounds.width - 48
+        let progress = isDraggingSlider ? dragProgress : viewModel.progress
+        return totalWidth * CGFloat(progress)
     }
     
-    private func formatTimeRemaining(_ current: TimeInterval, _ duration: TimeInterval) -> String {
-        let remaining = max(0, duration - current)
-        return "-" + formatTime(remaining)
+    private var itemIcon: String {
+        switch viewModel.currentItemType {
+        case .article:
+            return "doc.text.fill"
+        case .rssEpisode:
+            return "mic.fill"
+        case .none:
+            return "music.note"
+        }
+    }
+    
+    private var itemTypeText: String {
+        switch viewModel.currentItemType {
+        case .article:
+            return "Article"
+        case .rssEpisode:
+            return "Podcast"
+        case .none:
+            return "Audio"
+        }
+    }
+    
+    private func formatSpeed(_ speed: Float) -> String {
+        if speed == 1.0 {
+            return "1×"
+        } else if speed == floor(speed) {
+            return "\(Int(speed))×"
+        } else {
+            return String(format: "%.1f×", speed)
+        }
     }
 }
 
-// MARK: - Audio Queue View V2
-struct AudioQueueViewV2: View {
-    @EnvironmentObject var audioPlayerViewModel: AudioPlayerViewModel
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.managedObjectContext) private var viewContext
+// MARK: - Queue View
+
+struct QueueView: View {
+    @EnvironmentObject var viewModel: AudioPlayerViewModelV2
+    @Environment(\.dismiss) var dismiss
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             List {
-                ForEach(0..<audioPlayerViewModel.queueItems.count, id: \.self) { index in
-                    queueRow(at: index)
+                ForEach(viewModel.queueItems.indices, id: \.self) { index in
+                    HStack {
+                        // Playing indicator
+                        if index == viewModel.currentQueueIndex {
+                            Image(systemName: "speaker.wave.2.fill")
+                                .font(.system(size: 14))
+                                .foregroundColor(.accentColor)
+                                .frame(width: 20)
+                        } else {
+                            Text("\(index + 1)")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(.secondary)
+                                .frame(width: 20)
+                        }
+                        
+                        // Item info
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(viewModel.queueItems[index].title)
+                                .font(.system(size: 14, weight: index == viewModel.currentQueueIndex ? .semibold : .regular))
+                                .lineLimit(2)
+                            
+                            if let source = viewModel.queueItems[index].article?.author ?? 
+                                           viewModel.queueItems[index].episode?.feed?.displayName {
+                                Text(source)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        
+                        Spacer()
+                        
+                        // Generation state
+                        switch viewModel.queueItems[index].generationState {
+                        case .ready:
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 16))
+                                .foregroundColor(.green)
+                        case .generating:
+                            ProgressView()
+                                .scaleEffect(0.7)
+                        case .failed:
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .font(.system(size: 16))
+                                .foregroundColor(.red)
+                        case .pending:
+                            Image(systemName: "circle")
+                                .font(.system(size: 16))
+                                .foregroundColor(.secondary.opacity(0.5))
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        Task {
+                            await viewModel.playItemAt(index: index)
+                            dismiss()
+                        }
+                    }
                 }
                 .onDelete { indexSet in
                     Task {
                         for index in indexSet {
-                            await audioPlayerViewModel.removeFromQueue(at: index)
+                            await viewModel.removeFromQueue(at: index)
                         }
                     }
                 }
+                .onMove { source, destination in
+                    Task {
+                        await viewModel.reorderQueue(from: source, to: destination)
+                    }
+                }
             }
-            .navigationTitle("Queue (\(audioPlayerViewModel.queueItems.count))")
+            .navigationTitle("Queue")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button("Done") {
                         dismiss()
                     }
                 }
                 
-                ToolbarItem(placement: .navigationBarLeading) {
-                    if audioPlayerViewModel.queueItems.count > 1 {
-                        Button("Clear All") {
-                            Task {
-                                await audioPlayerViewModel.clearQueue()
-                            }
-                            dismiss()
-                        }
-                        .foregroundColor(.red)
-                    }
-                }
-            }
-        }
-    }
-    
-    @ViewBuilder
-    private func queueRow(at index: Int) -> some View {
-        let item = audioPlayerViewModel.queueItems[index]
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(item.title)
-                    .font(.system(size: 16, weight: .medium))
-                    .lineLimit(2)
-                
-                HStack(spacing: 4) {
-                    Image(systemName: item.source.iconName)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(item.source.displayName)
-                        .font(.system(size: 14))
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            Spacer()
-            
-            // Check if this is the currently playing item
-            if index == audioPlayerViewModel.currentQueueIndex {
-                Image(systemName: "speaker.wave.2.fill")
-                    .font(.system(size: 16))
-                    .foregroundColor(.accentColor)
-            }
-        }
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if index != audioPlayerViewModel.currentQueueIndex {
-                Task {
-                    await audioPlayerViewModel.playItemAt(index: index)
+                ToolbarItem(placement: .topBarTrailing) {
+                    EditButton()
                 }
             }
         }
@@ -467,10 +488,10 @@ struct AudioQueueViewV2: View {
 }
 
 // MARK: - Preview
+
 struct ExpandedAudioPlayerV2_Previews: PreviewProvider {
     static var previews: some View {
         ExpandedAudioPlayerV2()
-            .environmentObject(AudioPlayerViewModel())
-            .environmentObject(UserDefaultsManager.shared)
+            .environmentObject(AudioPlayerViewModelV2())
     }
 }
