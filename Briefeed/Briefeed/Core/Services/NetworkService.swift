@@ -70,10 +70,23 @@ class NetworkService: NetworkServiceProtocol {
     func request<T: Decodable>(_ endpoint: String, method: HTTPMethod = .get, parameters: [String: Any]? = nil, headers: [String: String]? = nil, timeout: TimeInterval? = nil) async throws -> T {
         let data = try await requestData(endpoint, method: method, parameters: parameters, headers: headers, timeout: timeout)
         
+        // Log raw response for Gemini API debugging
+        if endpoint.contains("generativelanguage.googleapis.com") {
+            if let jsonString = String(data: data, encoding: .utf8) {
+                print("[NetworkService] Raw Gemini response: \(jsonString.prefix(500))...")
+            }
+        }
+        
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
             print("Decoding error: \(error)")
+            // Log more details for Gemini API errors
+            if endpoint.contains("generativelanguage.googleapis.com") {
+                if let jsonString = String(data: data, encoding: .utf8) {
+                    print("[NetworkService] Failed to decode response: \(jsonString.prefix(1000))")
+                }
+            }
             throw NetworkError.decodingError
         }
     }

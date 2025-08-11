@@ -15,7 +15,7 @@ final class AudioCacheManager {
     // MARK: - Constants
     
     private enum Constants {
-        static let cacheDirectoryName = "tts_audio"
+        static let cacheDirectoryName = "AudioCache" // Match GeminiTTS directory
         static let maxCacheSize: Int64 = 500 * 1024 * 1024 // 500MB
         static let cleanupAgeDays = 5
         static let minFreeSpace: Int64 = 100 * 1024 * 1024 // Keep 100MB free
@@ -75,17 +75,23 @@ final class AudioCacheManager {
     /// Get cached audio file URL if it exists
     func getCachedAudioURL(for text: String, voice: String? = nil) -> URL? {
         let key = cacheKey(for: text, voice: voice)
-        let fileURL = cacheDirectory
-            .appendingPathComponent(key)
-            .appendingPathExtension("mp3")
         
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            // Update last accessed time
-            try? FileManager.default.setAttributes(
-                [.modificationDate: Date()],
-                ofItemAtPath: fileURL.path
-            )
-            return fileURL
+        // Check for both .wav and .mp3 files
+        let extensions = ["wav", "mp3"]
+        
+        for ext in extensions {
+            let fileURL = cacheDirectory
+                .appendingPathComponent(key)
+                .appendingPathExtension(ext)
+            
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                // Update last accessed time
+                try? FileManager.default.setAttributes(
+                    [.modificationDate: Date()],
+                    ofItemAtPath: fileURL.path
+                )
+                return fileURL
+            }
         }
         
         return nil

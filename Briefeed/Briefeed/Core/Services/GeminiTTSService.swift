@@ -93,7 +93,7 @@ class GeminiTTSService: ObservableObject {
     static let shared = GeminiTTSService()
     
     // MARK: - Properties
-    private let modelName = "models/gemini-2.5-flash-preview-tts"
+    private let modelName = "models/gemini-2.5-flash-preview-tts" // Use dedicated TTS model for audio generation
     private let defaultVoice = "Autonoe"
     
     // Available Gemini voices
@@ -273,16 +273,23 @@ class GeminiTTSService: ObservableObject {
     }
     
     private func generateWithGemini(text: String, voiceName: String, apiKey: String) async -> TTSResult {
+        print("[GeminiTTS] Starting audio generation with Gemini 2.5 Flash")
+        print("[GeminiTTS] Text length: \(text.count) characters")
+        print("[GeminiTTS] Voice: \(voiceName)")
+        
         let urlString = "https://generativelanguage.googleapis.com/v1beta/\(modelName):generateContent?key=\(apiKey)"
         
         guard let url = URL(string: urlString) else {
+            print("[GeminiTTS] ERROR: Invalid URL")
             return TTSResult(success: false, audioData: nil, audioURL: nil, error: "Invalid URL", usedFallback: false, voiceUsed: nil)
         }
+        
+        print("[GeminiTTS] API endpoint: \(urlString.replacingOccurrences(of: apiKey, with: "***"))")
         
         // Create request body
         let request = GeminiTTSRequest(
             contents: [
-                GeminiContent(parts: [GeminiPart(text: text)], role: "user")
+                GeminiContent(parts: [GeminiPart(text: text)], role: "user", text: nil)
             ],
             generationConfig: GeminiTTSConfig(
                 responseModalities: ["AUDIO"],
@@ -311,8 +318,12 @@ class GeminiTTSService: ObservableObject {
             
             if httpResponse.statusCode != 200 {
                 let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+                print("[GeminiTTS] ERROR: HTTP \(httpResponse.statusCode)")
+                print("[GeminiTTS] Response: \(errorMessage)")
                 return TTSResult(success: false, audioData: nil, audioURL: nil, error: "HTTP \(httpResponse.statusCode): \(errorMessage)", usedFallback: false, voiceUsed: nil)
             }
+            
+            print("[GeminiTTS] Received response, parsing...")
             
             let ttsResponse = try JSONDecoder().decode(GeminiTTSResponse.self, from: data)
             
@@ -321,8 +332,18 @@ class GeminiTTSService: ObservableObject {
             }
             
             guard let audioData = ttsResponse.candidates?.first?.content.parts.first?.inlineData?.data else {
+                print("[GeminiTTS] ERROR: No audio data in response")
+                print("[GeminiTTS] Response structure: candidates=\(ttsResponse.candidates?.count ?? 0)")
+                if let firstCandidate = ttsResponse.candidates?.first {
+                    print("[GeminiTTS] First candidate parts: \(firstCandidate.content.parts.count)")
+                    if let firstPart = firstCandidate.content.parts.first {
+                        print("[GeminiTTS] First part has text: \(firstPart.text != nil), inlineData: \(firstPart.inlineData != nil)")
+                    }
+                }
                 return TTSResult(success: false, audioData: nil, audioURL: nil, error: "No audio data in response", usedFallback: false, voiceUsed: nil)
             }
+            
+            print("[GeminiTTS] Found audio data in response")
             
             // Decode base64 audio data
             guard let decodedData = Data(base64Encoded: audioData) else {

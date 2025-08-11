@@ -145,7 +145,7 @@ final class AudioPlayerViewModelV2: ObservableObject {
         unifiedPlayer.togglePlayPause()
     }
     
-    func play() {
+    func play() async {
         unifiedPlayer.resume()
     }
     
@@ -167,6 +167,69 @@ final class AudioPlayerViewModelV2: ObservableObject {
     
     func seek(to progress: Float) {
         let time = TimeInterval(progress) * duration
+        unifiedPlayer.seek(to: time)
+    }
+    
+    // MARK: - Navigation Methods for Mini Player
+    
+    func playNext() async {
+        guard currentQueueIndex < queueItems.count - 1 else { return }
+        
+        isLoading = true
+        let nextIndex = currentQueueIndex + 1
+        currentQueueIndex = nextIndex
+        
+        let item = queueItems[nextIndex]
+        if let article = item.article {
+            await play(article: article)
+        } else if let episode = item.episode {
+            await play(episode: episode)
+        }
+        
+        isLoading = false
+    }
+    
+    func playPrevious() async {
+        // If we're more than 3 seconds into playback, restart current item
+        if currentTime > 3 {
+            unifiedPlayer.seek(to: 0)
+            return
+        }
+        
+        // Otherwise go to previous item
+        guard currentQueueIndex > 0 else { 
+            // If at beginning, just restart
+            unifiedPlayer.seek(to: 0)
+            return 
+        }
+        
+        isLoading = true
+        let previousIndex = currentQueueIndex - 1
+        currentQueueIndex = previousIndex
+        
+        let item = queueItems[previousIndex]
+        if let article = item.article {
+            await play(article: article)
+        } else if let episode = item.episode {
+            await play(episode: episode)
+        }
+        
+        isLoading = false
+    }
+    
+    // MARK: - Seek Methods for Mini Player
+    
+    func seekForward() {
+        // Seek forward 10 seconds
+        skipForward(10)
+    }
+    
+    func seekBackward() {
+        // Seek backward 10 seconds
+        skipBackward(10)
+    }
+    
+    func seek(to time: TimeInterval) {
         unifiedPlayer.seek(to: time)
     }
     
@@ -266,14 +329,6 @@ final class AudioPlayerViewModelV2: ObservableObject {
     
     // MARK: - Queue Management
     
-    func playNext() async {
-        await unifiedPlayer.playNext()
-    }
-    
-    func playPrevious() async {
-        await unifiedPlayer.playPrevious()
-    }
-    
     func playItemAt(index: Int) async {
         await unifiedPlayer.play(at: index)
     }
@@ -300,6 +355,29 @@ final class AudioPlayerViewModelV2: ObservableObject {
     
     func clearQueue() async {
         unifiedPlayer.clearQueue()
+    }
+    
+    func saveQueueState() async {
+        // Save current queue to UserDefaults for persistence
+        let queueData = queueItems.compactMap { item -> [String: Any]? in
+            if let article = item.article {
+                return [
+                    "type": "article",
+                    "id": article.id?.uuidString ?? "",
+                    "title": article.title ?? ""
+                ]
+            } else if let episode = item.episode {
+                return [
+                    "type": "episode", 
+                    "id": episode.id ?? "",
+                    "title": episode.title ?? ""
+                ]
+            }
+            return nil
+        }
+        
+        UserDefaults.standard.set(queueData, forKey: "audioQueueState")
+        UserDefaults.standard.set(currentQueueIndex, forKey: "audioQueueIndex")
     }
     
     func playNextInQueue() {

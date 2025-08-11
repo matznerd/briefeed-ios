@@ -15,8 +15,9 @@ struct GeminiRequest: Codable {
 }
 
 struct GeminiContent: Codable {
-    let parts: [GeminiPart]
+    let parts: [GeminiPart]?  // Made optional as response might not always have parts
     let role: String? // "user" or "model"
+    let text: String? // Some responses might have direct text instead of parts
 }
 
 struct GeminiPart: Codable {
@@ -131,7 +132,7 @@ protocol GeminiServiceProtocol {
 class GeminiService: GeminiServiceProtocol {
     private let networkService: NetworkServiceProtocol
     private let apiKey: String
-    private let model = "gemini-2.5-flash-lite" // Updated to faster model for better performance
+    private let model = "gemini-2.5-flash" // Use Gemini 2.5 Flash for summarization
     private var currentUsage: GeminiUsage?
     
     init(networkService: NetworkServiceProtocol = NetworkService.shared, apiKey: String? = nil) {
@@ -141,17 +142,24 @@ class GeminiService: GeminiServiceProtocol {
     
     func summarize(text: String, length: Constants.Summary.Length) async throws -> String {
         guard !apiKey.isEmpty else {
+            print("[GeminiService] ERROR: No API key configured")
             throw GeminiServiceError.invalidAPIKey
         }
         
+        print("[GeminiService] Starting summarization with model: \(model)")
+        print("[GeminiService] Input text length: \(text.count) characters")
+        
         let prompt = createSummarizationPrompt(text: text, length: length)
         let endpoint = "\(Constants.API.geminiBaseURL)/models/\(model):generateContent?key=\(apiKey)"
+        
+        print("[GeminiService] Using endpoint: \(endpoint.replacingOccurrences(of: apiKey, with: "***"))")
         
         let request = GeminiRequest(
             contents: [
                 GeminiContent(
                     parts: [GeminiPart(text: prompt)],
-                    role: "user"
+                    role: "user",
+                    text: nil
                 )
             ],
             generationConfig: GeminiGenerationConfig(
@@ -160,7 +168,7 @@ class GeminiService: GeminiServiceProtocol {
                 topP: 0.95,
                 maxOutputTokens: length.maxTokens,
                 stopSequences: nil,
-                responseMimeType: nil
+                responseMimeType: "text/plain"  // Use plain text for summary generation
             ),
             safetySettings: [
                 GeminiSafetySetting(category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE"),
@@ -185,9 +193,20 @@ class GeminiService: GeminiServiceProtocol {
             
             guard let candidates = response.candidates,
                   !candidates.isEmpty,
-                  let firstCandidate = candidates.first,
-                  !firstCandidate.content.parts.isEmpty,
-                  let text = firstCandidate.content.parts.first?.text else {
+                  let firstCandidate = candidates.first else {
+                throw GeminiServiceError.invalidResponse
+            }
+            
+            // Try to get text from parts first, then direct text field
+            let text: String
+            if let parts = firstCandidate.content.parts,
+               !parts.isEmpty,
+               let partText = parts.first?.text {
+                text = partText
+            } else if let directText = firstCandidate.content.text {
+                text = directText
+            } else {
+                print("[GeminiService] No text found in response candidate")
                 throw GeminiServiceError.invalidResponse
             }
             
@@ -195,6 +214,10 @@ class GeminiService: GeminiServiceProtocol {
             let promptTokens = prompt.count / 4 // Rough token estimation
             let completionTokens = text.count / 4
             currentUsage = GeminiUsage(promptTokens: promptTokens, completionTokens: completionTokens)
+            
+            print("[GeminiService] Successfully generated summary: \(text.count) characters")
+            print("[GeminiService] Summary preview: \(text.prefix(500))...")
+            print("[GeminiService] Full summary for quality check:\n\(text)")
             
             return text.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
@@ -246,7 +269,8 @@ class GeminiService: GeminiServiceProtocol {
             contents: [
                 GeminiContent(
                     parts: [GeminiPart(text: prompt)],
-                    role: "user"
+                    role: "user",
+                    text: nil
                 )
             ],
             generationConfig: GeminiGenerationConfig(
@@ -282,9 +306,20 @@ class GeminiService: GeminiServiceProtocol {
             
             guard let candidates = response.candidates,
                   !candidates.isEmpty,
-                  let firstCandidate = candidates.first,
-                  !firstCandidate.content.parts.isEmpty,
-                  let text = firstCandidate.content.parts.first?.text else {
+                  let firstCandidate = candidates.first else {
+                throw GeminiServiceError.invalidResponse
+            }
+            
+            // Try to get text from parts first, then direct text field
+            let text: String
+            if let parts = firstCandidate.content.parts,
+               !parts.isEmpty,
+               let partText = parts.first?.text {
+                text = partText
+            } else if let directText = firstCandidate.content.text {
+                text = directText
+            } else {
+                print("[GeminiService] No text found in response candidate")
                 throw GeminiServiceError.invalidResponse
             }
             
@@ -434,41 +469,31 @@ class GeminiService: GeminiServiceProtocol {
     }
     
     private func createSummarizationPrompt(text: String, length: Constants.Summary.Length) -> String {
-        // Using the exact same prompt structure as the Capacitor app
+        // Enhanced prompt to extract meaningful facts beyond clickbait
+        let wordCount = length == .brief ? "100-150" : length == .standard ? "200-300" : "400-500"
+        
+        print("[GeminiService] Creating summary prompt for \(text.count) characters of content")
+        
         return """
-        Your SOLE task is to analyze the provided news article content and extract specific information.
+        Analyze this article and provide a summary that cuts through any clickbait to deliver the core facts.
         
-        Article Content:
-        \"\"\"
+        Article:
         \(text)
-        \"\"\"
         
-        Instructions:
-        1. Read the "Article Content" carefully.
-        2. Focus ONLY on the main textual content of the article. Ignore sidebars, navigation links, advertisements, comments, and other non-article elements.
-        3. Extract the information requested in the JSON format below.
-        4. For "quickFacts", provide concise answers. If a specific piece of information for a quickFact is not clearly available in the article, use "N/A".
-        5. For "theStory", provide a two-paragraph summary based EXCLUSIVELY on the provided "Article Content".
+        Create a summary (approximately \(wordCount) words) that includes:
+        - WHO is involved (key people, companies, or organizations)
+        - WHAT actually happened (the real story behind the headline)
+        - WHEN and WHERE it occurred
+        - WHY it matters (impact and implications)
+        - KEY NUMBERS, statistics, or data points if relevant
         
-        Response Format (JSON Object ONLY):
-        - If you can successfully extract the information and summarize the "Article Content":
-          {
-            "quickFacts": {
-              "whatHappened": "Brief description of the core event.",
-              "who": "Main people or organizations involved.",
-              "whenWhere": "Time and location of the event.",
-              "keyNumbers": "Any significant numbers, statistics, or monetary amounts, or 'N/A'.",
-              "mostStrikingDetail": "The most interesting or surprising single fact from the article."
-            },
-            "theStory": "Your two-paragraph summary here. The first paragraph should cover the main event and immediate context. The second paragraph should provide background or broader implications if available in the text."
-          }
-        - If the provided "Article Content" is insufficient, unclear, not a news article, or if you cannot reasonably extract the required fields:
-          Respond ONLY with this exact JSON object:
-          {
-            "error": "The provided content could not be processed to extract the required information or generate a news summary."
-          }
-        ABSOLUTELY DO NOT provide 'quickFacts' or 'theStory' if you are returning an 'error'. Do NOT use external knowledge.
-        Your response MUST be one of these two JSON structures.
+        Start with the most important fact that reveals what's really happening.
+        If the headline is sensationalized, focus on the actual facts buried in the article.
+        Write in clear, conversational language suitable for text-to-speech.
+        Use complete sentences, no bullet points or formatting.
+        Stick to facts presented in the article - avoid speculation.
+        
+        Summary:
         """
     }
     

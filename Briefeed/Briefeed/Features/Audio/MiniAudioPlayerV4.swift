@@ -43,7 +43,7 @@ struct MiniAudioPlayerV4: View {
                     }
                 }
                 
-                // Title and info
+                // Title and info - constrained width to prevent overflow
                 VStack(alignment: .leading, spacing: 2) {
                     if let title = viewModel.currentTitle {
                         MarqueeText(title, font: .system(size: 14, weight: .medium))
@@ -59,6 +59,7 @@ struct MiniAudioPlayerV4: View {
                             Text(viewModel.generationProgress)
                                 .font(.system(size: 11))
                                 .foregroundColor(.orange)
+                                .lineLimit(1)
                         } else if let artist = viewModel.currentArtist {
                             Text(artist)
                                 .font(.system(size: 11))
@@ -73,57 +74,95 @@ struct MiniAudioPlayerV4: View {
                         }
                     }
                 }
+                .frame(maxWidth: 120) // Constrain width to prevent overflow
                 
-                Spacer()
+                Spacer(minLength: 4)
                 
-                // Controls
-                HStack(spacing: 16) {
-                    // Previous button
+                // Controls - 5 button layout: [⏮️] [-10] [⏸️/▶️] [+10] [⏭️]
+                HStack(spacing: 10) {
+                    // Previous track button
                     Button(action: {
-                        Task {
+                        Task { @MainActor in
                             await viewModel.playPrevious()
                         }
                     }) {
-                        Image(systemName: "backward.fill")
-                            .font(.system(size: 18))
-                            .foregroundColor(viewModel.canPlayPrevious ? .primary : .secondary.opacity(0.5))
+                        Image(systemName: "backward.end.fill")
+                            .font(.system(size: 20))
+                            .foregroundColor(viewModel.currentQueueIndex > 0 ? .primary : .secondary.opacity(0.5))
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
                     }
-                    .disabled(!viewModel.canPlayPrevious)
+                    .disabled(viewModel.currentQueueIndex <= 0)
+                    .accessibilityLabel("Previous track")
                     
-                    // Play/Pause button
+                    // Rewind 10 seconds button
                     Button(action: {
-                        viewModel.togglePlayPause()
+                        viewModel.seekBackward()
+                    }) {
+                        Image(systemName: "gobackward.10")
+                            .font(.system(size: 18))
+                            .foregroundColor(.primary)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("Rewind 10 seconds")
+                    
+                    // Play/Pause button (center, larger)
+                    Button(action: {
+                        if viewModel.isPlaying {
+                            viewModel.pause()
+                        } else {
+                            Task { @MainActor in
+                                await viewModel.play()
+                            }
+                        }
                     }) {
                         ZStack {
                             Circle()
                                 .fill(Color.accentColor)
-                                .frame(width: 40, height: 40)
+                                .frame(width: 44, height: 44)
                             
                             if viewModel.isLoading || viewModel.isGenerating {
                                 ProgressView()
                                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(0.6)
+                                    .scaleEffect(0.7)
                             } else {
                                 Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
-                                    .font(.system(size: 16, weight: .semibold))
+                                    .font(.system(size: 18, weight: .semibold))
                                     .foregroundColor(.white)
                                     .offset(x: viewModel.isPlaying ? 0 : 1) // Center play icon
                             }
                         }
                     }
-                    .disabled(viewModel.currentTitle == nil && !viewModel.isLoading)
+                    .disabled(viewModel.queueItems.isEmpty)
+                    .accessibilityLabel(viewModel.isPlaying ? "Pause" : "Play")
                     
-                    // Next button
+                    // Forward 10 seconds button
                     Button(action: {
-                        Task {
+                        viewModel.seekForward()
+                    }) {
+                        Image(systemName: "goforward.10")
+                            .font(.system(size: 18))
+                            .foregroundColor(.primary)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("Forward 10 seconds")
+                    
+                    // Next track button
+                    Button(action: {
+                        Task { @MainActor in
                             await viewModel.playNext()
                         }
                     }) {
-                        Image(systemName: "forward.fill")
-                            .font(.system(size: 18))
-                            .foregroundColor(viewModel.canPlayNext ? .primary : .secondary.opacity(0.5))
+                        Image(systemName: "forward.end.fill")
+                            .font(.system(size: 20))
+                            .foregroundColor(viewModel.currentQueueIndex < viewModel.queueItems.count - 1 ? .primary : .secondary.opacity(0.5))
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
                     }
-                    .disabled(!viewModel.canPlayNext)
+                    .disabled(viewModel.currentQueueIndex >= viewModel.queueItems.count - 1)
+                    .accessibilityLabel("Next track")
                 }
                 .padding(.trailing, 8)
             }

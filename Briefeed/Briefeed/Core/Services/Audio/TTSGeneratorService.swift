@@ -349,6 +349,11 @@ final class TTSGeneratorService {
                 if let cachedURL = cacheManager.getCachedAudioURL(for: text, voice: voice) {
                     return cachedURL
                 }
+                // Check one more time with a small delay (file system lag)
+                try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+                if let cachedURL = cacheManager.getCachedAudioURL(for: text, voice: voice) {
+                    return cachedURL
+                }
                 // Generation failed
                 throw TTSError.generationFailed
             }

@@ -204,11 +204,33 @@ final class SwiftAudioExService: NSObject {
     // MARK: - Playback Control
     
     func play(url: URL) async throws {
+        print("[SwiftAudioEx] play() called with URL: \(url)")
         state = .loading
         
+        // Check if file exists for local files
+        if url.isFileURL {
+            if !FileManager.default.fileExists(atPath: url.path) {
+                print("[SwiftAudioEx] ERROR: File does not exist at path: \(url.path)")
+                throw NSError(domain: "SwiftAudioEx", code: 404, userInfo: [NSLocalizedDescriptionKey: "Audio file not found"])
+            }
+            print("[SwiftAudioEx] File exists, loading local file: \(url.path)")
+            
+            // Try to verify the file is playable
+            do {
+                let testPlayer = try AVAudioPlayer(contentsOf: url)
+                print("[SwiftAudioEx] File is playable, duration: \(testPlayer.duration) seconds")
+            } catch {
+                print("[SwiftAudioEx] WARNING: File may not be playable: \(error)")
+            }
+        } else {
+            print("[SwiftAudioEx] Loading remote URL: \(url.absoluteString)")
+        }
+        
         // Create audio item with metadata
+        // IMPORTANT: For file source type, SwiftAudioEx expects a file path, not a file:// URL
+        let audioUrl = url.isFileURL ? url.path : url.absoluteString
         let audioItem = DefaultAudioItem(
-            audioUrl: url.absoluteString,
+            audioUrl: audioUrl,
             artist: "TTS",
             title: url.lastPathComponent,
             albumTitle: "Briefeed",
@@ -216,7 +238,13 @@ final class SwiftAudioExService: NSObject {
             artwork: nil
         )
         
+        print("[SwiftAudioEx] Creating DefaultAudioItem:")
+        print("[SwiftAudioEx]   - audioUrl: \(audioUrl)")
+        print("[SwiftAudioEx]   - sourceType: \(url.isFileURL ? ".file" : ".stream")")
+        print("[SwiftAudioEx]   - title: \(url.lastPathComponent)")
+        
         // Load and play
+        print("[SwiftAudioEx] Loading item into player with playWhenReady: true")
         player.load(item: audioItem, playWhenReady: true)
         
         // Store in queue
@@ -227,6 +255,7 @@ final class SwiftAudioExService: NSObject {
         
         // Start progress timer
         startProgressTimer()
+        print("[SwiftAudioEx] play() completed, waiting for player state changes...")
     }
     
     func pause() {
@@ -290,8 +319,10 @@ final class SwiftAudioExService: NSObject {
             let url = queue[currentIndex]
             
             // Create and load next item
+            // IMPORTANT: For file source type, SwiftAudioEx expects a file path, not a file:// URL
+            let audioUrl = url.isFileURL ? url.path : url.absoluteString
             let audioItem = DefaultAudioItem(
-                audioUrl: url.absoluteString,
+                audioUrl: audioUrl,
                 artist: "TTS",
                 title: url.lastPathComponent,
                 albumTitle: "Briefeed",
@@ -309,8 +340,10 @@ final class SwiftAudioExService: NSObject {
             let url = queue[currentIndex]
             
             // Create and load previous item
+            // IMPORTANT: For file source type, SwiftAudioEx expects a file path, not a file:// URL
+            let audioUrl = url.isFileURL ? url.path : url.absoluteString
             let audioItem = DefaultAudioItem(
-                audioUrl: url.absoluteString,
+                audioUrl: audioUrl,
                 artist: "TTS",
                 title: url.lastPathComponent,
                 albumTitle: "Briefeed",
@@ -380,6 +413,25 @@ final class SwiftAudioExService: NSObject {
     
     private func handlePlaybackFailure(error: Error?) {
         progressTimer?.invalidate()
+        
+        // Log detailed error information
+        if let error = error {
+            print("[SwiftAudioEx] ⚠️ Playback failed with error: \(error)")
+            print("[SwiftAudioEx] Error description: \(error.localizedDescription)")
+            if let nsError = error as NSError? {
+                print("[SwiftAudioEx] Error code: \(nsError.code)")
+                print("[SwiftAudioEx] Error domain: \(nsError.domain)")
+                print("[SwiftAudioEx] Error userInfo: \(nsError.userInfo)")
+            }
+            
+            // Check if it's a specific SwiftAudioEx error
+            if let playbackError = error as? AudioPlayerError.PlaybackError {
+                print("[SwiftAudioEx] Playback error type: \(playbackError)")
+            }
+        } else {
+            print("[SwiftAudioEx] ⚠️ Playback failed with unknown error")
+        }
+        
         state = .error(error ?? TTSError.generationFailed)
         delegate?.audioDidFinishPlaying(successfully: false)
     }

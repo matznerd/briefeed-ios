@@ -240,9 +240,13 @@ final class UnifiedAudioPlayer: ObservableObject {
         
         // Play if generation succeeded
         if let audioURL = item.cachedAudioURL {
+            print("[UnifiedPlayer] Attempting to play audio from: \(audioURL.path)")
+            print("[UnifiedPlayer] File exists: \(FileManager.default.fileExists(atPath: audioURL.path))")
+            
             do {
                 try await audioPlayer.play(url: audioURL)
                 isPlaying = true
+                print("[UnifiedPlayer] Successfully started playback")
                 
                 // Start pre-generation for next items
                 await preGenerateNextItems()
@@ -258,8 +262,11 @@ final class UnifiedAudioPlayer: ObservableObject {
                 }
             } catch {
                 print("[UnifiedPlayer] Failed to play audio: \(error)")
+                print("[UnifiedPlayer] Error type: \(type(of: error))")
                 item.generationState = .failed(error)
             }
+        } else {
+            print("[UnifiedPlayer] No cached audio URL available for item: \(item.title)")
         }
     }
     
@@ -365,8 +372,14 @@ final class UnifiedAudioPlayer: ObservableObject {
                         // Fetch content from URL if needed
                         generationProgress = "Fetching article content..."
                         let firecrawlService = FirecrawlService()
-                        if let firecrawlData = try? await firecrawlService.fetchArticleContent(from: url) {
+                        do {
+                            let firecrawlData = try await firecrawlService.fetchArticleContent(from: url)
                             contentToSummarize = firecrawlData.content ?? ""
+                            print("[UnifiedPlayer] Fetched \(contentToSummarize.count) characters from article")
+                        } catch {
+                            print("[UnifiedPlayer] Failed to fetch article content: \(error)")
+                            // Try to use article description as fallback
+                            contentToSummarize = article.content ?? ""
                         }
                     }
                     
@@ -374,15 +387,23 @@ final class UnifiedAudioPlayer: ObservableObject {
                         // Generate summary using Gemini
                         generationProgress = "Creating summary..."
                         let geminiService = GeminiService()
-                        let summary = try await geminiService.summarize(
+                        
+                        // The summarize function now returns plain text
+                        print("[UnifiedPlayer] Generating summary from \(contentToSummarize.count) characters of content")
+                        let summaryText = try await geminiService.summarize(
                             text: contentToSummarize,
                             length: .standard
                         )
+                        print("[UnifiedPlayer] Received summary: \(summaryText.count) characters")
+                        print("[UnifiedPlayer] Summary preview: \(summaryText.prefix(200))...")
                         
                         // Save summary to article
-                        await MainActor.run {
-                            article.summary = summary
-                            try? context.save()
+                        if !summaryText.isEmpty {
+                            await MainActor.run {
+                                article.summary = summaryText
+                                print("[UnifiedPlayer] Saved summary to article: \(summaryText.count) characters")
+                                try? context.save()
+                            }
                         }
                     }
                 }
@@ -390,6 +411,7 @@ final class UnifiedAudioPlayer: ObservableObject {
                 // Now format text for TTS (will include the summary)
                 generationProgress = "Generating audio..."
                 let text = formatArticleForTTS(article)
+                print("[UnifiedPlayer] Text for TTS (\(text.count) chars): \(String(text.prefix(200)))...")
                 
                 // Generate audio file
                 let audioURL = try await ttsGenerator.generateAudioFile(
@@ -407,8 +429,10 @@ final class UnifiedAudioPlayer: ObservableObject {
                 }
                 
                 print("[UnifiedPlayer] Generated audio for: \(item.title)")
+                print("[UnifiedPlayer] Audio URL: \(audioURL.path)")
             } catch {
                 print("[UnifiedPlayer] Failed to generate audio: \(error)")
+                print("[UnifiedPlayer] Error details: \(error.localizedDescription)")
                 item.generationState = .failed(error)
             }
             
@@ -452,11 +476,48 @@ final class UnifiedAudioPlayer: ObservableObject {
         
         // Check if we have a pre-generated summary
         if let summary = article.summary, !summary.isEmpty {
-            text += summary
+            // Skip the fallback summary message
+            if !summary.contains("Unable to generate summary") {
+                text += summary
+            } else {
+                // Use article content as fallback
+                if let content = article.content, !content.isEmpty {
+                    let cleanContent = content.stripHTML
+                        .replacingOccurrences(of: "\n\n", with: ". ")
+                        .replacingOccurrences(of: "\n", with: " ")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    
+                    // Limit content length for TTS
+                    if cleanContent.count > 3000 {
+                        text += String(cleanContent.prefix(3000)) + "... Content truncated for speech."
+                    } else {
+                        text += cleanContent
+                    }
+                } else {
+                    text += "Article content not available."
+                }
+            }
+        } else if let content = article.content, !content.isEmpty {
+            // No summary, use content directly
+            let cleanContent = content.stripHTML
+                .replacingOccurrences(of: "\n\n", with: ". ")
+                .replacingOccurrences(of: "\n", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            // Limit content length for TTS
+            if cleanContent.count > 3000 {
+                text += String(cleanContent.prefix(3000)) + "... Content truncated for speech."
+            } else {
+                text += cleanContent
+            }
         } else {
-            // No summary yet - we'll need to generate one
-            // For now, return a placeholder that will be replaced by the actual summary generation
-            text += "[Article content needs summary generation]"
+            // No content available at all
+            text += "Article content not available for text-to-speech."
+        }
+        
+        // Ensure we have something meaningful to speak
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).count < 50 {
+            print("[UnifiedPlayer] Warning: Article text too short (\(text.count) chars)")
         }
         
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
