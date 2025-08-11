@@ -151,12 +151,8 @@ class RedditService: RedditServiceProtocol {
     // MARK: - Content Filtering
     private func filterResponse(_ response: RedditResponse) -> RedditResponse {
         let filteredChildren = response.data.children.filter { child in
-            // Filter out self posts - we only want external articles
-            if child.data.isSelf == true {
-                return false
-            }
-            
-            // Also apply any other filters
+            // Apply comprehensive filtering from DefaultDataService
+            // This now includes self-posts, file links, videos, etc.
             return !DefaultDataService.shared.shouldFilterPost(child.data)
         }
         

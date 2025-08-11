@@ -141,13 +141,13 @@ struct ArticleRowView: View {
                             .font(.caption)
                             .foregroundColor(.briefeedSecondaryLabel)
                         
-                        // Author
-                        if let author = article.author {
+                        // Domain
+                        if let url = article.url, let domain = url.extractedDomain {
                             Text("•")
                                 .font(.caption)
                                 .foregroundColor(.briefeedSecondaryLabel)
                             
-                            Text("u/\(author)")
+                            Text(domain)
                                 .font(.caption)
                                 .foregroundColor(.briefeedSecondaryLabel)
                         }

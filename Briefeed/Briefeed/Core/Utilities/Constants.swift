@@ -70,7 +70,57 @@ enum Constants {
             "youtu.be",
             "twitch.tv",
             "clips.twitch.tv",
-            "streamable.com"
+            "streamable.com",
+            "reddit.com/gallery",
+            "reddit.com/poll",
+            "forms.gle",
+            "docs.google.com",
+            "drive.google.com",
+            "dropbox.com",
+            "mega.nz",
+            "mediafire.com",
+            "sendspace.com",
+            "wetransfer.com",
+            "discord.gg",
+            "discord.com"
+        ]
+        
+        // File extensions to filter out (non-article content)
+        static let filteredFileExtensions = [
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".xls",
+            ".xlsx",
+            ".ppt",
+            ".pptx",
+            ".zip",
+            ".rar",
+            ".7z",
+            ".tar",
+            ".gz",
+            ".exe",
+            ".dmg",
+            ".pkg",
+            ".deb",
+            ".rpm",
+            ".apk",
+            ".ipa",
+            ".mp3",
+            ".mp4",
+            ".avi",
+            ".mov",
+            ".wmv",
+            ".flv",
+            ".mkv",
+            ".webm",
+            ".gif",
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".bmp",
+            ".svg",
+            ".webp"
         ]
     }
     

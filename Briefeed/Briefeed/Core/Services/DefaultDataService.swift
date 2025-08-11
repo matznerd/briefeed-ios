@@ -120,19 +120,48 @@ class DefaultDataService {
             return true
         }
         
+        // Filter out self posts (they don't have external articles to summarize)
+        // Even if they have selftext, we want external articles only
+        if post.isSelf == true {
+            return true
+        }
+        
+        // Filter out posts without URLs
+        guard let url = post.url else {
+            return true
+        }
+        
+        let lowercasedURL = url.lowercased()
+        
         // Filter out image-only posts from specific domains
-        if let url = post.url {
-            let lowercasedURL = url.lowercased()
-            for domain in Constants.Reddit.filteredDomains {
-                if lowercasedURL.contains(domain) {
-                    return true
-                }
+        for domain in Constants.Reddit.filteredDomains {
+            if lowercasedURL.contains(domain) {
+                return true
             }
         }
         
-        // Filter out posts without URLs (unless they're self posts with content)
-        if post.url == nil && (post.isSelf != true || post.selftext?.isEmpty != false) {
-            return true
+        // Filter out direct file links (PDFs, documents, etc.)
+        for fileExt in Constants.Reddit.filteredFileExtensions {
+            if lowercasedURL.hasSuffix(fileExt.lowercased()) {
+                return true
+            }
+            // Also check if file extension appears before query parameters
+            if lowercasedURL.contains(fileExt.lowercased() + "?") {
+                return true
+            }
+        }
+        
+        // Filter out Reddit internal links that aren't articles
+        if lowercasedURL.contains("reddit.com/") || lowercasedURL.contains("redd.it/") {
+            // Allow reddit.com links only if they're to comments (which might link to articles)
+            // Filter out user profiles, subreddit pages, etc.
+            if lowercasedURL.contains("/user/") ||
+               lowercasedURL.contains("/u/") ||
+               lowercasedURL.contains("/r/") && !lowercasedURL.contains("/comments/") ||
+               lowercasedURL.contains("/message/") ||
+               lowercasedURL.contains("/chat/") {
+                return true
+            }
         }
         
         // Keep the post if it passes all filters
