@@ -260,11 +260,16 @@ final class AudioPlayerViewModelV2: ObservableObject {
         isLoading = true
         lastError = nil
         
-        // Create queue with single article
-        await unifiedPlayer.loadQueue(from: [article])
-        
-        // Play first (and only) item
-        await unifiedPlayer.play(at: 0)
+        // Check if article is already in the queue
+        if let existingIndex = queueItems.firstIndex(where: { $0.article?.id == article.id }) {
+            // Article already in queue, just play it at its current position
+            await unifiedPlayer.play(at: existingIndex)
+        } else {
+            // Article not in queue, create a new queue with just this article
+            // This preserves the original behavior for when playing from outside the queue
+            await unifiedPlayer.loadQueue(from: [article])
+            await unifiedPlayer.play(at: 0)
+        }
         
         isLoading = false
     }
@@ -273,11 +278,18 @@ final class AudioPlayerViewModelV2: ObservableObject {
         isLoading = true
         lastError = nil
         
-        // Create queue with single episode
-        await unifiedPlayer.loadQueue(from: [episode])
-        
-        // Play first (and only) item
-        await unifiedPlayer.play(at: 0)
+        // Check if episode is already in the queue
+        if let existingIndex = queueItems.firstIndex(where: { 
+            $0.audioURL?.absoluteString == episode.audioUrl 
+        }) {
+            // Episode already in queue, just play it at its current position
+            await unifiedPlayer.play(at: existingIndex)
+        } else {
+            // Episode not in queue, create a new queue with just this episode
+            // This preserves the original behavior for when playing from outside the queue
+            await unifiedPlayer.loadQueue(from: [episode])
+            await unifiedPlayer.play(at: 0)
+        }
         
         isLoading = false
     }

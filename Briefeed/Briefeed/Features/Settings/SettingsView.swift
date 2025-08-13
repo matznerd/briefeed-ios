@@ -118,6 +118,26 @@ struct SettingsView: View {
                 // MARK: - API Keys Section
                 Section {
                     APIKeyRow(
+                        service: .openAI,
+                        apiKey: $viewModel.tempOpenAIKey,
+                        isValidating: viewModel.isValidatingOpenAIKey,
+                        isValid: viewModel.openAIKeyValid,
+                        onSave: { viewModel.saveAPIKey(for: .openAI) },
+                        onRemove: { viewModel.removeAPIKey(for: .openAI) }
+                    )
+                    
+                    // Advanced OpenAI Settings
+                    NavigationLink(destination: OpenAISettingsView()) {
+                        HStack {
+                            Label("OpenAI TTS Settings", systemImage: "waveform")
+                            Spacer()
+                            Text("Voice & Cost")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    
+                    APIKeyRow(
                         service: .gemini,
                         apiKey: $viewModel.tempGeminiKey,
                         isValidating: viewModel.isValidatingGeminiKey,
@@ -137,7 +157,7 @@ struct SettingsView: View {
                 } header: {
                     Label("API Keys", systemImage: "key")
                 } footer: {
-                    Text("API keys are stored securely on your device and never shared.")
+                    Text("API keys are stored securely on your device and never shared.\nOpenAI: Unlimited TTS generation ($0.015/1K chars)\nGemini: Free but limited to 100 TTS/day")
                         .font(.caption)
                 }
                 

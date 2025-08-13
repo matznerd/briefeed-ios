@@ -111,7 +111,8 @@ final class SwiftAudioExService: NSObject {
     private func setupAudioSession() {
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .spokenAudio, options: [.allowBluetooth, .allowAirPlay])
+            // Include .mixWithOthers to allow audio to play alongside other apps (Instagram, etc)
+            try session.setCategory(.playback, mode: .spokenAudio, options: [.mixWithOthers, .allowBluetooth, .allowAirPlay])
             try session.setActive(true)
         } catch {
             print("[SwiftAudioEx] Failed to setup audio session: \(error)")
@@ -142,33 +143,65 @@ final class SwiftAudioExService: NSObject {
         // Configure buffer
         player.bufferDuration = 2.0
         player.automaticallyUpdateNowPlayingInfo = false // We'll manage this ourselves
+        
+        // CRITICAL: Register for remote control events to show lock screen controls
+        UIApplication.shared.beginReceivingRemoteControlEvents()
     }
     
     private func setupRemoteCommands() {
         let commandCenter = MPRemoteCommandCenter.shared()
         
+        // Enable play/pause
+        commandCenter.playCommand.isEnabled = true
         commandCenter.playCommand.addTarget { [weak self] _ in
             self?.resume()
             return .success
         }
         
+        commandCenter.pauseCommand.isEnabled = true
         commandCenter.pauseCommand.addTarget { [weak self] _ in
             self?.pause()
             return .success
         }
         
+        // Enable skip forward/backward (these show as skip buttons on lock screen)
+        commandCenter.skipForwardCommand.isEnabled = true
         commandCenter.skipForwardCommand.preferredIntervals = [30]
         commandCenter.skipForwardCommand.addTarget { [weak self] _ in
             self?.skipForward()
             return .success
         }
         
+        commandCenter.skipBackwardCommand.isEnabled = true
         commandCenter.skipBackwardCommand.preferredIntervals = [15]
         commandCenter.skipBackwardCommand.addTarget { [weak self] _ in
             self?.skipBackward()
             return .success
         }
         
+        // Also enable next/previous track commands for queue navigation
+        commandCenter.nextTrackCommand.isEnabled = true
+        commandCenter.nextTrackCommand.addTarget { [weak self] _ in
+            // Trigger next item in queue through delegate
+            self?.delegate?.audioDidFinishPlaying(successfully: true)
+            return .success
+        }
+        
+        commandCenter.previousTrackCommand.isEnabled = true
+        commandCenter.previousTrackCommand.addTarget { [weak self] _ in
+            // If we're more than 3 seconds in, restart current track
+            if let currentTime = self?.currentTime, currentTime > 3 {
+                self?.seek(to: 0)
+            } else {
+                // Otherwise, we'd need to notify delegate to play previous
+                // For now, just restart
+                self?.seek(to: 0)
+            }
+            return .success
+        }
+        
+        // Enable playback rate control
+        commandCenter.changePlaybackRateCommand.isEnabled = true
         commandCenter.changePlaybackRateCommand.supportedPlaybackRates = [0.5, 1.0, 1.5, 2.0, 4.0, 8.0, 16.0, 20.0]
         commandCenter.changePlaybackRateCommand.addTarget { [weak self] event in
             if let rateEvent = event as? MPChangePlaybackRateCommandEvent {
@@ -177,12 +210,18 @@ final class SwiftAudioExService: NSObject {
             return .success
         }
         
+        // Enable seek/scrubbing
+        commandCenter.changePlaybackPositionCommand.isEnabled = true
         commandCenter.changePlaybackPositionCommand.addTarget { [weak self] event in
             if let positionEvent = event as? MPChangePlaybackPositionCommandEvent {
                 self?.seek(to: positionEvent.positionTime)
             }
             return .success
         }
+        
+        // Disable unused commands to prevent them from showing
+        commandCenter.seekForwardCommand.isEnabled = false
+        commandCenter.seekBackwardCommand.isEnabled = false
     }
     
     private func setupNotifications() {
@@ -203,7 +242,7 @@ final class SwiftAudioExService: NSObject {
     
     // MARK: - Playback Control
     
-    func play(url: URL) async throws {
+    func play(url: URL, title: String? = nil, artist: String? = nil) async throws {
         print("[SwiftAudioEx] play() called with URL: \(url)")
         state = .loading
         
@@ -231,8 +270,8 @@ final class SwiftAudioExService: NSObject {
         let audioUrl = url.isFileURL ? url.path : url.absoluteString
         let audioItem = DefaultAudioItem(
             audioUrl: audioUrl,
-            artist: "TTS",
-            title: url.lastPathComponent,
+            artist: artist ?? "Briefeed",
+            title: title ?? url.lastPathComponent,
             albumTitle: "Briefeed",
             sourceType: url.isFileURL ? .file : .stream,
             artwork: nil
@@ -241,7 +280,7 @@ final class SwiftAudioExService: NSObject {
         print("[SwiftAudioEx] Creating DefaultAudioItem:")
         print("[SwiftAudioEx]   - audioUrl: \(audioUrl)")
         print("[SwiftAudioEx]   - sourceType: \(url.isFileURL ? ".file" : ".stream")")
-        print("[SwiftAudioEx]   - title: \(url.lastPathComponent)")
+        print("[SwiftAudioEx]   - title: \(title ?? url.lastPathComponent)")
         
         // Load and play
         print("[SwiftAudioEx] Loading item into player with playWhenReady: true")
@@ -252,6 +291,9 @@ final class SwiftAudioExService: NSObject {
             queue.append(url)
             currentIndex = queue.count - 1
         }
+        
+        // Update Now Playing info immediately with title
+        updateNowPlayingInfo(title: title, artist: artist)
         
         // Start progress timer
         startProgressTimer()
@@ -313,7 +355,7 @@ final class SwiftAudioExService: NSObject {
         // and load items individually when needed
     }
     
-    func playNext() {
+    func playNext(title: String? = nil, artist: String? = nil) {
         if currentIndex < queue.count - 1 {
             currentIndex += 1
             let url = queue[currentIndex]
@@ -323,18 +365,19 @@ final class SwiftAudioExService: NSObject {
             let audioUrl = url.isFileURL ? url.path : url.absoluteString
             let audioItem = DefaultAudioItem(
                 audioUrl: audioUrl,
-                artist: "TTS",
-                title: url.lastPathComponent,
+                artist: artist ?? "Briefeed",
+                title: title ?? url.lastPathComponent,
                 albumTitle: "Briefeed",
                 sourceType: url.isFileURL ? .file : .stream,
                 artwork: nil
             )
             player.load(item: audioItem, playWhenReady: true)
+            updateNowPlayingInfo(title: title, artist: artist)
             startProgressTimer()
         }
     }
     
-    func playPrevious() {
+    func playPrevious(title: String? = nil, artist: String? = nil) {
         if currentIndex > 0 {
             currentIndex -= 1
             let url = queue[currentIndex]
@@ -344,13 +387,14 @@ final class SwiftAudioExService: NSObject {
             let audioUrl = url.isFileURL ? url.path : url.absoluteString
             let audioItem = DefaultAudioItem(
                 audioUrl: audioUrl,
-                artist: "TTS",
-                title: url.lastPathComponent,
+                artist: artist ?? "Briefeed",
+                title: title ?? url.lastPathComponent,
                 albumTitle: "Briefeed",
                 sourceType: url.isFileURL ? .file : .stream,
                 artwork: nil
             )
             player.load(item: audioItem, playWhenReady: true)
+            updateNowPlayingInfo(title: title, artist: artist)
             startProgressTimer()
         }
     }
@@ -365,8 +409,12 @@ final class SwiftAudioExService: NSObject {
             self.state = .loading
         case .playing:
             self.state = .playing
+            // Update Now Playing info when playback starts
+            updateNowPlayingInfo()
         case .paused:
             self.state = .paused
+            // Update playback rate to 0 when paused
+            updateNowPlayingInfo()
         case .stopped:
             self.state = .stopped
         case .failed:
@@ -453,15 +501,31 @@ final class SwiftAudioExService: NSObject {
         updateNowPlayingInfo()
     }
     
-    private func updateNowPlayingInfo() {
+    private func updateNowPlayingInfo(title: String? = nil, artist: String? = nil) {
         var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
         
+        // Always update timing info
         info[MPMediaItemPropertyPlaybackDuration] = duration
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
-        info[MPNowPlayingInfoPropertyPlaybackRate] = rate
-        info[MPMediaItemPropertyTitle] = queue.isEmpty ? "Briefeed" : queue[max(0, currentIndex)].lastPathComponent
+        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? rate : 0.0
+        
+        // Update metadata if provided, otherwise keep existing
+        if let title = title {
+            info[MPMediaItemPropertyTitle] = title
+        } else if info[MPMediaItemPropertyTitle] == nil {
+            info[MPMediaItemPropertyTitle] = "Briefeed Audio"
+        }
+        
+        if let artist = artist {
+            info[MPMediaItemPropertyArtist] = artist
+        } else if info[MPMediaItemPropertyArtist] == nil {
+            info[MPMediaItemPropertyArtist] = "Briefeed"
+        }
+        
         info[MPMediaItemPropertyAlbumTitle] = "Briefeed"
-        info[MPMediaItemPropertyArtist] = "TTS"
+        
+        // You could also add artwork here if available
+        // info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(...)
         
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }

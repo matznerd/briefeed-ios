@@ -223,6 +223,9 @@ class CombinedFeedViewModel: ObservableObject {
     private let redditService = RedditService()
     private let viewContext = PersistenceController.shared.container.viewContext
     private var currentTask: Task<Void, Never>?
+    private var afterToken: String?  // For Reddit pagination
+    private var hasMorePages = true
+    private var currentFeedId = "all"
     
     @MainActor
     func loadFeeds() async {
@@ -259,6 +262,11 @@ class CombinedFeedViewModel: ObservableObject {
     func refresh(feedId: String) async {
         isLoading = true
         errorMessage = nil
+        
+        // Reset pagination when refreshing
+        afterToken = nil
+        hasMorePages = true
+        currentFeedId = feedId
         
         print("🔄 Refreshing feed: \(feedId)")
         print("  📊 Total feeds available: \(feeds.count)")
@@ -332,7 +340,44 @@ class CombinedFeedViewModel: ObservableObject {
     
     @MainActor
     func loadMoreIfNeeded(currentArticle: Article) async {
-        // Implement pagination if needed
+        // Check if we're at the last few articles and should load more
+        guard let lastArticle = articles.last,
+              let currentIndex = articles.firstIndex(where: { $0.id == currentArticle.id }),
+              currentIndex >= articles.count - 3,  // Trigger when we're near the end
+              hasMorePages,
+              !isLoadingMore,
+              !isLoading else { return }
+        
+        isLoadingMore = true
+        
+        // For now, only support pagination for single feed view
+        // "all" feed pagination would require tracking tokens per feed
+        if currentFeedId != "all" {
+            if let feed = feeds.first(where: { $0.id?.uuidString == currentFeedId }) {
+                do {
+                    let url = DefaultDataService.shared.generateFeedURL(for: feed, after: afterToken)
+                    let response = try await redditService.fetchFeedWithURL(url)
+                    
+                    // Update pagination token
+                    afterToken = response.data.after
+                    hasMorePages = response.data.after != nil
+                    
+                    // Add new articles
+                    let newArticles = response.data.children.map { child in
+                        createOrUpdateArticle(from: child.data, feed: feed)
+                    }
+                    
+                    // Append to existing articles
+                    articles.append(contentsOf: newArticles)
+                    
+                    print("📄 Loaded \(newArticles.count) more articles. Total: \(articles.count)")
+                } catch {
+                    print("❌ Failed to load more: \(error)")
+                }
+            }
+        }
+        
+        isLoadingMore = false
     }
     
     @MainActor

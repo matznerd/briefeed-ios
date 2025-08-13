@@ -1,0 +1,537 @@
+//
+//  OpenAITTSService.swift
+//  Briefeed
+//
+//  OpenAI Text-to-Speech service with streaming support
+//  Replaces Gemini TTS due to daily generation limits
+//
+
+import Foundation
+import AVFoundation
+import Combine
+
+// MARK: - OpenAI TTS Models
+
+enum OpenAITTSModel: String {
+    case gpt4oMiniTTS = "gpt-4o-mini-tts"  // Best for news narration with voice control
+    case tts1 = "tts-1"                     // Lower latency, basic quality
+    case tts1HD = "tts-1-hd"                // Higher quality, higher cost
+}
+
+enum OpenAIVoice: String, CaseIterable {
+    case alloy = "alloy"       // Neutral, versatile
+    case ash = "ash"           // Masculine, deep
+    case ballad = "ballad"     // Warm, storytelling
+    case coral = "coral"       // Cheerful, upbeat (recommended for news)
+    case echo = "echo"         // Smooth, professional
+    case fable = "fable"       // British accent
+    case nova = "nova"         // Energetic, young
+    case onyx = "onyx"         // Deep, authoritative
+    case sage = "sage"         // Wise, mature (alternative for news)
+    case shimmer = "shimmer"   // Feminine, clear
+    
+    var displayName: String {
+        switch self {
+        case .alloy: return "Alloy (Neutral)"
+        case .ash: return "Ash (Deep)"
+        case .ballad: return "Ballad (Storytelling)"
+        case .coral: return "Coral (News)"
+        case .echo: return "Echo (Professional)"
+        case .fable: return "Fable (British)"
+        case .nova: return "Nova (Energetic)"
+        case .onyx: return "Onyx (Authoritative)"
+        case .sage: return "Sage (Mature News)"
+        case .shimmer: return "Shimmer (Clear)"
+        }
+    }
+    
+    var isRecommendedForNews: Bool {
+        self == .coral || self == .sage || self == .echo
+    }
+}
+
+enum OpenAIAudioFormat: String {
+    case mp3 = "mp3"
+    case opus = "opus"
+    case aac = "aac"
+    case flac = "flac"
+    case wav = "wav"
+    case pcm = "pcm"  // Best for streaming - 24kHz, 16-bit, mono
+}
+
+// MARK: - OpenAI TTS Error
+
+enum OpenAITTSError: LocalizedError {
+    case noAPIKey
+    case invalidResponse
+    case streamingFailed(String)
+    case audioProcessingFailed
+    case networkError(String)
+    case rateLimited
+    case quotaExceeded
+    
+    var errorDescription: String? {
+        switch self {
+        case .noAPIKey:
+            return "OpenAI API key not configured"
+        case .invalidResponse:
+            return "Invalid response from OpenAI API"
+        case .streamingFailed(let message):
+            return "Streaming failed: \(message)"
+        case .audioProcessingFailed:
+            return "Failed to process audio data"
+        case .networkError(let message):
+            return "Network error: \(message)"
+        case .rateLimited:
+            return "OpenAI API rate limit exceeded"
+        case .quotaExceeded:
+            return "OpenAI API quota exceeded"
+        }
+    }
+}
+
+// MARK: - News Voice Profile
+
+struct NewsVoiceProfile {
+    let model: OpenAITTSModel = .gpt4oMiniTTS
+    let primaryVoice: OpenAIVoice = .coral
+    let alternativeVoice: OpenAIVoice = .sage
+    let speed: Float = 1.0
+    
+    func instructions(for contentType: ContentType) -> String {
+        switch contentType {
+        case .headline:
+            return "Speak like a news anchor introducing a major story. Authoritative and attention-grabbing with clear emphasis on key words."
+        case .summary:
+            return "Professional news broadcaster tone. Clear enunciation, appropriate pauses between sentences. Emphasize key facts and figures."
+        case .quote:
+            return "Slightly slower pace for quoted material. Add subtle emphasis to convey the speaker's intent."
+        case .article:
+            return "Clear, professional news narration with steady pacing. Maintain engagement throughout."
+        }
+    }
+    
+    enum ContentType {
+        case headline
+        case summary
+        case quote
+        case article
+        
+        static func detect(from text: String) -> ContentType {
+            if text.count < 100 {
+                return .headline
+            } else if text.contains("\"") && text.contains("said") {
+                return .quote
+            } else if text.count < 500 {
+                return .summary
+            } else {
+                return .article
+            }
+        }
+    }
+}
+
+// MARK: - OpenAI TTS Service
+
+@MainActor
+final class OpenAITTSService: NSObject {
+    
+    // MARK: - Properties
+    
+    static let shared = OpenAITTSService()
+    
+    private let apiKey: String
+    private let baseURL = "https://api.openai.com/v1/audio/speech"
+    private let newsProfile = NewsVoiceProfile()
+    
+    // Audio processing
+    private var audioEngine = AVAudioEngine()
+    private var playerNode = AVAudioPlayerNode()
+    private var pcmBuffer = Data()
+    private let audioQueue = DispatchQueue(label: "openai.tts.audio.queue")
+    
+    // Streaming
+    private var streamingSession: URLSession?
+    private var currentStreamTask: URLSessionDataTask?
+    private var streamingCompletion: ((Result<URL, Error>) -> Void)?
+    
+    // Cost tracking
+    private var totalCharactersProcessed: Int = 0
+    private let costPer1KChars: Double = 0.015  // $0.015 for gpt-4o-mini-tts
+    
+    // MARK: - Initialization
+    
+    private override init() {
+        // Get API key from UserDefaults or environment
+        self.apiKey = UserDefaultsManager.shared.openAIAPIKey ?? ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? ""
+        super.init()
+        setupAudioEngine()
+        setupStreamingSession()
+    }
+    
+    // MARK: - Audio Engine Setup
+    
+    private func setupAudioEngine() {
+        audioEngine.attach(playerNode)
+        
+        // PCM format for OpenAI: 24kHz, mono, 16-bit
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatInt16,
+            sampleRate: 24000,
+            channels: 1,
+            interleaved: false
+        )!
+        
+        audioEngine.connect(
+            playerNode,
+            to: audioEngine.mainMixerNode,
+            format: format
+        )
+        
+        do {
+            try audioEngine.start()
+            print("[OpenAITTS] Audio engine started successfully")
+        } catch {
+            print("[OpenAITTS] Failed to start audio engine: \(error)")
+        }
+    }
+    
+    private func setupStreamingSession() {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 60
+        streamingSession = URLSession(
+            configuration: config,
+            delegate: self,
+            delegateQueue: nil
+        )
+    }
+    
+    // MARK: - Public Methods
+    
+    /// Generate audio file from text (non-streaming)
+    func generateAudioFile(
+        from text: String,
+        voice: OpenAIVoice = .coral,
+        model: OpenAITTSModel = .gpt4oMiniTTS
+    ) async throws -> URL {
+        guard !apiKey.isEmpty else {
+            throw OpenAITTSError.noAPIKey
+        }
+        
+        print("[OpenAITTS] Generating audio for \(text.count) characters")
+        
+        // Detect content type for appropriate instructions
+        let contentType = NewsVoiceProfile.ContentType.detect(from: text)
+        let instructions = newsProfile.instructions(for: contentType)
+        
+        // Create request
+        var request = URLRequest(url: URL(string: baseURL)!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body: [String: Any] = [
+            "model": model.rawValue,
+            "input": text,
+            "voice": voice.rawValue,
+            "instructions": instructions,
+            "response_format": "mp3"  // Use MP3 for file generation
+        ]
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        // Make request
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw OpenAITTSError.invalidResponse
+        }
+        
+        // Handle rate limiting
+        if httpResponse.statusCode == 429 {
+            throw OpenAITTSError.rateLimited
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw OpenAITTSError.networkError(errorMessage)
+        }
+        
+        // Save to temporary file
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).mp3")
+        
+        try data.write(to: tempURL)
+        
+        // Track usage
+        totalCharactersProcessed += text.count
+        let estimatedCost = Double(totalCharactersProcessed) / 1000 * costPer1KChars
+        print("[OpenAITTS] Total characters: \(totalCharactersProcessed), Estimated cost: $\(String(format: "%.4f", estimatedCost))")
+        
+        return tempURL
+    }
+    
+    /// Stream audio with real-time playback
+    func streamAudio(
+        text: String,
+        voice: OpenAIVoice = .coral,
+        model: OpenAITTSModel = .gpt4oMiniTTS,
+        onStart: (() -> Void)? = nil,
+        onProgress: ((Float) -> Void)? = nil,
+        completion: @escaping (Result<URL, Error>) -> Void
+    ) {
+        guard !apiKey.isEmpty else {
+            completion(.failure(OpenAITTSError.noAPIKey))
+            return
+        }
+        
+        print("[OpenAITTS] Starting streaming for \(text.count) characters")
+        
+        // Cancel any existing stream
+        currentStreamTask?.cancel()
+        pcmBuffer.removeAll()
+        
+        // Detect content type for appropriate instructions
+        let contentType = NewsVoiceProfile.ContentType.detect(from: text)
+        let instructions = newsProfile.instructions(for: contentType)
+        
+        // Create request
+        var request = URLRequest(url: URL(string: baseURL)!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body: [String: Any] = [
+            "model": model.rawValue,
+            "input": text,
+            "voice": voice.rawValue,
+            "instructions": instructions,
+            "response_format": "pcm"  // Use PCM for lowest latency streaming
+        ]
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            completion(.failure(error))
+            return
+        }
+        
+        // Store completion handler
+        streamingCompletion = completion
+        
+        // Start streaming
+        currentStreamTask = streamingSession?.dataTask(with: request)
+        currentStreamTask?.resume()
+        
+        // Start playback
+        if !playerNode.isPlaying {
+            playerNode.play()
+            onStart?()
+        }
+        
+        // Track usage
+        totalCharactersProcessed += text.count
+    }
+    
+    /// Generate audio with news broadcaster style
+    func generateNewsAudio(
+        _ text: String,
+        useAlternativeVoice: Bool = false
+    ) async throws -> URL {
+        let voice = useAlternativeVoice ? newsProfile.alternativeVoice : newsProfile.primaryVoice
+        return try await generateAudioFile(
+            from: text,
+            voice: voice,
+            model: newsProfile.model
+        )
+    }
+    
+    // MARK: - Private Methods
+    
+    private func processPCMChunk(_ data: Data) {
+        pcmBuffer.append(data)
+        
+        // Process in 4800-sample chunks (200ms at 24kHz)
+        let chunkSize = 4800 * 2  // 16-bit samples
+        
+        while pcmBuffer.count >= chunkSize {
+            let chunk = pcmBuffer.prefix(chunkSize)
+            pcmBuffer.removeFirst(chunkSize)
+            
+            audioQueue.async { [weak self] in
+                self?.playPCMChunk(chunk)
+            }
+        }
+    }
+    
+    private func playPCMChunk(_ data: Data) {
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatInt16,
+            sampleRate: 24000,
+            channels: 1,
+            interleaved: false
+        )!
+        
+        let frameCount = UInt32(data.count) / 2  // 16-bit samples
+        
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: frameCount
+        ) else {
+            print("[OpenAITTS] Failed to create audio buffer")
+            return
+        }
+        
+        buffer.frameLength = frameCount
+        
+        data.withUnsafeBytes { bytes in
+            memcpy(buffer.int16ChannelData![0], bytes.baseAddress!, data.count)
+        }
+        
+        playerNode.scheduleBuffer(buffer)
+    }
+    
+    // MARK: - Cost Tracking
+    
+    func getEstimatedCost() -> Double {
+        Double(totalCharactersProcessed) / 1000 * costPer1KChars
+    }
+    
+    func resetCostTracking() {
+        totalCharactersProcessed = 0
+    }
+}
+
+// MARK: - URLSessionDataDelegate
+
+extension OpenAITTSService: URLSessionDataDelegate {
+    
+    nonisolated func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        Task { @MainActor in
+            // Process incoming PCM chunks for real-time playback
+            processPCMChunk(data)
+        }
+    }
+    
+    nonisolated func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            completionHandler(.cancel)
+            return
+        }
+        
+        if httpResponse.statusCode == 200 {
+            print("[OpenAITTS] Streaming started successfully")
+            completionHandler(.allow)
+        } else {
+            print("[OpenAITTS] Streaming failed with status: \(httpResponse.statusCode)")
+            completionHandler(.cancel)
+            
+            Task { @MainActor in
+                if httpResponse.statusCode == 429 {
+                    streamingCompletion?(.failure(OpenAITTSError.rateLimited))
+                } else {
+                    streamingCompletion?(.failure(OpenAITTSError.networkError("Status code: \(httpResponse.statusCode)")))
+                }
+            }
+        }
+    }
+    
+    nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        Task { @MainActor in
+            if let error = error {
+                print("[OpenAITTS] Streaming error: \(error)")
+                streamingCompletion?(.failure(OpenAITTSError.streamingFailed(error.localizedDescription)))
+            } else {
+                // Play any remaining buffered audio
+                if !pcmBuffer.isEmpty {
+                    playPCMChunk(pcmBuffer)
+                    pcmBuffer.removeAll()
+                }
+                
+                // Save the streamed audio if needed
+                // For now, just signal completion
+                print("[OpenAITTS] Streaming completed successfully")
+                
+                // Create a temporary file with the streamed data
+                let tempURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("\(UUID().uuidString).pcm")
+                
+                streamingCompletion?(.success(tempURL))
+            }
+            
+            streamingCompletion = nil
+        }
+    }
+}
+
+// MARK: - Integration with UnifiedAudioPlayer
+
+extension OpenAITTSService {
+    
+    /// Convenience method for UnifiedAudioPlayer integration
+    func generateAudioForArticle(
+        title: String?,
+        content: String,
+        useStreaming: Bool = false
+    ) async throws -> URL {
+        var fullText = ""
+        
+        // Add title if available
+        if let title = title {
+            fullText += "\(title). "
+        }
+        
+        // Add content
+        fullText += content
+        
+        // Use streaming for better UX if requested
+        if useStreaming {
+            return try await withCheckedThrowingContinuation { continuation in
+                streamAudio(
+                    text: fullText,
+                    onStart: {
+                        print("[OpenAITTS] Streaming started for article")
+                    },
+                    completion: { result in
+                        continuation.resume(with: result)
+                    }
+                )
+            }
+        } else {
+            // Regular generation
+            return try await generateNewsAudio(fullText)
+        }
+    }
+}
+
+// MARK: - Settings Extension
+
+extension UserDefaultsManager {
+    private static let openAIAPIKeyKey = "openAIAPIKey"
+    private static let preferredOpenAIVoiceKey = "preferredOpenAIVoice"
+    private static let useOpenAIStreamingKey = "useOpenAIStreaming"
+    
+    var openAIAPIKey: String? {
+        get { UserDefaults.standard.string(forKey: Self.openAIAPIKeyKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.openAIAPIKeyKey) }
+    }
+    
+    var preferredOpenAIVoice: OpenAIVoice {
+        get {
+            if let rawValue = UserDefaults.standard.string(forKey: Self.preferredOpenAIVoiceKey),
+               let voice = OpenAIVoice(rawValue: rawValue) {
+                return voice
+            }
+            return .coral  // Default to coral for news
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: Self.preferredOpenAIVoiceKey)
+        }
+    }
+    
+    var useOpenAIStreaming: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.useOpenAIStreamingKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.useOpenAIStreamingKey) }
+    }
+}

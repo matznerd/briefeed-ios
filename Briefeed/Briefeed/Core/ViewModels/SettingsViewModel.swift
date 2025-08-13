@@ -14,8 +14,10 @@ class SettingsViewModel: ObservableObject {
     @Published var cacheSize: String = "Calculating..."
     @Published var isValidatingGeminiKey = false
     @Published var isValidatingFirecrawlKey = false
+    @Published var isValidatingOpenAIKey = false
     @Published var geminiKeyValid: Bool?
     @Published var firecrawlKeyValid: Bool?
+    @Published var openAIKeyValid: Bool?
     @Published var showingExportSuccess = false
     @Published var showingImportSuccess = false
     @Published var showingClearCacheSuccess = false
@@ -27,6 +29,7 @@ class SettingsViewModel: ObservableObject {
     // Temporary storage for API keys during editing
     @Published var tempGeminiKey: String = ""
     @Published var tempFirecrawlKey: String = ""
+    @Published var tempOpenAIKey: String = ""
     
     init() {
         loadAPIKeys()
@@ -42,6 +45,7 @@ class SettingsViewModel: ObservableObject {
     private func loadAPIKeys() {
         tempGeminiKey = userDefaultsManager.geminiAPIKey ?? ""
         tempFirecrawlKey = userDefaultsManager.firecrawlAPIKey ?? ""
+        tempOpenAIKey = userDefaultsManager.openAIAPIKey ?? ""
     }
     
     // MARK: - Cache Management
@@ -162,6 +166,31 @@ class SettingsViewModel: ObservableObject {
         }
     }
     
+    func validateOpenAIKey() {
+        guard !tempOpenAIKey.isEmpty else {
+            openAIKeyValid = false
+            return
+        }
+        
+        isValidatingOpenAIKey = true
+        openAIKeyValid = nil
+        
+        // Validate OpenAI key format
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self = self else { return }
+            
+            // OpenAI keys start with "sk-" and are typically 51+ characters
+            let isValid = self.tempOpenAIKey.starts(with: "sk-") && self.tempOpenAIKey.count >= 20
+            
+            self.openAIKeyValid = isValid
+            self.isValidatingOpenAIKey = false
+            
+            if isValid {
+                self.userDefaultsManager.openAIAPIKey = self.tempOpenAIKey
+            }
+        }
+    }
+    
     func saveAPIKey(for service: APIService) {
         switch service {
         case .gemini:
@@ -173,6 +202,11 @@ class SettingsViewModel: ObservableObject {
             if !tempFirecrawlKey.isEmpty {
                 userDefaultsManager.firecrawlAPIKey = tempFirecrawlKey
                 validateFirecrawlKey()
+            }
+        case .openAI:
+            if !tempOpenAIKey.isEmpty {
+                userDefaultsManager.openAIAPIKey = tempOpenAIKey
+                validateOpenAIKey()
             }
         }
     }
@@ -187,6 +221,10 @@ class SettingsViewModel: ObservableObject {
             userDefaultsManager.firecrawlAPIKey = nil
             tempFirecrawlKey = ""
             firecrawlKeyValid = nil
+        case .openAI:
+            userDefaultsManager.openAIAPIKey = nil
+            tempOpenAIKey = ""
+            openAIKeyValid = nil
         }
     }
     
@@ -248,11 +286,13 @@ class SettingsViewModel: ObservableObject {
 enum APIService {
     case gemini
     case firecrawl
+    case openAI
     
     var name: String {
         switch self {
         case .gemini: return "Gemini"
         case .firecrawl: return "Firecrawl"
+        case .openAI: return "OpenAI"
         }
     }
     
@@ -260,6 +300,7 @@ enum APIService {
         switch self {
         case .gemini: return "Enter your Gemini API key"
         case .firecrawl: return "Enter your Firecrawl API key"
+        case .openAI: return "Enter your OpenAI API key (sk-...)"
         }
     }
 }

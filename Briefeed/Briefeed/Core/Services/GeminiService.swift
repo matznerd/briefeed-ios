@@ -133,6 +133,7 @@ class GeminiService: GeminiServiceProtocol {
     private let networkService: NetworkServiceProtocol
     private let apiKey: String
     private let model = "gemini-2.5-flash" // Use Gemini 2.5 Flash for summarization
+    // Note: Thinking tokens count against output limit - see docs/GEMINI-API-REFERENCE.md
     private var currentUsage: GeminiUsage?
     
     init(networkService: NetworkServiceProtocol = NetworkService.shared, apiKey: String? = nil) {
@@ -166,7 +167,7 @@ class GeminiService: GeminiServiceProtocol {
                 temperature: 0.7,
                 topK: 40,
                 topP: 0.95,
-                maxOutputTokens: length.maxTokens,
+                maxOutputTokens: 2000,  // Fixed limit to avoid MAX_TOKENS issue
                 stopSequences: nil,
                 responseMimeType: "text/plain"  // Use plain text for summary generation
             ),
@@ -197,6 +198,14 @@ class GeminiService: GeminiServiceProtocol {
                 throw GeminiServiceError.invalidResponse
             }
             
+            // Check if we hit MAX_TOKENS with empty response (known Gemini 2.5 issue)
+            if firstCandidate.finishReason == "MAX_TOKENS" {
+                print("[GeminiService] Hit MAX_TOKENS limit with empty response - this is a known Gemini 2.5 API issue")
+                // The thinking tokens are counted against output limit but not returned
+                // This causes empty responses when hitting token limit
+                throw GeminiServiceError.modelError("Token limit reached. The article may be too complex or long for summarization.")
+            }
+            
             // Try to get text from parts first, then direct text field
             let text: String
             if let parts = firstCandidate.content.parts,
@@ -207,6 +216,7 @@ class GeminiService: GeminiServiceProtocol {
                 text = directText
             } else {
                 print("[GeminiService] No text found in response candidate")
+                print("[GeminiService] Finish reason: \(firstCandidate.finishReason ?? "unknown")")
                 throw GeminiServiceError.invalidResponse
             }
             
@@ -469,29 +479,20 @@ class GeminiService: GeminiServiceProtocol {
     }
     
     private func createSummarizationPrompt(text: String, length: Constants.Summary.Length) -> String {
-        // Enhanced prompt to extract meaningful facts beyond clickbait
+        // Simplified prompt to reduce token usage
         let wordCount = length == .brief ? "100-150" : length == .standard ? "200-300" : "400-500"
         
         print("[GeminiService] Creating summary prompt for \(text.count) characters of content")
         
+        // Truncate article text if too long to avoid token issues
+        let maxArticleLength = 10000  // Limit article text to prevent token overflow
+        let articleText = text.count > maxArticleLength ? String(text.prefix(maxArticleLength)) + "..." : text
+        
         return """
-        Analyze this article and provide a summary that cuts through any clickbait to deliver the core facts.
+        Summarize this article in \(wordCount) words. Focus on the key facts: who, what, when, where, why, and any important numbers. Write in simple, clear sentences suitable for audio playback. Do NOT include the article title in your summary - start directly with the main content.
         
         Article:
-        \(text)
-        
-        Create a summary (approximately \(wordCount) words) that includes:
-        - WHO is involved (key people, companies, or organizations)
-        - WHAT actually happened (the real story behind the headline)
-        - WHEN and WHERE it occurred
-        - WHY it matters (impact and implications)
-        - KEY NUMBERS, statistics, or data points if relevant
-        
-        Start with the most important fact that reveals what's really happening.
-        If the headline is sensationalized, focus on the actual facts buried in the article.
-        Write in clear, conversational language suitable for text-to-speech.
-        Use complete sentences, no bullet points or formatting.
-        Stick to facts presented in the article - avoid speculation.
+        \(articleText)
         
         Summary:
         """

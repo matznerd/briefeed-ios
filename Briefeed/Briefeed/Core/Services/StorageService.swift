@@ -127,6 +127,11 @@ class StorageService: StorageServiceProtocol {
             article.savedAt = article.isSaved ? Date() : nil
             try self.viewContext.save()
         }
+        
+        // If article was saved (added to brief), add it to the audio queue for pre-generation
+        if article.isSaved {
+            await UnifiedAudioPlayer.shared.addToQueue(article)
+        }
     }
     
     func deleteArticle(_ article: Article) async throws {

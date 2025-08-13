@@ -152,9 +152,9 @@ enum Constants {
             
             var maxTokens: Int {
                 switch self {
-                case .brief: return 100
-                case .standard: return 250
-                case .detailed: return 500
+                case .brief: return 500      // Increased from 100
+                case .standard: return 1000   // Increased from 250 - THIS WAS THE PROBLEM!
+                case .detailed: return 2000   // Increased from 500
                 }
             }
             

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		8C3D090E2E48490400819F12 /* SwiftAudioEx in Frameworks */ = {isa = PBXBuildFile; productRef = 8C3D090D2E48490400819F12 /* SwiftAudioEx */; };
+		8CC555A82E4AAA1900D7B3CB /* OpenAI in Frameworks */ = {isa = PBXBuildFile; productRef = 8CC555A72E4AAA1900D7B3CB /* OpenAI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -33,9 +34,22 @@
 		8CA65F042E075E5F005E6FC0 /* BriefeedUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BriefeedUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		8CC555A32E4A619600D7B3CB /* Exceptions for "Briefeed" folder in "Briefeed" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 8CA65EE42E075E5C005E6FC0 /* Briefeed */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		8CA65EE72E075E5C005E6FC0 /* Briefeed */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				8CC555A32E4A619600D7B3CB /* Exceptions for "Briefeed" folder in "Briefeed" target */,
+			);
 			path = Briefeed;
 			sourceTree = "<group>";
 		};
@@ -56,6 +70,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8CC555A82E4AAA1900D7B3CB /* OpenAI in Frameworks */,
 				8C3D090E2E48490400819F12 /* SwiftAudioEx in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -118,6 +133,7 @@
 			name = Briefeed;
 			packageProductDependencies = (
 				8C3D090D2E48490400819F12 /* SwiftAudioEx */,
+				8CC555A72E4AAA1900D7B3CB /* OpenAI */,
 			);
 			productName = Briefeed;
 			productReference = 8CA65EE52E075E5C005E6FC0 /* Briefeed.app */;
@@ -203,6 +219,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				8C3D090C2E48490400819F12 /* XCRemoteSwiftPackageReference "SwiftAudioEx" */,
+				8CC555A62E4AAA1900D7B3CB /* XCRemoteSwiftPackageReference "OpenAI" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 8CA65EE62E075E5C005E6FC0 /* Products */;
@@ -408,6 +425,7 @@
 				DEVELOPMENT_TEAM = X273WR8MT2;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Briefeed/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -437,6 +455,7 @@
 				DEVELOPMENT_TEAM = X273WR8MT2;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Briefeed/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -577,6 +596,14 @@
 				version = 1.0.0;
 			};
 		};
+		8CC555A62E4AAA1900D7B3CB /* XCRemoteSwiftPackageReference "OpenAI" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/MacPaw/OpenAI#mcp-model-context-protocol";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.4.6;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -584,6 +611,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 8C3D090C2E48490400819F12 /* XCRemoteSwiftPackageReference "SwiftAudioEx" */;
 			productName = SwiftAudioEx;
+		};
+		8CC555A72E4AAA1900D7B3CB /* OpenAI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8CC555A62E4AAA1900D7B3CB /* XCRemoteSwiftPackageReference "OpenAI" */;
+			productName = OpenAI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -47,6 +47,30 @@ struct FilteredBriefView: View {
                     .padding(.horizontal)
                     .padding(.vertical, 8)
                 
+                // Play All Button when queue has items
+                if !filteredQueue.isEmpty && !audioPlayerViewModel.isPlaying {
+                    Button {
+                        Task {
+                            let articles = viewModel.queuedArticles
+                            if !articles.isEmpty {
+                                await audioPlayerViewModel.playQueue(articles: articles)
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: "play.fill")
+                            Text("Play All (\(filteredQueue.count) items)")
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.accentColor)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                }
+                
                 // Queue Content
                 ZStack {
                     if viewModel.isLoading && filteredQueue.isEmpty {
@@ -61,7 +85,13 @@ struct FilteredBriefView: View {
             .onAppear {
                 Task {
                     await viewModel.loadQueuedArticles()
-                    // Queue is already loaded by AudioPlayerViewModelV2
+                    // Sync brief articles to audio queue if queue is empty or different
+                    if !viewModel.queuedArticles.isEmpty && audioPlayerViewModel.queueItems.isEmpty {
+                        // Queue is empty, load the brief articles for pre-generation
+                        await audioPlayerViewModel.playQueue(articles: viewModel.queuedArticles)
+                        // Pause immediately to not auto-play
+                        audioPlayerViewModel.pause()
+                    }
                 }
             }
             .navigationTitle("Brief")
@@ -173,6 +203,20 @@ struct FilteredBriefView: View {
         ToolbarItem(placement: .navigationBarTrailing) {
             if !filteredQueue.isEmpty {
                 Menu {
+                    Button {
+                        Task {
+                            // Play all items in the brief
+                            let articles = viewModel.queuedArticles
+                            if !articles.isEmpty {
+                                await audioPlayerViewModel.playQueue(articles: articles)
+                            }
+                        }
+                    } label: {
+                        Label("Play All", systemImage: "play.fill")
+                    }
+                    
+                    Divider()
+                    
                     Button(role: .destructive) {
                         showingClearQueueAlert = true
                     } label: {

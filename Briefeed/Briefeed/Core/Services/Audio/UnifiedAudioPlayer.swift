@@ -87,8 +87,10 @@ final class UnifiedAudioPlayer: ObservableObject {
     // MARK: - Services
     
     private let ttsGenerator = TTSGeneratorService.shared
+    private let openAITTS = OpenAITTSServiceSimple.shared
     private let audioPlayer = SwiftAudioExService()
     private let cacheManager = AudioCacheManager.shared
+    private var useOpenAITTS: Bool = false  // Toggle for TTS service selection
     
     // MARK: - Published Properties
     
@@ -244,7 +246,9 @@ final class UnifiedAudioPlayer: ObservableObject {
             print("[UnifiedPlayer] File exists: \(FileManager.default.fileExists(atPath: audioURL.path))")
             
             do {
-                try await audioPlayer.play(url: audioURL)
+                // Pass title and artist info for lock screen display
+                let artist = item.type == .article ? (item.article?.author ?? "Article") : (item.episode?.feed?.displayName ?? "Podcast")
+                try await audioPlayer.play(url: audioURL, title: item.title, artist: artist)
                 isPlaying = true
                 print("[UnifiedPlayer] Successfully started playback")
                 
@@ -359,8 +363,12 @@ final class UnifiedAudioPlayer: ObservableObject {
             generationProgress = "Generating summary for \(item.title)..."
             
             do {
+                print("[UnifiedPlayer] Starting audio generation for article: \(article.title ?? "Unknown")")
+                print("[UnifiedPlayer] Article has summary: \(article.summary != nil), summary length: \(article.summary?.count ?? 0)")
+                
                 // Check if article needs summary generation
-                if article.summary == nil || article.summary?.isEmpty == true {
+                if article.summary == nil || article.summary?.isEmpty == true || article.summary == "Unable to generate summary. The article content may be incomplete or unavailable." {
+                    print("[UnifiedPlayer] Article needs summary generation")
                     // Generate summary first
                     generationProgress = "Generating summary..."
                     
@@ -368,14 +376,23 @@ final class UnifiedAudioPlayer: ObservableObject {
                     var contentToSummarize = ""
                     if let content = article.content, !content.isEmpty {
                         contentToSummarize = content.stripHTML
+                        print("[UnifiedPlayer] Using existing article content: \(contentToSummarize.count) characters")
                     } else if let url = article.url {
+                        print("[UnifiedPlayer] No content stored, fetching from URL: \(url)")
                         // Fetch content from URL if needed
                         generationProgress = "Fetching article content..."
                         let firecrawlService = FirecrawlService()
                         do {
                             let firecrawlData = try await firecrawlService.fetchArticleContent(from: url)
-                            contentToSummarize = firecrawlData.content ?? ""
+                            // Use best available content (prefers markdown over html over plain)
+                            contentToSummarize = firecrawlData.bestContent
                             print("[UnifiedPlayer] Fetched \(contentToSummarize.count) characters from article")
+                            
+                            // Check if content is too short (might be an error page or paywall)
+                            if contentToSummarize.count < 100 {
+                                print("[UnifiedPlayer] WARNING: Fetched content is very short, might be incomplete")
+                                print("[UnifiedPlayer] Short content: \(contentToSummarize)")
+                            }
                         } catch {
                             print("[UnifiedPlayer] Failed to fetch article content: \(error)")
                             // Try to use article description as fallback
@@ -388,20 +405,84 @@ final class UnifiedAudioPlayer: ObservableObject {
                         generationProgress = "Creating summary..."
                         let geminiService = GeminiService()
                         
+                        // Smart truncation to avoid token limit while preserving article quality
+                        // Gemini 2.5 Flash has ~32k token context, but we'll be conservative
+                        // Roughly 4 chars per token, so 20,000 chars ≈ 5,000 tokens
+                        // This leaves plenty of room for prompt and response
+                        let maxContentLength = 20000
+                        
+                        let processedContent: String
+                        if contentToSummarize.count > maxContentLength {
+                            // Try to truncate at a sentence boundary for better context
+                            let truncated = String(contentToSummarize.prefix(maxContentLength))
+                            if let lastPeriod = truncated.lastIndex(of: ".") {
+                                processedContent = String(truncated[...lastPeriod])
+                            } else {
+                                processedContent = truncated + "..."
+                            }
+                            print("[UnifiedPlayer] Content truncated from \(contentToSummarize.count) to \(processedContent.count) characters")
+                        } else {
+                            processedContent = contentToSummarize
+                        }
+                        
                         // The summarize function now returns plain text
-                        print("[UnifiedPlayer] Generating summary from \(contentToSummarize.count) characters of content")
-                        let summaryText = try await geminiService.summarize(
-                            text: contentToSummarize,
-                            length: .standard
-                        )
-                        print("[UnifiedPlayer] Received summary: \(summaryText.count) characters")
-                        print("[UnifiedPlayer] Summary preview: \(summaryText.prefix(200))...")
+                        print("[UnifiedPlayer] Generating summary from \(processedContent.count) characters of content (original: \(contentToSummarize.count))")
+                        print("[UnifiedPlayer] Content to summarize preview: \(processedContent.prefix(500))...")
+                        
+                        let summaryText: String
+                        do {
+                            summaryText = try await geminiService.summarize(
+                                text: processedContent,
+                                length: .standard
+                            )
+                            print("[UnifiedPlayer] Received summary: \(summaryText.count) characters")
+                            print("[UnifiedPlayer] Summary preview: \(summaryText.prefix(200))...")
+                        } catch {
+                            print("[UnifiedPlayer] Gemini summarization failed: \(error)")
+                            // Fallback: Create a simple excerpt from the article
+                            let words = processedContent.split(separator: " ").prefix(100).joined(separator: " ")
+                            summaryText = "Article excerpt: \(words)..."
+                            print("[UnifiedPlayer] Using fallback excerpt instead of summary")
+                        }
+                        
+                        // Check if Gemini couldn't generate a summary
+                        if summaryText.contains("cannot provide a summary") || summaryText.contains("I cannot") || summaryText.contains("cannot summarize") {
+                            print("[UnifiedPlayer] WARNING: Gemini couldn't generate summary, using fallback")
+                            // Log the problematic content for debugging
+                            print("[UnifiedPlayer] Problematic content was: \(contentToSummarize.prefix(1000))")
+                            
+                            // Don't save error message as summary
+                            await MainActor.run {
+                                article.summary = "Unable to generate summary. The article content may be incomplete or unavailable."
+                                try? context.save()
+                            }
+                            
+                            // Mark as failed so it doesn't play
+                            item.generationState = .failed(TTSError.generationFailed)
+                            throw TTSError.generationFailed
+                        }
+                        
+                        // Remove title from summary if it starts with it
+                        var cleanedSummaryText = summaryText
+                        if let title = article.title, !title.isEmpty {
+                            // Check if summary starts with the title (case insensitive)
+                            let titleLower = title.lowercased()
+                            let summaryLower = summaryText.lowercased()
+                            if summaryLower.hasPrefix(titleLower) {
+                                // Remove the title from the beginning
+                                let startIndex = summaryText.index(summaryText.startIndex, offsetBy: title.count)
+                                cleanedSummaryText = String(summaryText[startIndex...])
+                                    .trimmingCharacters(in: CharacterSet(charactersIn: ".:,- "))
+                                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                                print("[UnifiedPlayer] Removed duplicate title from summary beginning")
+                            }
+                        }
                         
                         // Save summary to article
-                        if !summaryText.isEmpty {
+                        if !cleanedSummaryText.isEmpty {
                             await MainActor.run {
-                                article.summary = summaryText
-                                print("[UnifiedPlayer] Saved summary to article: \(summaryText.count) characters")
+                                article.summary = cleanedSummaryText
+                                print("[UnifiedPlayer] Saved summary to article: \(cleanedSummaryText.count) characters")
                                 try? context.save()
                             }
                         }
@@ -410,15 +491,56 @@ final class UnifiedAudioPlayer: ObservableObject {
                 
                 // Now format text for TTS (will include the summary)
                 generationProgress = "Generating audio..."
+                print("[UnifiedPlayer] Formatting article for TTS...")
+                print("[UnifiedPlayer] Article summary status: \(article.summary?.count ?? 0) characters")
                 let text = formatArticleForTTS(article)
                 print("[UnifiedPlayer] Text for TTS (\(text.count) chars): \(String(text.prefix(200)))...")
                 
-                // Generate audio file
-                let audioURL = try await ttsGenerator.generateAudioFile(
-                    from: text,
-                    trackingIn: context,
-                    for: article
-                )
+                // Check if we only have title
+                if text.count < 100 && article.title != nil {
+                    print("[UnifiedPlayer] WARNING: TTS text is very short, likely only title")
+                }
+                
+                // Generate audio file - try OpenAI first if configured, fallback to Gemini
+                let audioURL: URL
+                
+                if UserDefaultsManager.shared.openAIAPIKey != nil && !UserDefaultsManager.shared.openAIAPIKey!.isEmpty {
+                    // Use OpenAI TTS if API key is configured
+                    print("[UnifiedPlayer] Using OpenAI TTS for audio generation")
+                    do {
+                        audioURL = try await openAITTS.generateAudioForArticle(
+                            title: article.title,
+                            content: text,
+                            useStreaming: UserDefaultsManager.shared.useOpenAIStreaming
+                        )
+                        print("[UnifiedPlayer] OpenAI TTS generated audio successfully")
+                    } catch {
+                        print("[UnifiedPlayer] OpenAI TTS failed: \(error), falling back to Gemini")
+                        // Fallback to Gemini TTS
+                        audioURL = try await ttsGenerator.generateAudioFile(
+                            from: text,
+                            trackingIn: context,
+                            for: article
+                        )
+                    }
+                } else {
+                    // Use Gemini TTS as primary (but may hit 100/day limit)
+                    print("[UnifiedPlayer] Using Gemini TTS (no OpenAI key configured)")
+                    do {
+                        audioURL = try await ttsGenerator.generateAudioFile(
+                            from: text,
+                            trackingIn: context,
+                            for: article
+                        )
+                    } catch {
+                        // If Gemini fails (possibly due to quota), try to inform user
+                        print("[UnifiedPlayer] Gemini TTS failed: \(error)")
+                        if error.localizedDescription.contains("quota") || error.localizedDescription.contains("limit") {
+                            print("[UnifiedPlayer] Likely hit Gemini 100 generations/day limit. Configure OpenAI API key for unlimited TTS.")
+                        }
+                        throw error
+                    }
+                }
                 
                 item.cachedAudioURL = audioURL
                 item.generationState = .ready
@@ -472,13 +594,49 @@ final class UnifiedAudioPlayer: ObservableObject {
         // Add title
         if let title = article.title {
             text += "\(title). "
+            print("[UnifiedPlayer] formatArticleForTTS - Added title: \(title)")
         }
         
         // Check if we have a pre-generated summary
         if let summary = article.summary, !summary.isEmpty {
+            print("[UnifiedPlayer] formatArticleForTTS - Found summary: \(summary.count) chars")
             // Skip the fallback summary message
-            if !summary.contains("Unable to generate summary") {
-                text += summary
+            if !summary.contains("Unable to generate summary") && !summary.contains("cannot provide a summary") {
+                // Check if summary is JSON and parse it
+                if summary.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") ||
+                   summary.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("```json") {
+                    // Parse JSON summary
+                    let cleanJson = summary
+                        .replacingOccurrences(of: "```json", with: "")
+                        .replacingOccurrences(of: "```", with: "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    
+                    if let jsonData = cleanJson.data(using: .utf8),
+                       let summaryResponse = try? JSONDecoder().decode(ArticleSummaryResponse.self, from: jsonData) {
+                        // Extract the story text from the parsed JSON
+                        if let story = summaryResponse.theStory, !story.isEmpty {
+                            text += story
+                            print("[UnifiedPlayer] formatArticleForTTS - Parsed and added story from JSON summary")
+                        } else if let quickFacts = summaryResponse.quickFacts {
+                            // Fallback to quick facts if no story
+                            var factsText = ""
+                            if quickFacts.whatHappened != "N/A" { factsText += quickFacts.whatHappened + ". " }
+                            if quickFacts.who != "N/A" { factsText += "Involving " + quickFacts.who + ". " }
+                            if quickFacts.whenWhere != "N/A" { factsText += "This occurred " + quickFacts.whenWhere + ". " }
+                            if quickFacts.mostStrikingDetail != "N/A" { factsText += quickFacts.mostStrikingDetail + ". " }
+                            text += factsText
+                            print("[UnifiedPlayer] formatArticleForTTS - Added quick facts from JSON summary")
+                        }
+                    } else {
+                        // If JSON parsing fails, use the raw summary (might be plain text)
+                        text += summary
+                        print("[UnifiedPlayer] formatArticleForTTS - Using raw summary (JSON parsing failed)")
+                    }
+                } else {
+                    // Summary is plain text, use directly
+                    text += summary
+                    print("[UnifiedPlayer] formatArticleForTTS - Added plain text summary to TTS text")
+                }
             } else {
                 // Use article content as fallback
                 if let content = article.content, !content.isEmpty {
