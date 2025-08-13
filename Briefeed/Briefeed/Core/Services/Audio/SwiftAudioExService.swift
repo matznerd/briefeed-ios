@@ -131,14 +131,8 @@ final class SwiftAudioExService: NSObject {
             self?.handlePlaybackFailure(error: error)
         }
         
-        // Enable remote control
-        player.remoteCommands = [
-            .play,
-            .pause,
-            .skipForward(preferredIntervals: [30]),
-            .skipBackward(preferredIntervals: [15]),
-            .changePlaybackPosition
-        ]
+        // Disable SwiftAudioEx's remote commands to avoid conflicts with our manual setup
+        player.remoteCommands = []
         
         // Configure buffer
         player.bufferDuration = 2.0
@@ -146,6 +140,12 @@ final class SwiftAudioExService: NSObject {
         
         // CRITICAL: Register for remote control events to show lock screen controls
         UIApplication.shared.beginReceivingRemoteControlEvents()
+        
+        // Make the app become first responder for remote control events
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let window = windowScene.windows.first {
+            window.becomeFirstResponder()
+        }
     }
     
     private func setupRemoteCommands() {
@@ -292,8 +292,18 @@ final class SwiftAudioExService: NSObject {
             currentIndex = queue.count - 1
         }
         
-        // Update Now Playing info immediately with title
-        updateNowPlayingInfo(title: title, artist: artist)
+        // Force activate audio session and remote controls
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+            UIApplication.shared.beginReceivingRemoteControlEvents()
+        } catch {
+            print("[SwiftAudioEx] Failed to activate audio session: \(error)")
+        }
+        
+        // Update Now Playing info immediately with title and ensure it's set
+        DispatchQueue.main.async { [weak self] in
+            self?.updateNowPlayingInfo(title: title, artist: artist)
+        }
         
         // Start progress timer
         startProgressTimer()
@@ -502,32 +512,31 @@ final class SwiftAudioExService: NSObject {
     }
     
     private func updateNowPlayingInfo(title: String? = nil, artist: String? = nil) {
-        var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+        var info: [String: Any] = [:]
         
-        // Always update timing info
-        info[MPMediaItemPropertyPlaybackDuration] = duration
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
-        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? rate : 0.0
-        
-        // Update metadata if provided, otherwise keep existing
-        if let title = title {
-            info[MPMediaItemPropertyTitle] = title
-        } else if info[MPMediaItemPropertyTitle] == nil {
-            info[MPMediaItemPropertyTitle] = "Briefeed Audio"
-        }
-        
-        if let artist = artist {
-            info[MPMediaItemPropertyArtist] = artist
-        } else if info[MPMediaItemPropertyArtist] == nil {
-            info[MPMediaItemPropertyArtist] = "Briefeed"
-        }
-        
+        // Always set all required fields
+        info[MPMediaItemPropertyTitle] = title ?? "Briefeed Audio"
+        info[MPMediaItemPropertyArtist] = artist ?? "Briefeed"
         info[MPMediaItemPropertyAlbumTitle] = "Briefeed"
         
-        // You could also add artwork here if available
-        // info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(...)
+        // Timing info - ensure we have valid values
+        info[MPMediaItemPropertyPlaybackDuration] = max(0, duration)
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = max(0, currentTime)
+        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? Double(rate) : 0.0
         
+        // Add media type
+        info[MPMediaItemPropertyMediaType] = MPMediaType.podcast.rawValue
+        
+        // Set the info
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        
+        // Debug log
+        print("[SwiftAudioEx] Updated Now Playing Info:")
+        print("  Title: \(title ?? "Briefeed Audio")")
+        print("  Artist: \(artist ?? "Briefeed")")
+        print("  Duration: \(duration)")
+        print("  Current Time: \(currentTime)")
+        print("  Rate: \(isPlaying ? rate : 0)")
     }
     
     @objc private func handleInterruption(notification: Notification) {

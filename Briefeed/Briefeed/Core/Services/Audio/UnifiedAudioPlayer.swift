@@ -591,22 +591,45 @@ final class UnifiedAudioPlayer: ObservableObject {
     private func formatArticleForTTS(_ article: Article) -> String {
         var text = ""
         
-        // Add title
-        if let title = article.title {
-            text += "\(title). "
-            print("[UnifiedPlayer] formatArticleForTTS - Added title: \(title)")
-        }
+        // DON'T add title - it's already shown in UI and announced separately
+        let articleTitle = article.title ?? ""
+        print("[UnifiedPlayer] formatArticleForTTS - Article title: \(articleTitle) (NOT adding to TTS)")
         
         // Check if we have a pre-generated summary
         if let summary = article.summary, !summary.isEmpty {
             print("[UnifiedPlayer] formatArticleForTTS - Found summary: \(summary.count) chars")
+            print("[UnifiedPlayer] formatArticleForTTS - Summary first 200 chars: \(summary.prefix(200))")
+            
+            // Check if summary starts with the title (to avoid duplication)
+            var cleanedSummary = summary
+            if !articleTitle.isEmpty {
+                // Remove title if it appears at the beginning of the summary
+                let titleVariations = [
+                    articleTitle,
+                    articleTitle + ".",
+                    articleTitle + ":",
+                    articleTitle + " -",
+                    articleTitle + ","
+                ]
+                
+                for variation in titleVariations {
+                    if cleanedSummary.lowercased().hasPrefix(variation.lowercased()) {
+                        cleanedSummary = String(cleanedSummary.dropFirst(variation.count))
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .trimmingCharacters(in: CharacterSet(charactersIn: ".:,- "))
+                        print("[UnifiedPlayer] Removed duplicate title from summary")
+                        break
+                    }
+                }
+            }
+            
             // Skip the fallback summary message
-            if !summary.contains("Unable to generate summary") && !summary.contains("cannot provide a summary") {
+            if !cleanedSummary.contains("Unable to generate summary") && !cleanedSummary.contains("cannot provide a summary") {
                 // Check if summary is JSON and parse it
-                if summary.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") ||
-                   summary.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("```json") {
+                if cleanedSummary.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") ||
+                   cleanedSummary.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("```json") {
                     // Parse JSON summary
-                    let cleanJson = summary
+                    let cleanJson = cleanedSummary
                         .replacingOccurrences(of: "```json", with: "")
                         .replacingOccurrences(of: "```", with: "")
                         .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -628,14 +651,14 @@ final class UnifiedAudioPlayer: ObservableObject {
                             print("[UnifiedPlayer] formatArticleForTTS - Added quick facts from JSON summary")
                         }
                     } else {
-                        // If JSON parsing fails, use the raw summary (might be plain text)
-                        text += summary
-                        print("[UnifiedPlayer] formatArticleForTTS - Using raw summary (JSON parsing failed)")
+                        // If JSON parsing fails, use the cleaned summary (might be plain text)
+                        text += cleanedSummary
+                        print("[UnifiedPlayer] formatArticleForTTS - Using cleaned summary (JSON parsing failed)")
                     }
                 } else {
-                    // Summary is plain text, use directly
-                    text += summary
-                    print("[UnifiedPlayer] formatArticleForTTS - Added plain text summary to TTS text")
+                    // Summary is plain text, use cleaned version directly
+                    text += cleanedSummary
+                    print("[UnifiedPlayer] formatArticleForTTS - Added cleaned plain text summary to TTS text")
                 }
             } else {
                 // Use article content as fallback

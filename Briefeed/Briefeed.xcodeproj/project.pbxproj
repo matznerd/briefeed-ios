@@ -119,6 +119,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 8CA65F0E2E075E5F005E6FC0 /* Build configuration list for PBXNativeTarget "Briefeed" */;
 			buildPhases = (
+				8CC555CF2E4D279400D7B3CB /* ShellScript */,
 				8CA65EE12E075E5C005E6FC0 /* Sources */,
 				8CA65EE22E075E5C005E6FC0 /* Frameworks */,
 				8CA65EE32E075E5C005E6FC0 /* Resources */,
@@ -256,6 +257,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		8CC555CF2E4D279400D7B3CB /* ShellScript */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 8;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+			shellPath = /bin/sh;
+			shellScript = "# Check critical functionality before build\n  if [ -f\n  \"${PROJECT_DIR}/Scripts/pre_build_checks.sh\" ];\n   then\n\n  \"${PROJECT_DIR}/Scripts/pre_build_checks.sh\"\n  else\n      echo \"Warning: Pre-build checks script not found\"\n  fi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		8CA65EE12E075E5C005E6FC0 /* Sources */ = {
