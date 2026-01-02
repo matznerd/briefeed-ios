@@ -13,7 +13,7 @@ struct MiniAudioPlayerV4: View {
     @State private var dragOffset: CGFloat = 0
     @State private var isDragging = false
     
-    private let height: CGFloat = 70
+    private let height: CGFloat = 85 // Total height with title line
     private let expandThreshold: CGFloat = -50
     private let dismissThreshold: CGFloat = 100
     
@@ -21,6 +21,26 @@ struct MiniAudioPlayerV4: View {
         VStack(spacing: 0) {
             // Divider
             Divider()
+            
+            // Full-width title at the top
+            HStack {
+                if let title = viewModel.currentTitle {
+                    Text(title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                } else {
+                    Text("Not Playing")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color(UIColor.secondarySystemBackground).opacity(0.3))
             
             // Player content
             HStack(spacing: 12) {
@@ -31,7 +51,7 @@ struct MiniAudioPlayerV4: View {
                             .scaleEffect(0.7)
                             .frame(width: 44, height: 44)
                     } else if viewModel.isPlaying {
-                        WaveformMiniView(isPlaying: true)
+                        WaveformMiniView(isPlaying: viewModel.isPlaying)
                             .frame(width: 44, height: 44)
                     } else {
                         Image(systemName: itemIcon)
@@ -43,38 +63,43 @@ struct MiniAudioPlayerV4: View {
                     }
                 }
                 
-                // Title and info - constrained width to prevent overflow
+                // Source and speed info only (title is now at top)
                 VStack(alignment: .leading, spacing: 2) {
-                    if let title = viewModel.currentTitle {
-                        MarqueeText(title, font: .system(size: 14, weight: .medium))
-                            .foregroundColor(.primary)
-                    } else {
-                        Text("Not Playing")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    HStack(spacing: 4) {
-                        if viewModel.isGenerating {
-                            Text(viewModel.generationProgress)
+                    if viewModel.isGenerating {
+                        HStack(spacing: 4) {
+                            // Phase-appropriate icon
+                            Image(systemName: phaseIcon)
+                                .font(.system(size: 10))
+                                .foregroundColor(phaseColor)
+
+                            Text(viewModel.generationPhase.shortMessage)
                                 .font(.system(size: 11))
-                                .foregroundColor(.orange)
+                                .foregroundColor(phaseColor)
                                 .lineLimit(1)
-                        } else if let artist = viewModel.currentArtist {
+                        }
+                    } else if let artist = viewModel.currentArtist {
+                        HStack(spacing: 4) {
                             Text(artist)
                                 .font(.system(size: 11))
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)
-                        }
-                        
-                        if viewModel.playbackSpeed != 1.0 {
-                            Text("• \(formatSpeed(viewModel.playbackSpeed))")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.accentColor)
+                            
+                            if viewModel.playbackSpeed != 1.0 {
+                                Text("• \(formatSpeed(viewModel.playbackSpeed))")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.accentColor)
+                            }
                         }
                     }
+                    
+                    // Time remaining or progress
+                    if viewModel.duration > 0 {
+                        Text("\(formatTime(viewModel.currentTime)) / \(formatTime(viewModel.duration))")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
                 }
-                .frame(maxWidth: 120) // Constrain width to prevent overflow
+                .frame(maxWidth: .infinity, alignment: .leading)
                 
                 Spacer(minLength: 4)
                 
@@ -88,11 +113,11 @@ struct MiniAudioPlayerV4: View {
                     }) {
                         Image(systemName: "backward.end.fill")
                             .font(.system(size: 20))
-                            .foregroundColor(viewModel.currentQueueIndex > 0 ? .primary : .secondary.opacity(0.5))
+                            .foregroundColor(viewModel.canPlayPrevious ? .primary : .secondary.opacity(0.5))
                             .frame(width: 32, height: 32)
                             .contentShape(Rectangle())
                     }
-                    .disabled(viewModel.currentQueueIndex <= 0)
+                    .disabled(!viewModel.canPlayPrevious)
                     .accessibilityLabel("Previous track")
                     
                     // Rewind 10 seconds button
@@ -122,7 +147,7 @@ struct MiniAudioPlayerV4: View {
                                 .fill(Color.accentColor)
                                 .frame(width: 44, height: 44)
                             
-                            if viewModel.isLoading || viewModel.isGenerating {
+                            if viewModel.isLoading {
                                 ProgressView()
                                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                     .scaleEffect(0.7)
@@ -134,7 +159,7 @@ struct MiniAudioPlayerV4: View {
                             }
                         }
                     }
-                    .disabled(viewModel.queueItems.isEmpty)
+                    .disabled(!viewModel.isStreamingLiveNews && viewModel.queueItems.isEmpty)
                     .accessibilityLabel(viewModel.isPlaying ? "Pause" : "Play")
                     
                     // Forward 10 seconds button
@@ -157,20 +182,20 @@ struct MiniAudioPlayerV4: View {
                     }) {
                         Image(systemName: "forward.end.fill")
                             .font(.system(size: 20))
-                            .foregroundColor(viewModel.currentQueueIndex < viewModel.queueItems.count - 1 ? .primary : .secondary.opacity(0.5))
+                            .foregroundColor(viewModel.canPlayNext ? .primary : .secondary.opacity(0.5))
                             .frame(width: 32, height: 32)
                             .contentShape(Rectangle())
                     }
-                    .disabled(viewModel.currentQueueIndex >= viewModel.queueItems.count - 1)
+                    .disabled(!viewModel.canPlayNext)
                     .accessibilityLabel("Next track")
                 }
                 .padding(.trailing, 8)
             }
             .padding(.horizontal, 16)
-            .frame(height: height)
+            .frame(height: 54) // Controls section height
             .background(
-                Color(UIColor.secondarySystemBackground)
-                    .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: -1)
+                Color(UIColor.systemBackground)
+                    .shadow(color: Color.black.opacity(0.1), radius: 5, x: 0, y: -2)
             )
             
             // Progress bar
@@ -232,7 +257,51 @@ struct MiniAudioPlayerV4: View {
             return "music.note"
         }
     }
-    
+
+    /// Icon for the current generation phase
+    private var phaseIcon: String {
+        switch viewModel.generationPhase {
+        case .idle:
+            return "circle"
+        case .checkingCache:
+            return "magnifyingglass"
+        case .fetchingContent:
+            return "arrow.down.doc"
+        case .summarizing:
+            return "text.badge.star"
+        case .generatingAudio:
+            return "waveform"
+        case .downloadingAudio:
+            return "arrow.down.circle"
+        case .finalizing:
+            return "checkmark.circle"
+        case .failed:
+            return "exclamationmark.triangle"
+        }
+    }
+
+    /// Color for the current generation phase
+    private var phaseColor: Color {
+        switch viewModel.generationPhase {
+        case .idle:
+            return .secondary
+        case .checkingCache:
+            return .blue
+        case .fetchingContent:
+            return .blue
+        case .summarizing:
+            return .purple
+        case .generatingAudio:
+            return .orange
+        case .downloadingAudio:
+            return .green
+        case .finalizing:
+            return .green
+        case .failed:
+            return .red
+        }
+    }
+
     private func formatSpeed(_ speed: Float) -> String {
         if speed == 1.0 {
             return "1x"
@@ -241,6 +310,12 @@ struct MiniAudioPlayerV4: View {
         } else {
             return String(format: "%.1fx", speed)
         }
+    }
+    
+    private func formatTime(_ time: TimeInterval) -> String {
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
+        return String(format: "%d:%02d", minutes, seconds)
     }
 }
 

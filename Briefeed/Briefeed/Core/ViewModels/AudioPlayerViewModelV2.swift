@@ -36,9 +36,19 @@ final class AudioPlayerViewModelV2: ObservableObject {
     
     @Published private(set) var queueItems: [UnifiedQueueItem] = []
     @Published private(set) var currentQueueIndex: Int = -1
+
+    // Live News streaming state (temporary, not persisted to Brief)
+    @Published private(set) var isStreamingLiveNews: Bool = false
+    @Published private(set) var liveNewsStreamQueue: [UnifiedQueueItem] = []
+    @Published private(set) var liveNewsStreamIndex: Int = -1
     
     @Published private(set) var lastError: Error?
-    @Published private(set) var generationProgress: String = ""
+    @Published private(set) var generationPhase: GenerationPhase = .idle
+
+    /// Display string for generation progress (derived from generationPhase)
+    var generationProgress: String {
+        generationPhase.displayMessage
+    }
     
     // Speed options supporting up to 20x
     let speedOptions: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0, 8.0, 10.0, 15.0, 20.0]
@@ -50,8 +60,9 @@ final class AudioPlayerViewModelV2: ObservableObject {
     }
     
     // MARK: - Private Properties
-    
+
     private let unifiedPlayer = UnifiedAudioPlayer.shared
+    private let queueCoordinator = QueueCoordinator.shared
     private var cancellables = Set<AnyCancellable>()
     
     // MARK: - Initialization
@@ -76,18 +87,47 @@ final class AudioPlayerViewModelV2: ObservableObject {
         
         unifiedPlayer.$playbackRate
             .assign(to: &$playbackSpeed)
-        
+
         unifiedPlayer.$queue
-            .assign(to: &$queueItems)
-        
+            .sink { [weak self] queue in
+                self?.queueItems = queue
+                self?.refreshNowPlaying()
+            }
+            .store(in: &cancellables)
+
         unifiedPlayer.$currentIndex
-            .assign(to: &$currentQueueIndex)
+            .sink { [weak self] index in
+                self?.currentQueueIndex = index
+                self?.refreshNowPlaying()
+            }
+            .store(in: &cancellables)
+
+        unifiedPlayer.$isStreamingLiveNews
+            .sink { [weak self] isStreaming in
+                self?.isStreamingLiveNews = isStreaming
+                self?.refreshNowPlaying()
+            }
+            .store(in: &cancellables)
+
+        unifiedPlayer.$liveNewsStreamQueue
+            .sink { [weak self] queue in
+                self?.liveNewsStreamQueue = queue
+                self?.refreshNowPlaying()
+            }
+            .store(in: &cancellables)
+
+        unifiedPlayer.$liveNewsStreamIndex
+            .sink { [weak self] index in
+                self?.liveNewsStreamIndex = index
+                self?.refreshNowPlaying()
+            }
+            .store(in: &cancellables)
         
         unifiedPlayer.$isGenerating
             .assign(to: &$isGenerating)
-        
-        unifiedPlayer.$generationProgress
-            .assign(to: &$generationProgress)
+
+        unifiedPlayer.$generationPhase
+            .assign(to: &$generationPhase)
         
         // Calculate progress
         Publishers.CombineLatest(unifiedPlayer.$currentTime, unifiedPlayer.$duration)
@@ -95,14 +135,10 @@ final class AudioPlayerViewModelV2: ObservableObject {
                 duration > 0 ? Float(currentTime / duration) : 0
             }
             .assign(to: &$progress)
-        
-        // Update current item info when queue or index changes
-        Publishers.CombineLatest(unifiedPlayer.$queue, unifiedPlayer.$currentIndex)
-            .sink { [weak self] queue, index in
-                let item = (index >= 0 && index < queue.count) ? queue[index] : nil
-                self?.updateCurrentItemInfo(item)
-            }
-            .store(in: &cancellables)
+    }
+
+    private func refreshNowPlaying() {
+        updateCurrentItemInfo(unifiedPlayer.currentItem)
     }
     
     private func loadSavedState() {
@@ -173,20 +209,10 @@ final class AudioPlayerViewModelV2: ObservableObject {
     // MARK: - Navigation Methods for Mini Player
     
     func playNext() async {
-        guard currentQueueIndex < queueItems.count - 1 else { return }
-        
+        guard canPlayNext else { return }
         isLoading = true
-        let nextIndex = currentQueueIndex + 1
-        currentQueueIndex = nextIndex
-        
-        let item = queueItems[nextIndex]
-        if let article = item.article {
-            await play(article: article)
-        } else if let episode = item.episode {
-            await play(episode: episode)
-        }
-        
-        isLoading = false
+        defer { isLoading = false }
+        await unifiedPlayer.playNext()
     }
     
     func playPrevious() async {
@@ -195,26 +221,16 @@ final class AudioPlayerViewModelV2: ObservableObject {
             unifiedPlayer.seek(to: 0)
             return
         }
-        
-        // Otherwise go to previous item
-        guard currentQueueIndex > 0 else { 
-            // If at beginning, just restart
+
+        // Otherwise go to previous item if possible
+        guard canPlayPrevious else {
             unifiedPlayer.seek(to: 0)
-            return 
+            return
         }
-        
+
         isLoading = true
-        let previousIndex = currentQueueIndex - 1
-        currentQueueIndex = previousIndex
-        
-        let item = queueItems[previousIndex]
-        if let article = item.article {
-            await play(article: article)
-        } else if let episode = item.episode {
-            await play(episode: episode)
-        }
-        
-        isLoading = false
+        defer { isLoading = false }
+        await unifiedPlayer.playPrevious()
     }
     
     // MARK: - Seek Methods for Mini Player
@@ -265,10 +281,8 @@ final class AudioPlayerViewModelV2: ObservableObject {
             // Article already in queue, just play it at its current position
             await unifiedPlayer.play(at: existingIndex)
         } else {
-            // Article not in queue, create a new queue with just this article
-            // This preserves the original behavior for when playing from outside the queue
-            await unifiedPlayer.loadQueue(from: [article])
-            await unifiedPlayer.play(at: 0)
+            // Article not in queue: add to Brief queue and play immediately.
+            await addToQueue(article, playNow: true)
         }
         
         isLoading = false
@@ -285,10 +299,8 @@ final class AudioPlayerViewModelV2: ObservableObject {
             // Episode already in queue, just play it at its current position
             await unifiedPlayer.play(at: existingIndex)
         } else {
-            // Episode not in queue, create a new queue with just this episode
-            // This preserves the original behavior for when playing from outside the queue
-            await unifiedPlayer.loadQueue(from: [episode])
-            await unifiedPlayer.play(at: 0)
+            // Episode not in queue: add to Brief queue and play immediately.
+            await addToQueue(episode, playNow: true)
         }
         
         isLoading = false
@@ -345,20 +357,30 @@ final class AudioPlayerViewModelV2: ObservableObject {
         await unifiedPlayer.play(at: index)
     }
     
-    func addToQueue(_ article: Article) async {
-        await unifiedPlayer.addToQueue(article)
+    func addToQueue(_ article: Article, playNow: Bool = false, playNext: Bool = false) async {
+        await unifiedPlayer.addToQueue(article, playNow: playNow, playNext: playNext)
+
+        // If playNow, start playback immediately
+        if playNow {
+            await unifiedPlayer.play(at: unifiedPlayer.currentIndex >= 0 ? unifiedPlayer.currentIndex : 0)
+        }
     }
-    
-    func addToQueue(_ episode: RSSEpisode) async {
-        await unifiedPlayer.addToQueue(episode)
+
+    func addToQueue(_ episode: RSSEpisode, playNow: Bool = false, playNext: Bool = false) async {
+        await unifiedPlayer.addToQueue(episode, playNow: playNow, playNext: playNext)
+
+        // If playNow, start playback immediately
+        if playNow {
+            await unifiedPlayer.play(at: unifiedPlayer.currentIndex >= 0 ? unifiedPlayer.currentIndex : 0)
+        }
     }
-    
-    func queueArticle(_ article: Article) async {
-        await addToQueue(article)
+
+    func queueArticle(_ article: Article, playNow: Bool = false, playNext: Bool = false) async {
+        await addToQueue(article, playNow: playNow, playNext: playNext)
     }
-    
-    func queueEpisode(_ episode: RSSEpisode) async {
-        await addToQueue(episode)
+
+    func queueEpisode(_ episode: RSSEpisode, playNow: Bool = false, playNext: Bool = false) async {
+        await addToQueue(episode, playNow: playNow, playNext: playNext)
     }
     
     func removeFromQueue(at index: Int) async {
@@ -381,8 +403,8 @@ final class AudioPlayerViewModelV2: ObservableObject {
             } else if let episode = item.episode {
                 return [
                     "type": "episode", 
-                    "id": episode.id ?? "",
-                    "title": episode.title ?? ""
+                    "id": episode.id,
+                    "title": episode.title
                 ]
             }
             return nil
@@ -405,27 +427,9 @@ final class AudioPlayerViewModelV2: ObservableObject {
     }
     
     func reorderQueue(from source: IndexSet, to destination: Int) async {
-        // Convert IndexSet to array of items to move
-        var newQueue = queueItems
-        
-        // Get items to move
-        let itemsToMove = source.map { newQueue[$0] }
-        
-        // Remove items from their current positions
-        for index in source.reversed() {
-            newQueue.remove(at: index)
-        }
-        
-        // Insert at new position
-        let insertIndex = destination > source.first! ? destination - source.count : destination
-        for (offset, item) in itemsToMove.enumerated() {
-            newQueue.insert(item, at: insertIndex + offset)
-        }
-        
-        // Update queue
-        await unifiedPlayer.loadMixedQueue(items: newQueue.compactMap { item in
-            item.article ?? item.episode
-        })
+        // Delegate to QueueCoordinator (source of truth)
+        // Local queue (queueItems) syncs automatically via Combine subscription
+        queueCoordinator.moveItems(from: source, to: destination)
     }
     
     // MARK: - Private Methods
@@ -477,15 +481,45 @@ final class AudioPlayerViewModelV2: ObservableObject {
 // MARK: - Live News Support
 
 extension AudioPlayerViewModelV2 {
-    
-    /// Play latest RSS episodes as "Live News"
+    /// Play Live News episodes immediately WITHOUT queuing to Brief
+    /// Per PRD: "Play Live News" streams immediately without adding to Brief queue
+    func playLiveNewsStream(episodes: [RSSEpisode]) async {
+        isLoading = true
+        lastError = nil
+
+        if !episodes.isEmpty {
+            await unifiedPlayer.playLiveNewsStream(episodes: episodes)
+        } else {
+            lastError = NSError(
+                domain: "AudioPlayer",
+                code: 404,
+                userInfo: [NSLocalizedDescriptionKey: "No new episodes available"]
+            )
+        }
+
+        isLoading = false
+    }
+
+    /// Stop Live News streaming and return to Brief queue mode
+    func stopLiveNewsStream() {
+        unifiedPlayer.stopLiveNewsStream()
+    }
+
+    /// Stream a single episode immediately WITHOUT queuing to Brief
+    /// Per PRD: Per-episode "Play Now" in Live News also streams immediately
+    func streamEpisode(_ episode: RSSEpisode) async {
+        await playLiveNewsStream(episodes: [episode])
+    }
+
+    /// Play latest RSS episodes as "Live News" (legacy - queues to Brief)
+    /// NOTE: Use playLiveNewsStream for immediate streaming per PRD
     func playLiveNews(from feeds: [RSSFeed]) async {
         isLoading = true
         lastError = nil
-        
+
         let context = PersistenceController.shared.container.viewContext
         var episodes: [RSSEpisode] = []
-        
+
         // Get latest unlistened episode from each feed
         for feed in feeds {
             let request: NSFetchRequest<RSSEpisode> = RSSEpisode.fetchRequest()
@@ -497,26 +531,18 @@ extension AudioPlayerViewModelV2 {
                 NSSortDescriptor(keyPath: \RSSEpisode.pubDate, ascending: false)
             ]
             request.fetchLimit = 1
-            
+
             if let latestEpisode = try? context.fetch(request).first {
                 episodes.append(latestEpisode)
             }
         }
-        
+
         // Sort by publication date (newest first)
-        episodes.sort { ($0.pubDate ?? Date.distantPast) > ($1.pubDate ?? Date.distantPast) }
-        
-        // Load and play
-        if !episodes.isEmpty {
-            await playQueue(episodes: episodes)
-        } else {
-            lastError = NSError(
-                domain: "AudioPlayer",
-                code: 404,
-                userInfo: [NSLocalizedDescriptionKey: "No new episodes available"]
-            )
-        }
-        
+        episodes.sort { $0.pubDate > $1.pubDate }
+
+        // Stream immediately without queuing (per PRD)
+        await playLiveNewsStream(episodes: episodes)
+
         isLoading = false
     }
 }

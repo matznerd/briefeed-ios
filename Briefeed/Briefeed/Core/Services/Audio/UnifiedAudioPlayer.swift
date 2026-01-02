@@ -106,6 +106,77 @@ class UnifiedQueueItem: ObservableObject, Identifiable {
     }
 }
 
+// MARK: - Generation Phase
+
+/// Detailed generation phase tracking for better user feedback
+/// Provides granular status during the TTS pipeline
+enum GenerationPhase: Equatable {
+    case idle
+    case checkingCache(title: String)
+    case fetchingContent(domain: String)
+    case summarizing(wordCount: Int, provider: String)
+    case generatingAudio(provider: String)
+    case downloadingAudio(progress: Double)  // 0.0 to 1.0
+    case finalizing
+    case failed(message: String)
+
+    /// Human-readable status message for display
+    var displayMessage: String {
+        switch self {
+        case .idle:
+            return ""
+        case .checkingCache(let title):
+            return "Checking cache for \(title.prefix(30))..."
+        case .fetchingContent(let domain):
+            return "Fetching from \(domain)..."
+        case .summarizing(let wordCount, let provider):
+            let wordStr = wordCount > 0 ? "\(wordCount) words" : "content"
+            return "Summarizing \(wordStr) via \(provider)..."
+        case .generatingAudio(let provider):
+            return "Generating audio via \(provider)..."
+        case .downloadingAudio(let progress):
+            let percent = Int(progress * 100)
+            return "Downloading audio... \(percent)%"
+        case .finalizing:
+            return "Preparing playback..."
+        case .failed(let message):
+            return "Error: \(message)"
+        }
+    }
+
+    /// Short status for compact display
+    var shortMessage: String {
+        switch self {
+        case .idle:
+            return ""
+        case .checkingCache:
+            return "Checking cache..."
+        case .fetchingContent:
+            return "Fetching article..."
+        case .summarizing(_, let provider):
+            return "Summarizing (\(provider))..."
+        case .generatingAudio(let provider):
+            return "Audio (\(provider))..."
+        case .downloadingAudio(let progress):
+            return "Downloading \(Int(progress * 100))%..."
+        case .finalizing:
+            return "Preparing..."
+        case .failed:
+            return "Failed"
+        }
+    }
+
+    /// Whether this phase indicates active work
+    var isActive: Bool {
+        switch self {
+        case .idle, .failed:
+            return false
+        default:
+            return true
+        }
+    }
+}
+
 // MARK: - Unified Audio Player
 
 @MainActor
@@ -137,7 +208,12 @@ final class UnifiedAudioPlayer: ObservableObject {
     @Published var duration: TimeInterval = 0
     @Published var playbackRate: Float = 1.0
     @Published var isGenerating: Bool = false
-    @Published var generationProgress: String = ""
+    @Published var generationPhase: GenerationPhase = .idle
+
+    /// Display string for generation progress (derived from generationPhase)
+    var generationProgress: String {
+        generationPhase.displayMessage
+    }
 
     // MARK: - Live News Streaming (temporary, not persisted)
 
@@ -660,18 +736,16 @@ final class UnifiedAudioPlayer: ObservableObject {
         if let article = item.article {
             item.generationState = .generating
             isGenerating = true
-            generationProgress = "Generating summary for \(item.title)..."
-            
+            generationPhase = .checkingCache(title: item.title)
+
             do {
                 print("[UnifiedPlayer] Starting audio generation for article: \(article.title ?? "Unknown")")
                 print("[UnifiedPlayer] Article has summary: \(article.summary != nil), summary length: \(article.summary?.count ?? 0)")
-                
+
                 // Check if article needs summary generation
                 if article.summary == nil || article.summary?.isEmpty == true || article.summary == "Unable to generate summary. The article content may be incomplete or unavailable." {
                     print("[UnifiedPlayer] Article needs summary generation")
-                    // Generate summary first
-                    generationProgress = "Generating summary..."
-                    
+
                     // Get article content for summarization
                     var contentToSummarize = ""
                     if let content = article.content, !content.isEmpty {
@@ -680,14 +754,15 @@ final class UnifiedAudioPlayer: ObservableObject {
                     } else if let url = article.url {
                         print("[UnifiedPlayer] No content stored, fetching from URL: \(url)")
                         // Fetch content from URL if needed
-                        generationProgress = "Fetching article content..."
+                        let domain = URL(string: url)?.host ?? "article"
+                        generationPhase = .fetchingContent(domain: domain)
                         let firecrawlService = FirecrawlService()
                         do {
                             let firecrawlData = try await firecrawlService.fetchArticleContent(from: url)
                             // Use best available content (prefers markdown over html over plain)
                             contentToSummarize = firecrawlData.bestContent
                             print("[UnifiedPlayer] Fetched \(contentToSummarize.count) characters from article")
-                            
+
                             // Check if content is too short (might be an error page or paywall)
                             if contentToSummarize.count < 100 {
                                 print("[UnifiedPlayer] WARNING: Fetched content is very short, might be incomplete")
@@ -699,10 +774,11 @@ final class UnifiedAudioPlayer: ObservableObject {
                             contentToSummarize = article.content ?? ""
                         }
                     }
-                    
+
                     if !contentToSummarize.isEmpty {
-                        // Generate summary using Gemini
-                        generationProgress = "Creating summary..."
+                        // Calculate word count for display
+                        let wordCount = contentToSummarize.split(separator: " ").count
+                        generationPhase = .summarizing(wordCount: wordCount, provider: "Gemini")
                         let geminiService = GeminiService()
                         
                         // Smart truncation to avoid token limit while preserving article quality
@@ -791,22 +867,22 @@ final class UnifiedAudioPlayer: ObservableObject {
                 }
                 
                 // Now format text for TTS (will include the summary)
-                generationProgress = "Generating audio..."
                 print("[UnifiedPlayer] Formatting article for TTS...")
                 print("[UnifiedPlayer] Article summary status: \(article.summary?.count ?? 0) characters")
                 let text = formatArticleForTTS(article)
                 print("[UnifiedPlayer] Text for TTS (\(text.count) chars): \(String(text.prefix(200)))...")
-                
+
                 // Check if we only have title
                 if text.count < 100 && article.title != nil {
                     print("[UnifiedPlayer] WARNING: TTS text is very short, likely only title")
                 }
-                
+
                 // Generate audio file - try OpenAI first if configured, fallback to Gemini
                 let audioURL: URL
-                
+
                 if UserDefaultsManager.shared.openAIAPIKey != nil && !UserDefaultsManager.shared.openAIAPIKey!.isEmpty {
                     // Use OpenAI TTS if API key is configured
+                    generationPhase = .generatingAudio(provider: "OpenAI")
                     print("[UnifiedPlayer] Using OpenAI TTS for audio generation")
                     do {
                         audioURL = try await openAITTS.generateAudioForArticle(
@@ -818,6 +894,7 @@ final class UnifiedAudioPlayer: ObservableObject {
                     } catch {
                         print("[UnifiedPlayer] OpenAI TTS failed: \(error), falling back to Gemini")
                         // Fallback to Gemini TTS
+                        generationPhase = .generatingAudio(provider: "Gemini")
                         audioURL = try await ttsGenerator.generateAudioFile(
                             from: text,
                             trackingIn: context,
@@ -826,6 +903,7 @@ final class UnifiedAudioPlayer: ObservableObject {
                     }
                 } else {
                     // Use Gemini TTS as primary (but may hit 100/day limit)
+                    generationPhase = .generatingAudio(provider: "Gemini")
                     print("[UnifiedPlayer] Using Gemini TTS (no OpenAI key configured)")
                     do {
                         audioURL = try await ttsGenerator.generateAudioFile(
@@ -842,15 +920,16 @@ final class UnifiedAudioPlayer: ObservableObject {
                         throw error
                     }
                 }
-                
+
+                generationPhase = .finalizing
                 item.cachedAudioURL = audioURL
                 item.generationState = .ready
-                
+
                 // Get duration if possible
                 if let player = try? AVAudioPlayer(contentsOf: audioURL) {
                     item.duration = player.duration
                 }
-                
+
                 print("[UnifiedPlayer] Generated audio for: \(item.title)")
                 print("[UnifiedPlayer] Audio URL: \(audioURL.path)")
             } catch {
@@ -861,10 +940,11 @@ final class UnifiedAudioPlayer: ObservableObject {
                 if let uuid = UUID(uuidString: item.id) {
                     queueCoordinator.markItemFailed(for: uuid, error: error.localizedDescription)
                 }
+                generationPhase = .failed(message: error.localizedDescription)
             }
 
             isGenerating = false
-            generationProgress = ""
+            generationPhase = .idle
         }
     }
     
