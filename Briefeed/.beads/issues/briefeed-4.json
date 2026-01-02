@@ -1,0 +1,10 @@
+{
+  "id": "briefeed-4",
+  "title": "Phase 1 Validation: Per-Episode Streaming",
+  "status": "open",
+  "priority": "high",
+  "labels": ["phase-1", "validation", "manual-test"],
+  "created": "2025-12-30",
+  "description": "Verify per-episode 'Play Now' streams immediately without queuing.\n\nTest steps:\n1. Go to Live News feed details\n2. Tap an episode row OR use 'Play Now' swipe action\n\nExpected: Episode streams immediately, is NOT added to Brief queue.",
+  "blockedBy": []
+}

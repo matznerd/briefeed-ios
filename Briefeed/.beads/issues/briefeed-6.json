@@ -1,0 +1,10 @@
+{
+  "id": "briefeed-6",
+  "title": "Phase 2: Improve Prompt-Based JSON Parsing Reliability",
+  "status": "open",
+  "priority": "medium",
+  "labels": ["phase-2", "summarization", "gemini"],
+  "created": "2025-12-30",
+  "description": "Improve GeminiService JSON extraction before adding response_schema.\n\nTasks:\n- Review current prompt structure for JSON output\n- Add fallback parsing for malformed JSON\n- Handle markdown code blocks around JSON\n- Test with various article types\n\nNote: response_schema not yet supported by request model - improve prompt first.",
+  "blockedBy": ["briefeed-1", "briefeed-2", "briefeed-3", "briefeed-4", "briefeed-5"]
+}

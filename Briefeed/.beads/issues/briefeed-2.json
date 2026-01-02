@@ -1,0 +1,10 @@
+{
+  "id": "briefeed-2",
+  "title": "Phase 1 Validation: Hydration After Restart",
+  "status": "open",
+  "priority": "high",
+  "labels": ["phase-1", "validation", "manual-test"],
+  "created": "2025-12-30",
+  "description": "Verify playback works after restart even when in-memory caches are empty.\n\nTest steps:\n1. Ensure Brief queue has items\n2. Force close app completely\n3. Relaunch app\n4. Attempt to play queued items\n\nExpected: Playback works - Core Data hydration fetches Article/RSSEpisode by stored IDs.",
+  "blockedBy": ["briefeed-1"]
+}

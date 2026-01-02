@@ -11,15 +11,16 @@ struct WaveformMiniView: View {
     let numberOfBars: Int = 5
     let isPlaying: Bool
     let color: Color
-    
+
     @State private var animationAmounts: [CGFloat]
-    
+    @State private var animationTimer: Timer?
+
     init(isPlaying: Bool, color: Color = .accentColor) {
         self.isPlaying = isPlaying
         self.color = color
         _animationAmounts = State(initialValue: Array(repeating: 0.3, count: 5))
     }
-    
+
     var body: some View {
         HStack(spacing: 2) {
             ForEach(0..<numberOfBars, id: \.self) { index in
@@ -27,15 +28,7 @@ struct WaveformMiniView: View {
                     .fill(color)
                     .frame(width: 3)
                     .scaleEffect(x: 1, y: animationAmounts[index], anchor: .bottom)
-                    .animation(
-                        isPlaying ?
-                            Animation
-                                .easeInOut(duration: Double.random(in: 0.3...0.6))
-                                .repeatForever(autoreverses: true)
-                                .delay(Double(index) * 0.05)
-                        : .easeOut(duration: 0.2),
-                        value: animationAmounts[index]
-                    )
+                    .animation(.easeInOut(duration: 0.15), value: animationAmounts[index])
             }
         }
         .frame(height: 16)
@@ -43,6 +36,9 @@ struct WaveformMiniView: View {
             if isPlaying {
                 startAnimating()
             }
+        }
+        .onDisappear {
+            stopAnimating()
         }
         .onChange(of: isPlaying) { newValue in
             if newValue {
@@ -52,36 +48,30 @@ struct WaveformMiniView: View {
             }
         }
     }
-    
+
     private func startAnimating() {
-        for index in 0..<numberOfBars {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * 0.05) {
-                withAnimation {
-                    animationAmounts[index] = CGFloat.random(in: 0.4...1.0)
-                }
-            }
-        }
-        
-        // Continue updating animation values
-        if isPlaying {
-            Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { timer in
-                if !isPlaying {
-                    timer.invalidate()
-                    return
-                }
-                
+        // Stop any existing timer
+        animationTimer?.invalidate()
+
+        // Create timer that continuously updates bar heights
+        animationTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { _ in
+            withAnimation(.easeInOut(duration: 0.15)) {
                 for index in 0..<numberOfBars {
-                    withAnimation(.easeInOut(duration: Double.random(in: 0.3...0.6))) {
-                        animationAmounts[index] = CGFloat.random(in: 0.4...1.0)
-                    }
+                    animationAmounts[index] = CGFloat.random(in: 0.3...1.0)
                 }
             }
         }
+
+        // Fire immediately for responsive start
+        animationTimer?.fire()
     }
-    
+
     private func stopAnimating() {
-        for index in 0..<numberOfBars {
-            withAnimation(.easeOut(duration: 0.2)) {
+        animationTimer?.invalidate()
+        animationTimer = nil
+
+        withAnimation(.easeOut(duration: 0.2)) {
+            for index in 0..<numberOfBars {
                 animationAmounts[index] = 0.3
             }
         }

@@ -1,0 +1,13 @@
+{
+  "id": "briefeed-10",
+  "title": "Waveform animation doesn't animate continuously",
+  "type": "bug",
+  "status": "closed",
+  "priority": 1,
+  "labels": ["audio", "ui"],
+  "created": "2025-12-30T00:00:00Z",
+  "updated": "2025-12-30T00:00:00Z",
+  "closedAt": "2025-12-30T00:00:00Z",
+  "description": "## Problem\nThe WaveformMiniView animation appears random/inconsistent instead of smoothly animating.\n\n## Root Cause\nIn `WaveformMiniView.swift`, the `startAnimating()` function sets random heights once, then relies on `.repeatForever()` to animate. However, this only repeats the transition to those values - it doesn't continuously generate new random values.\n\n## Fix Applied\nReplaced the one-shot animation with a Timer that continuously updates bar heights every 0.15 seconds, creating smooth continuous animation.\n\n## Files Changed\n- `Briefeed/Core/Utilities/Components/WaveformMiniView.swift`",
+  "comments": []
+}

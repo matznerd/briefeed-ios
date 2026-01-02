@@ -1,0 +1,10 @@
+{
+  "id": "briefeed-8",
+  "title": "Phase 2: Wire Error Tracking in Summarization Flow",
+  "status": "open",
+  "priority": "medium",
+  "labels": ["phase-2", "summarization", "error-handling"],
+  "created": "2025-12-30",
+  "description": "Connect error tracking to UnifiedAudioPlayer summarization flow.\n\nTasks:\n- Call QueueCoordinator.markItemFailed() on summarization errors\n- Call QueueCoordinator.resetItemForRetry() before retry attempts\n- Track retryCount increments\n- Skip to next item after max retries exceeded\n\nKey files:\n- UnifiedAudioPlayer.swift (summarization flow)\n- QueueCoordinator.swift (error tracking methods)",
+  "blockedBy": ["briefeed-7"]
+}

@@ -41,6 +41,8 @@ protocol SwiftAudioExServiceDelegate: AnyObject {
     func audioProgressUpdated(progress: Float, currentTime: TimeInterval, duration: TimeInterval)
     func audioRateChanged(to rate: Float)
     func audioDidFinishPlaying(successfully: Bool)
+    func audioRequestNextTrack()
+    func audioRequestPreviousTrack()
 }
 
 // MARK: - SwiftAudioEx Service
@@ -84,9 +86,16 @@ final class SwiftAudioExService: NSObject {
     /// Queue management
     private var queue: [URL] = []
     private var currentIndex: Int = -1
-    
+
+    /// Current track metadata (stored for Now Playing updates)
+    private var currentTitle: String?
+    private var currentArtist: String?
+
     /// Progress timer
     private var progressTimer: Timer?
+
+    /// Last update time for Now Playing info (to avoid excessive updates)
+    private var lastNowPlayingUpdateTime: TimeInterval = 0
     
     /// Background playback support
     private(set) var backgroundPlaybackEnabled: Bool = true
@@ -111,8 +120,8 @@ final class SwiftAudioExService: NSObject {
     private func setupAudioSession() {
         do {
             let session = AVAudioSession.sharedInstance()
-            // Include .mixWithOthers to allow audio to play alongside other apps (Instagram, etc)
-            try session.setCategory(.playback, mode: .spokenAudio, options: [.mixWithOthers, .allowBluetooth, .allowAirPlay])
+            // Primary audio app configuration - shows lock screen controls
+            try session.setCategory(.playback, mode: .spokenAudio, options: [.allowBluetooth, .allowAirPlay])
             try session.setActive(true)
         } catch {
             print("[SwiftAudioEx] Failed to setup audio session: \(error)")
@@ -182,20 +191,19 @@ final class SwiftAudioExService: NSObject {
         // Also enable next/previous track commands for queue navigation
         commandCenter.nextTrackCommand.isEnabled = true
         commandCenter.nextTrackCommand.addTarget { [weak self] _ in
-            // Trigger next item in queue through delegate
-            self?.delegate?.audioDidFinishPlaying(successfully: true)
+            // Request next track through delegate
+            self?.delegate?.audioRequestNextTrack()
             return .success
         }
-        
+
         commandCenter.previousTrackCommand.isEnabled = true
         commandCenter.previousTrackCommand.addTarget { [weak self] _ in
             // If we're more than 3 seconds in, restart current track
             if let currentTime = self?.currentTime, currentTime > 3 {
                 self?.seek(to: 0)
             } else {
-                // Otherwise, we'd need to notify delegate to play previous
-                // For now, just restart
-                self?.seek(to: 0)
+                // Otherwise, request previous track through delegate
+                self?.delegate?.audioRequestPreviousTrack()
             }
             return .success
         }
@@ -245,7 +253,11 @@ final class SwiftAudioExService: NSObject {
     func play(url: URL, title: String? = nil, artist: String? = nil) async throws {
         print("[SwiftAudioEx] play() called with URL: \(url)")
         state = .loading
-        
+
+        // Store metadata for Now Playing updates
+        currentTitle = title ?? url.lastPathComponent
+        currentArtist = artist ?? "Briefeed"
+
         // Check if file exists for local files
         if url.isFileURL {
             if !FileManager.default.fileExists(atPath: url.path) {
@@ -508,35 +520,52 @@ final class SwiftAudioExService: NSObject {
             currentTime: currentTime,
             duration: duration
         )
-        updateNowPlayingInfo()
+        
+        // Only update Now Playing info every 5 seconds or when time changes significantly
+        // This prevents excessive updates that were causing log spam
+        let timeSinceLastUpdate = currentTime - lastNowPlayingUpdateTime
+        if abs(timeSinceLastUpdate) >= 5.0 {
+            updateNowPlayingInfo()
+            lastNowPlayingUpdateTime = currentTime
+        }
     }
     
     private func updateNowPlayingInfo(title: String? = nil, artist: String? = nil) {
+        // Update stored metadata if new values provided
+        if let title = title {
+            currentTitle = title
+        }
+        if let artist = artist {
+            currentArtist = artist
+        }
+
+        // Don't update if we don't have any metadata
+        guard currentTitle != nil || duration > 0 else {
+            return
+        }
+
+        // Build Now Playing info
         var info: [String: Any] = [:]
-        
-        // Always set all required fields
-        info[MPMediaItemPropertyTitle] = title ?? "Briefeed Audio"
-        info[MPMediaItemPropertyArtist] = artist ?? "Briefeed"
+
+        // Always include stored title/artist
+        if let title = currentTitle {
+            info[MPMediaItemPropertyTitle] = title
+        }
+        info[MPMediaItemPropertyArtist] = currentArtist ?? "Briefeed"
         info[MPMediaItemPropertyAlbumTitle] = "Briefeed"
-        
-        // Timing info - ensure we have valid values
-        info[MPMediaItemPropertyPlaybackDuration] = max(0, duration)
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = max(0, currentTime)
-        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? Double(rate) : 0.0
-        
+
+        // Update timing info if we have valid duration
+        if duration > 0 {
+            info[MPMediaItemPropertyPlaybackDuration] = duration
+            info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
+            info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? Double(rate) : 0.0
+        }
+
         // Add media type
         info[MPMediaItemPropertyMediaType] = MPMediaType.podcast.rawValue
-        
+
         // Set the info
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        
-        // Debug log
-        print("[SwiftAudioEx] Updated Now Playing Info:")
-        print("  Title: \(title ?? "Briefeed Audio")")
-        print("  Artist: \(artist ?? "Briefeed")")
-        print("  Duration: \(duration)")
-        print("  Current Time: \(currentTime)")
-        print("  Rate: \(isPlaying ? rate : 0)")
     }
     
     @objc private func handleInterruption(notification: Notification) {

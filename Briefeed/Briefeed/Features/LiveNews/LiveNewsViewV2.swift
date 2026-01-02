@@ -16,6 +16,7 @@ struct LiveNewsViewV2: View {
     @State private var selectedFeed: RSSFeed?
     @State private var showingAddFeed = false
     @State private var showingFeedDetails = false
+    @State private var editMode = EditMode.inactive
     
     @FetchRequest(
         entity: RSSFeed.entity(),
@@ -102,8 +103,12 @@ struct LiveNewsViewV2: View {
                 .onDelete { indexSet in
                     deleteFeeds(at: indexSet)
                 }
+                .onMove { source, destination in
+                    moveFeeds(from: source, to: destination)
+                }
             }
             .listStyle(.plain)
+            .environment(\.editMode, $editMode)
         }
     }
     
@@ -137,9 +142,16 @@ struct LiveNewsViewV2: View {
     }
     
     // MARK: - Toolbar
-    
+
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            if !feeds.isEmpty {
+                EditButton()
+                    .environment(\.editMode, $editMode)
+            }
+        }
+
         ToolbarItem(placement: .navigationBarTrailing) {
             Button {
                 showingAddFeed = true
@@ -167,8 +179,8 @@ struct LiveNewsViewV2: View {
         
         Button {
             Task {
-                // Play episode immediately
-                await appViewModel.play(episode: episode)
+                // Stream episode immediately WITHOUT queuing to Brief (per PRD)
+                await appViewModel.streamEpisode(episode)
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             }
         } label: {
@@ -214,16 +226,16 @@ struct LiveNewsViewV2: View {
                     .sorted(by: { $0.pubDate > $1.pubDate })
                     .first {
                     episodesToPlay.append(latestEpisode)
-                    print("🎙️ Found episode: \(latestEpisode.title ?? "Unknown") from \(feed.displayName ?? "Unknown feed")")
+                    print("🎙️ Found episode: \(latestEpisode.title) from \(feed.displayName)")
                 }
             }
         }
         
         print("🎙️ Total episodes to play: \(episodesToPlay.count)")
-        
-        // Play all episodes using new audio system
+
+        // Stream immediately WITHOUT adding to Brief queue (per PRD)
         if !episodesToPlay.isEmpty {
-            await audioPlayerViewModel.playQueue(episodes: episodesToPlay)
+            await audioPlayerViewModel.playLiveNewsStream(episodes: episodesToPlay)
         }
     }
     
@@ -253,6 +265,25 @@ struct LiveNewsViewV2: View {
             print("Failed to toggle feed: \(error)")
         }
     }
+
+    private func moveFeeds(from source: IndexSet, to destination: Int) {
+        // Convert FetchedResults to mutable array
+        var feedsArray = Array(feeds)
+        feedsArray.move(fromOffsets: source, toOffset: destination)
+
+        // Update priorities based on new order
+        let context = PersistenceController.shared.container.viewContext
+        for (index, feed) in feedsArray.enumerated() {
+            feed.priority = Int16(index)
+        }
+
+        do {
+            try context.save()
+            print("[LiveNews] Reordered feeds - new priorities saved")
+        } catch {
+            print("Failed to save feed order: \(error)")
+        }
+    }
 }
 
 // MARK: - Feed Row View
@@ -278,7 +309,7 @@ struct FeedRowV2: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text(feed.displayName ?? "Unknown Feed")
+                        Text(feed.displayName)
                             .font(.headline)
                             .lineLimit(1)
                         
@@ -293,7 +324,7 @@ struct FeedRowV2: View {
                     }
                     
                     if let latestEpisode = episodes.first {
-                        Text(latestEpisode.title ?? "")
+                        Text(latestEpisode.title)
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .lineLimit(1)
@@ -355,7 +386,7 @@ struct FeedDetailsViewV2: View {
                     }
                 }
             }
-            .navigationTitle(feed.displayName ?? "Feed")
+            .navigationTitle(feed.displayName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -372,15 +403,16 @@ struct FeedDetailsViewV2: View {
 struct EpisodeRowV2: View {
     let episode: RSSEpisode
     @EnvironmentObject var appViewModel: AppViewModel
-    
+
     var body: some View {
         Button {
             Task {
-                await appViewModel.play(episode: episode)
+                // Stream episode immediately WITHOUT queuing to Brief (per PRD)
+                await appViewModel.streamEpisode(episode)
             }
         } label: {
             VStack(alignment: .leading, spacing: 4) {
-                Text(episode.title ?? "Unknown Episode")
+                Text(episode.title)
                     .font(.headline)
                     .lineLimit(2)
                 
