@@ -211,6 +211,10 @@ final class AudioPlayerViewModelV2: ObservableObject {
     func playNext() async {
         guard canPlayNext else { return }
         isLoading = true
+
+        // CRITICAL: Yield to allow SwiftUI to update UI before heavy work
+        await Task.yield()
+
         defer { isLoading = false }
         await unifiedPlayer.playNext()
     }
@@ -229,6 +233,10 @@ final class AudioPlayerViewModelV2: ObservableObject {
         }
 
         isLoading = true
+
+        // CRITICAL: Yield to allow SwiftUI to update UI before heavy work
+        await Task.yield()
+
         defer { isLoading = false }
         await unifiedPlayer.playPrevious()
     }
@@ -275,7 +283,10 @@ final class AudioPlayerViewModelV2: ObservableObject {
     func play(article: Article) async {
         isLoading = true
         lastError = nil
-        
+
+        // CRITICAL: Yield to allow SwiftUI to update UI before heavy work
+        await Task.yield()
+
         // Check if article is already in the queue
         if let existingIndex = queueItems.firstIndex(where: { $0.article?.id == article.id }) {
             // Article already in queue, just play it at its current position
@@ -291,7 +302,10 @@ final class AudioPlayerViewModelV2: ObservableObject {
     func play(episode: RSSEpisode) async {
         isLoading = true
         lastError = nil
-        
+
+        // CRITICAL: Yield to allow SwiftUI to update UI before heavy work
+        await Task.yield()
+
         // Check if episode is already in the queue
         if let existingIndex = queueItems.firstIndex(where: { 
             $0.audioURL?.absoluteString == episode.audioUrl 
@@ -309,7 +323,10 @@ final class AudioPlayerViewModelV2: ObservableObject {
     func playQueue(articles: [Article]) async {
         isLoading = true
         lastError = nil
-        
+
+        // CRITICAL: Yield to allow SwiftUI to update UI before heavy work
+        await Task.yield()
+
         // Load full queue
         await unifiedPlayer.loadQueue(from: articles)
         
@@ -324,7 +341,10 @@ final class AudioPlayerViewModelV2: ObservableObject {
     func playQueue(episodes: [RSSEpisode]) async {
         isLoading = true
         lastError = nil
-        
+
+        // CRITICAL: Yield to allow SwiftUI to update UI before heavy work
+        await Task.yield()
+
         // Load full queue
         await unifiedPlayer.loadQueue(from: episodes)
         
@@ -339,7 +359,10 @@ final class AudioPlayerViewModelV2: ObservableObject {
     func playMixedQueue(items: [Any]) async {
         isLoading = true
         lastError = nil
-        
+
+        // CRITICAL: Yield to allow SwiftUI to update UI before heavy work
+        await Task.yield()
+
         // Load mixed queue
         await unifiedPlayer.loadMixedQueue(items: items)
         
@@ -486,6 +509,9 @@ extension AudioPlayerViewModelV2 {
     func playLiveNewsStream(episodes: [RSSEpisode]) async {
         isLoading = true
         lastError = nil
+
+        // CRITICAL: Yield to allow SwiftUI to update UI before heavy work
+        await Task.yield()
 
         if !episodes.isEmpty {
             await unifiedPlayer.playLiveNewsStream(episodes: episodes)

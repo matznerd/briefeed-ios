@@ -581,6 +581,9 @@ final class UnifiedAudioPlayer: ObservableObject {
 
         let item = queue[index]
 
+        // Yield to allow UI to update before heavy generation work
+        await Task.yield()
+
         // Ensure audio is ready
         if item.generationState != .ready {
             await generateAudioForItem(item)
@@ -776,6 +779,9 @@ final class UnifiedAudioPlayer: ObservableObject {
                     }
 
                     if !contentToSummarize.isEmpty {
+                        // Yield before heavy summarization work
+                        await Task.yield()
+
                         // Calculate word count for display
                         let wordCount = contentToSummarize.split(separator: " ").count
                         generationPhase = .summarizing(wordCount: wordCount, provider: "Gemini")
@@ -876,6 +882,9 @@ final class UnifiedAudioPlayer: ObservableObject {
                 if text.count < 100 && article.title != nil {
                     print("[UnifiedPlayer] WARNING: TTS text is very short, likely only title")
                 }
+
+                // Yield before heavy TTS generation work
+                await Task.yield()
 
                 // Generate audio file - try OpenAI first if configured, fallback to Gemini
                 let audioURL: URL
