@@ -14,6 +14,7 @@ protocol StorageServiceProtocol {
     func calculateCacheSize() async -> Int64
     func clearCache() async throws
     func createFeed(name: String, type: String, path: String) async throws -> Feed
+    func fetchAllFeeds() async throws -> [Feed]
     func markArticleAsRead(_ article: Article) async throws
     func toggleArticleSaved(_ article: Article) async throws
     func deleteArticle(_ article: Article) async throws
@@ -98,12 +99,20 @@ class StorageService: StorageServiceProtocol {
             feed.path = path
             feed.isActive = true
             feed.sortOrder = try self.getNextSortOrder()
-            
+
             try self.viewContext.save()
             return feed
         }
     }
-    
+
+    func fetchAllFeeds() async throws -> [Feed] {
+        try await viewContext.perform {
+            let fetchRequest: NSFetchRequest<Feed> = Feed.fetchRequest()
+            fetchRequest.sortDescriptors = [NSSortDescriptor(keyPath: \Feed.sortOrder, ascending: true)]
+            return try self.viewContext.fetch(fetchRequest)
+        }
+    }
+
     private func getNextSortOrder() throws -> Int16 {
         let fetchRequest: NSFetchRequest<Feed> = Feed.fetchRequest()
         fetchRequest.sortDescriptors = [NSSortDescriptor(keyPath: \Feed.sortOrder, ascending: false)]

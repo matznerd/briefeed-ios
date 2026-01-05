@@ -78,7 +78,7 @@ final class AudioServiceV2: NSObject {
         try session.setCategory(
             .playback,
             mode: .spokenAudio,
-            options: [.allowBluetooth, .allowBluetoothA2DP, .allowAirPlay]
+            options: [.allowBluetooth, .allowAirPlay]
         )
         
         try session.setActive(true)

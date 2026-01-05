@@ -23,12 +23,28 @@ class DefaultDataService {
     func createDefaultFeedsIfNeeded() async throws {
         // First, update any legacy feeds
         try await storageService.updateLegacyFeeds()
-        
-        guard !userDefaults.hasCreatedDefaultFeeds else { return }
-        
-        print("📱 Creating default feeds...")
-        
+
+        // Get existing feeds
+        let existingFeeds = try await storageService.fetchAllFeeds()
+        let existingNames = Set(existingFeeds.compactMap { $0.name })
+
+        // Check if all default feeds exist
+        let defaultNames = Set(Constants.Reddit.defaultFeeds.map { $0.name })
+        let missingFeeds = defaultNames.subtracting(existingNames)
+
+        // If flag is set and no feeds missing, skip
+        if userDefaults.hasCreatedDefaultFeeds && missingFeeds.isEmpty {
+            return
+        }
+
+        print("📱 Creating default feeds... (missing: \(missingFeeds))")
+
         for (index, feedData) in Constants.Reddit.defaultFeeds.enumerated() {
+            // Skip if feed already exists
+            guard !existingNames.contains(feedData.name) else {
+                continue
+            }
+
             do {
                 let feed = try await storageService.createFeed(
                     name: feedData.name,
@@ -37,11 +53,12 @@ class DefaultDataService {
                 )
                 feed.sortOrder = Int16(index)
                 feed.isActive = true
+                print("  ✓ Created feed: \(feedData.name)")
             } catch {
                 print("Failed to create default feed \(feedData.name): \(error)")
             }
         }
-        
+
         try await storageService.saveContext()
         userDefaults.hasCreatedDefaultFeeds = true
     }
