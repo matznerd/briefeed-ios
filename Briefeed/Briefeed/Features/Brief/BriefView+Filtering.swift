@@ -18,6 +18,7 @@ struct FilteredBriefView: View {
     @State private var editMode = EditMode.inactive
     @State private var showingClearQueueAlert = false
     @State private var currentFilter: QueueFilter = .all
+    @State private var selectedArticle: Article?
     
     // Load saved filter preference
     init() {
@@ -106,6 +107,9 @@ struct FilteredBriefView: View {
             .alert("Clear Queue", isPresented: $showingClearQueueAlert) {
                 clearQueueAlert
             }
+            .navigationDestination(item: $selectedArticle) { article in
+                ArticleView(article: article)
+            }
         }
     }
     
@@ -127,10 +131,13 @@ struct FilteredBriefView: View {
     private var enhancedQueueListView: some View {
         List {
             ForEach(filteredQueue, id: \.id) { item in
-                EnhancedQueueRow(item: item)
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        swipeActions(for: item)
-                    }
+                EnhancedQueueRow(item: item) {
+                    // Navigate to article detail when content is tapped
+                    navigateToArticle(item: item)
+                }
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    swipeActions(for: item)
+                }
             }
             .onDelete { indexSet in
                 deleteItems(at: indexSet)
@@ -140,6 +147,18 @@ struct FilteredBriefView: View {
             }
         }
         .listStyle(.plain)
+    }
+
+    private func navigateToArticle(item: EnhancedQueueItem) {
+        guard let articleID = item.articleID else { return }
+
+        let fetchRequest: NSFetchRequest<Article> = Article.fetchRequest()
+        fetchRequest.predicate = NSPredicate(format: "id == %@", articleID as CVarArg)
+        fetchRequest.fetchLimit = 1
+
+        if let article = try? PersistenceController.shared.container.viewContext.fetch(fetchRequest).first {
+            selectedArticle = article
+        }
     }
     
     private var loadingView: some View {
@@ -328,6 +347,7 @@ struct FilteredBriefView: View {
 // MARK: - Enhanced Queue Row
 struct EnhancedQueueRow: View {
     let item: EnhancedQueueItem
+    var onTapContent: (() -> Void)?
     @EnvironmentObject var audioPlayerViewModel: AudioPlayerViewModelV2
     
     private var isCurrentlyPlaying: Bool {
@@ -349,25 +369,26 @@ struct EnhancedQueueRow: View {
     }
     
     var body: some View {
-        Button(action: playItem) {
-            HStack(spacing: 12) {
-                // Play/Pause Button or Error Button
-                if item.hasFailed {
-                    Button(action: retryItem) {
-                        Image(systemName: "exclamationmark.circle.fill")
-                            .font(.system(size: 32))
-                            .foregroundColor(.red)
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    Button(action: playItem) {
-                        Image(systemName: isCurrentlyPlaying && audioPlayerViewModel.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 32))
-                            .foregroundColor(.briefeedRed)
-                    }
-                    .buttonStyle(.plain)
+        HStack(spacing: 12) {
+            // Play/Pause Button or Error Button
+            if item.hasFailed {
+                Button(action: retryItem) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(.system(size: 32))
+                        .foregroundColor(.red)
                 }
+                .buttonStyle(.plain)
+            } else {
+                Button(action: playItem) {
+                    Image(systemName: isCurrentlyPlaying && audioPlayerViewModel.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 32))
+                        .foregroundColor(.briefeedRed)
+                }
+                .buttonStyle(.plain)
+            }
 
+            // Tappable content area for navigation
+            HStack(spacing: 12) {
                 // Source Icon
                 Image(systemName: item.source.iconName)
                     .font(.system(size: 18))
@@ -413,7 +434,7 @@ struct EnhancedQueueRow: View {
 
                 Spacer()
 
-                // Playing Indicator or Error Badge
+                // Playing Indicator or Error Badge or Chevron
                 if item.hasFailed {
                     if item.canRetry {
                         Text("Retry")
@@ -437,12 +458,24 @@ struct EnhancedQueueRow: View {
                         .font(.system(size: 20))
                         .foregroundColor(.briefeedRed)
                         .symbolEffect(.variableColor.iterative)
+                } else if item.articleID != nil {
+                    // Show chevron for articles (navigable)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.secondary.opacity(0.5))
                 }
             }
-            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if let onTap = onTapContent {
+                    onTap()
+                } else {
+                    // Fall back to play if no navigation handler
+                    playItem()
+                }
+            }
         }
-        .buttonStyle(.plain)
-        .contentShape(Rectangle())
+        .padding(.vertical, 8)
         .opacity(item.isListened ? 0.6 : 1.0)
     }
     
