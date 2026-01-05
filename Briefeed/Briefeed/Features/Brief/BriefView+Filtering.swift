@@ -351,50 +351,88 @@ struct EnhancedQueueRow: View {
     var body: some View {
         Button(action: playItem) {
             HStack(spacing: 12) {
-                // Play/Pause Button
-                Button(action: playItem) {
-                    Image(systemName: isCurrentlyPlaying && audioPlayerViewModel.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 32))
-                        .foregroundColor(.briefeedRed)
+                // Play/Pause Button or Error Button
+                if item.hasFailed {
+                    Button(action: retryItem) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundColor(.red)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button(action: playItem) {
+                        Image(systemName: isCurrentlyPlaying && audioPlayerViewModel.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundColor(.briefeedRed)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-                
+
                 // Source Icon
                 Image(systemName: item.source.iconName)
                     .font(.system(size: 18))
                     .foregroundColor(item.source.isLiveNews ? .red : .briefeedRed)
                     .frame(width: 24)
-                
+
                 // Content
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.title)
                         .font(.headline)
                         .lineLimit(2)
-                        .foregroundColor(.primary)
-                    
+                        .foregroundColor(item.hasFailed ? .red : .primary)
+
                     HStack(spacing: 8) {
-                        Text(item.source.displayName)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        if let duration = item.formattedDuration {
-                            Text("• \(duration)")
+                        if item.hasFailed {
+                            Text("Failed")
+                                .font(.caption)
+                                .foregroundColor(.red)
+                            if item.canRetry {
+                                Text("• Tap to retry")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        } else {
+                            Text(item.source.displayName)
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                        }
-                        
-                        if item.source.isLiveNews, let remaining = item.remainingTime {
-                            Text("• Expires in \(formatTimeRemaining(remaining))")
-                                .font(.caption)
-                                .foregroundColor(.orange)
+
+                            if let duration = item.formattedDuration {
+                                Text("• \(duration)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            if item.source.isLiveNews, let remaining = item.remainingTime {
+                                Text("• Expires in \(formatTimeRemaining(remaining))")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            }
                         }
                     }
                 }
-                
+
                 Spacer()
-                
-                // Playing Indicator
-                if isCurrentlyPlaying {
+
+                // Playing Indicator or Error Badge
+                if item.hasFailed {
+                    if item.canRetry {
+                        Text("Retry")
+                            .font(.caption)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.orange)
+                            .cornerRadius(4)
+                    } else {
+                        Text("Skip")
+                            .font(.caption)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.red)
+                            .cornerRadius(4)
+                    }
+                } else if isCurrentlyPlaying {
                     Image(systemName: "waveform")
                         .font(.system(size: 20))
                         .foregroundColor(.briefeedRed)
@@ -419,6 +457,10 @@ struct EnhancedQueueRow: View {
     }
     
     private func playItem() {
+        if item.hasFailed {
+            retryItem()
+            return
+        }
         if isCurrentlyPlaying && audioPlayerViewModel.isPlaying {
             // Pause if currently playing
             audioPlayerViewModel.pause()
@@ -440,7 +482,29 @@ struct EnhancedQueueRow: View {
             }
         }
     }
-    
+
+    private func retryItem() {
+        // Reset item for retry in QueueCoordinator and trigger re-play
+        QueueCoordinator.shared.resetItemForRetry(for: item.id)
+
+        // Try to play the item again
+        if let articleID = item.articleID {
+            let fetchRequest: NSFetchRequest<Article> = Article.fetchRequest()
+            fetchRequest.predicate = NSPredicate(format: "id == %@", articleID as CVarArg)
+            if let article = try? PersistenceController.shared.container.viewContext.fetch(fetchRequest).first {
+                Task {
+                    await audioPlayerViewModel.play(article: article)
+                }
+            }
+        } else if let audioUrl = item.audioUrl {
+            Task {
+                if let episode = fetchRSSEpisode(audioUrl: audioUrl) {
+                    await audioPlayerViewModel.play(episode: episode)
+                }
+            }
+        }
+    }
+
     private func fetchRSSEpisode(audioUrl: URL) -> RSSEpisode? {
         let fetchRequest: NSFetchRequest<RSSEpisode> = RSSEpisode.fetchRequest()
         fetchRequest.predicate = NSPredicate(format: "audioUrl == %@", audioUrl.absoluteString)

@@ -16,7 +16,7 @@ extension UnifiedQueueItem {
         let source: QueueItemSource
         let articleID: UUID?
         let audioUrl: URL?
-        
+
         switch type {
         case .article:
             source = .article(source: article?.feed?.name ?? "Unknown")
@@ -30,9 +30,15 @@ extension UnifiedQueueItem {
             articleID = nil
             audioUrl = self.audioURL
         }
-        
+
+        // Look up error state from QueueCoordinator
+        let itemUUID = UUID(uuidString: id) ?? UUID()
+        let queueItem = QueueCoordinator.shared.queue.first { $0.id == itemUUID }
+        let errorMessage = queueItem?.errorMessage
+        let retryCount = queueItem?.retryCount ?? 0
+
         return EnhancedQueueItem(
-            id: UUID(uuidString: id) ?? UUID(),
+            id: itemUUID,
             title: title,
             source: source,
             addedDate: Date(),
@@ -41,7 +47,9 @@ extension UnifiedQueueItem {
             audioUrl: audioUrl,
             duration: Int(duration),
             isListened: false,
-            lastPosition: 0.0
+            lastPosition: 0.0,
+            errorMessage: errorMessage,
+            retryCount: retryCount
         )
     }
     
@@ -65,15 +73,17 @@ extension EnhancedQueueItem {
             audioUrl: nil,
             duration: nil,
             isListened: false,
-            lastPosition: 0.0
+            lastPosition: 0.0,
+            errorMessage: nil,
+            retryCount: 0
         )
     }
-    
+
     /// Create from RSS Episode
     init(from episode: RSSEpisode) {
         self.init(
-            id: UUID(uuidString: episode.id ?? "") ?? UUID(),
-            title: episode.title ?? "Untitled Episode",
+            id: UUID(uuidString: episode.id) ?? UUID(),
+            title: episode.title,
             source: .rss(
                 feedId: episode.feed?.id ?? "",
                 feedName: episode.feed?.displayName ?? "Unknown"
@@ -84,7 +94,9 @@ extension EnhancedQueueItem {
             audioUrl: URL(string: episode.audioUrl),
             duration: nil,
             isListened: episode.isListened,
-            lastPosition: 0.0
+            lastPosition: 0.0,
+            errorMessage: nil,
+            retryCount: 0
         )
     }
 }

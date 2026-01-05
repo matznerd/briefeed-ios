@@ -80,7 +80,9 @@ enum GeminiServiceError: LocalizedError {
     case modelError(String)
     case streamingError
     case invalidResponse
-    
+    case timeout
+    case serverError(Int) // 5xx errors
+
     var errorDescription: String? {
         switch self {
         case .invalidAPIKey:
@@ -95,6 +97,20 @@ enum GeminiServiceError: LocalizedError {
             return "Error during streaming response"
         case .invalidResponse:
             return "Invalid response from Gemini API"
+        case .timeout:
+            return "Request timed out"
+        case .serverError(let code):
+            return "Server error (\(code))"
+        }
+    }
+
+    /// Whether this error is transient and worth retrying
+    var isRetryable: Bool {
+        switch self {
+        case .quotaExceeded, .timeout, .serverError:
+            return true
+        case .invalidAPIKey, .contentFiltered, .modelError, .streamingError, .invalidResponse:
+            return false
         }
     }
 }
@@ -120,9 +136,29 @@ struct GeminiUsage {
     }
 }
 
+// MARK: - Retry Configuration
+struct RetryConfig {
+    let maxAttempts: Int
+    let baseDelayMs: Int
+    let maxDelayMs: Int
+
+    static let `default` = RetryConfig(maxAttempts: 3, baseDelayMs: 1000, maxDelayMs: 10000)
+
+    /// Calculate delay for attempt (0-indexed), using exponential backoff with jitter
+    func delay(for attempt: Int) -> UInt64 {
+        let exponentialDelay = baseDelayMs * (1 << attempt) // 1s, 2s, 4s...
+        let cappedDelay = min(exponentialDelay, maxDelayMs)
+        // Add jitter: ±25%
+        let jitter = Int.random(in: -cappedDelay/4...cappedDelay/4)
+        let finalDelay = max(0, cappedDelay + jitter)
+        return UInt64(finalDelay) * 1_000_000 // Convert to nanoseconds
+    }
+}
+
 // MARK: - Gemini Service Protocol
 protocol GeminiServiceProtocol {
     func summarize(text: String, length: Constants.Summary.Length) async throws -> String
+    func summarizeWithRetry(text: String, length: Constants.Summary.Length, config: RetryConfig) async throws -> String
     func summarizeWithStream(text: String, length: Constants.Summary.Length, onChunk: @escaping (String) -> Void) async throws
     func getUsageStats() -> GeminiUsage?
     func generateStructuredSummary(text: String, title: String?) async throws -> FormattedArticleSummary
@@ -167,7 +203,7 @@ class GeminiService: GeminiServiceProtocol {
                 temperature: 0.7,
                 topK: 40,
                 topP: 0.95,
-                maxOutputTokens: 2000,  // Fixed limit to avoid MAX_TOKENS issue
+                maxOutputTokens: 4096,  // Increased per PRD v2.1 (4000+)
                 stopSequences: nil,
                 responseMimeType: "text/plain"  // Use plain text for summary generation
             ),
@@ -237,7 +273,63 @@ class GeminiService: GeminiServiceProtocol {
             throw error
         }
     }
-    
+
+    func summarizeWithRetry(text: String, length: Constants.Summary.Length, config: RetryConfig = .default) async throws -> String {
+        var lastError: Error?
+
+        for attempt in 0..<config.maxAttempts {
+            do {
+                return try await summarize(text: text, length: length)
+            } catch let error as GeminiServiceError {
+                lastError = error
+                print("[GeminiService] Attempt \(attempt + 1)/\(config.maxAttempts) failed: \(error.localizedDescription)")
+
+                if !error.isRetryable {
+                    print("[GeminiService] Error is not retryable, failing immediately")
+                    throw error
+                }
+
+                if attempt < config.maxAttempts - 1 {
+                    let delay = config.delay(for: attempt)
+                    print("[GeminiService] Retrying in \(delay / 1_000_000)ms...")
+                    try await Task.sleep(nanoseconds: delay)
+                }
+            } catch {
+                // Non-GeminiServiceError - check if it's a network timeout or server error
+                lastError = error
+                print("[GeminiService] Attempt \(attempt + 1)/\(config.maxAttempts) failed with unexpected error: \(error)")
+
+                let isRetryable = isRetryableError(error)
+                if !isRetryable {
+                    throw error
+                }
+
+                if attempt < config.maxAttempts - 1 {
+                    let delay = config.delay(for: attempt)
+                    print("[GeminiService] Retrying in \(delay / 1_000_000)ms...")
+                    try await Task.sleep(nanoseconds: delay)
+                }
+            }
+        }
+
+        throw lastError ?? GeminiServiceError.invalidResponse
+    }
+
+    /// Check if a generic error is retryable (timeout, network issues)
+    private func isRetryableError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        // URLError codes for timeout and network issues
+        if nsError.domain == NSURLErrorDomain {
+            switch nsError.code {
+            case NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost, NSURLErrorNotConnectedToInternet:
+                return true
+            default:
+                return false
+            }
+        }
+        return false
+    }
+
     func summarizeWithStream(text: String, length: Constants.Summary.Length, onChunk: @escaping (String) -> Void) async throws {
         guard !apiKey.isEmpty else {
             throw GeminiServiceError.invalidAPIKey
@@ -287,7 +379,7 @@ class GeminiService: GeminiServiceProtocol {
                 temperature: 0.3, // Lower temperature for more consistent JSON
                 topK: 40,
                 topP: 0.95,
-                maxOutputTokens: 1000,
+                maxOutputTokens: 4096,  // Increased per PRD v2.1 (4000+)
                 stopSequences: nil,
                 responseMimeType: "application/json"
             ),
@@ -335,55 +427,31 @@ class GeminiService: GeminiServiceProtocol {
             
             responseText = text
             
-            // Parse JSON response
+            // Parse JSON response with robust extraction
             let cleanedResponse = responseText.trimmingCharacters(in: .whitespacesAndNewlines)
-            
+
             print("📝 Gemini raw response: \(cleanedResponse)")
-            
-            // Try to extract JSON from the response
-            // Sometimes Gemini adds markdown formatting
-            var jsonString = cleanedResponse
-            if jsonString.hasPrefix("```json") && jsonString.hasSuffix("```") {
-                jsonString = jsonString
-                    .replacingOccurrences(of: "```json", with: "")
-                    .replacingOccurrences(of: "```", with: "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            
-            // Fix unescaped newlines in JSON string values - character by character parsing
-            var fixedJson = ""
-            var inString = false
-            var escaped = false
-            
-            for (i, char) in jsonString.enumerated() {
-                if char == "\"" && !escaped {
-                    inString = !inString
-                    fixedJson += String(char)
-                } else if inString && char == "\n" && !escaped {
-                    // Replace unescaped newline with escaped version
-                    fixedJson += "\\n"
-                } else if inString && char == "\r" && !escaped {
-                    // Replace unescaped carriage return with escaped version
-                    fixedJson += "\\r"
-                } else if inString && char == "\t" && !escaped {
-                    // Replace unescaped tab with escaped version
-                    fixedJson += "\\t"
-                } else {
-                    fixedJson += String(char)
-                }
-                
-                // Track escape state
-                escaped = (char == "\\" && !escaped)
-            }
-            
-            jsonString = fixedJson
-            
+
+            // Extract JSON using robust helper
+            let jsonString = extractJSON(from: cleanedResponse)
+
             guard let data = jsonString.data(using: .utf8) else {
                 print("❌ Failed to convert to data: \(jsonString)")
                 throw GeminiServiceError.invalidResponse
             }
-            
-            let summaryResponse = try JSONDecoder().decode(ArticleSummaryResponse.self, from: data)
+
+            let summaryResponse: ArticleSummaryResponse
+            do {
+                summaryResponse = try JSONDecoder().decode(ArticleSummaryResponse.self, from: data)
+            } catch {
+                print("❌ JSON decode failed, attempting lenient parse: \(error)")
+                // Try lenient parsing - extract what we can
+                if let lenientResponse = tryLenientParse(jsonString: jsonString) {
+                    summaryResponse = lenientResponse
+                } else {
+                    throw GeminiServiceError.invalidResponse
+                }
+            }
             
             // Update usage tracking
             let promptTokens = prompt.count / 4
@@ -481,19 +549,18 @@ class GeminiService: GeminiServiceProtocol {
     private func createSummarizationPrompt(text: String, length: Constants.Summary.Length) -> String {
         // Simplified prompt to reduce token usage
         let wordCount = length == .brief ? "100-150" : length == .standard ? "200-300" : "400-500"
-        
+
         print("[GeminiService] Creating summary prompt for \(text.count) characters of content")
-        
-        // Truncate article text if too long to avoid token issues
-        let maxArticleLength = 10000  // Limit article text to prevent token overflow
-        let articleText = text.count > maxArticleLength ? String(text.prefix(maxArticleLength)) + "..." : text
-        
+
+        // Note: Content truncation is handled upstream in UnifiedAudioPlayer (20k chars, sentence-boundary aware)
+        // No additional truncation here to avoid double truncation
+
         return """
         Summarize this article in \(wordCount) words. Focus on the key facts: who, what, when, where, why, and any important numbers. Write in simple, clear sentences suitable for audio playback. Do NOT include the article title in your summary - start directly with the main content.
-        
+
         Article:
-        \(articleText)
-        
+        \(text)
+
         Summary:
         """
     }
@@ -504,6 +571,8 @@ class GeminiService: GeminiServiceProtocol {
             return GeminiServiceError.invalidAPIKey
         case 429:
             return GeminiServiceError.quotaExceeded
+        case 500...599:
+            return GeminiServiceError.serverError(error.code)
         default:
             return GeminiServiceError.modelError(error.message)
         }
@@ -518,6 +587,98 @@ class GeminiService: GeminiServiceProtocol {
         default:
             return error
         }
+    }
+
+    // MARK: - JSON Extraction Helpers
+
+    /// Extracts JSON from a response that may contain markdown code blocks or other formatting
+    private func extractJSON(from response: String) -> String {
+        var jsonString = response.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Strip markdown code blocks (various formats)
+        // Handle: ```json, ``` json, ```JSON, ```\n{, etc.
+        let codeBlockPattern = #"```(?:json|JSON)?\s*\n?([\s\S]*?)\n?```"#
+        if let regex = try? NSRegularExpression(pattern: codeBlockPattern, options: []),
+           let match = regex.firstMatch(in: jsonString, options: [], range: NSRange(jsonString.startIndex..., in: jsonString)),
+           let range = Range(match.range(at: 1), in: jsonString) {
+            jsonString = String(jsonString[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // If no code block found, try to extract JSON object directly
+        // Find first { and last } to extract JSON object
+        if !jsonString.hasPrefix("{") {
+            if let startIdx = jsonString.firstIndex(of: "{"),
+               let endIdx = jsonString.lastIndex(of: "}") {
+                jsonString = String(jsonString[startIdx...endIdx])
+            }
+        }
+
+        // Fix unescaped control characters in JSON string values
+        jsonString = fixUnescapedControlChars(in: jsonString)
+
+        return jsonString
+    }
+
+    /// Fixes unescaped newlines, tabs, and other control characters inside JSON string values
+    private func fixUnescapedControlChars(in jsonString: String) -> String {
+        var result = ""
+        var inString = false
+        var escaped = false
+
+        for char in jsonString {
+            if char == "\"" && !escaped {
+                inString = !inString
+                result += String(char)
+            } else if inString && !escaped {
+                switch char {
+                case "\n": result += "\\n"
+                case "\r": result += "\\r"
+                case "\t": result += "\\t"
+                default: result += String(char)
+                }
+            } else {
+                result += String(char)
+            }
+            escaped = (char == "\\" && !escaped)
+        }
+
+        return result
+    }
+
+    /// Attempts lenient JSON parsing - extracts what fields are available
+    private func tryLenientParse(jsonString: String) -> ArticleSummaryResponse? {
+        // Try to parse as dictionary and extract fields manually
+        guard let data = jsonString.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        // Check for error response first
+        if let errorMsg = dict["error"] as? String {
+            return ArticleSummaryResponse(quickFacts: nil, theStory: nil, error: errorMsg)
+        }
+
+        // Extract theStory
+        let theStory = dict["theStory"] as? String
+
+        // Extract quickFacts if present
+        var quickFacts: QuickFacts?
+        if let qfDict = dict["quickFacts"] as? [String: Any] {
+            quickFacts = QuickFacts(
+                whatHappened: qfDict["whatHappened"] as? String ?? "N/A",
+                who: qfDict["who"] as? String ?? "N/A",
+                whenWhere: qfDict["whenWhere"] as? String ?? "N/A",
+                keyNumbers: qfDict["keyNumbers"] as? String ?? "N/A",
+                mostStrikingDetail: qfDict["mostStrikingDetail"] as? String ?? "N/A"
+            )
+        }
+
+        // Only return if we have some content
+        if quickFacts != nil || theStory != nil {
+            return ArticleSummaryResponse(quickFacts: quickFacts, theStory: theStory, error: nil)
+        }
+
+        return nil
     }
 }
 

@@ -39,9 +39,10 @@ struct BriefeedApp: App {
         Task {
             // Initialize services in background
             await AudioServiceV2.shared.initialize()
-            await QueueServiceV2.shared.initialize()
+            // QueueCoordinator initializes automatically with persistence on access
+            _ = await MainActor.run { QueueCoordinator.shared }
             await ArticleStateManagerV2.shared.initialize()
-            
+
             // Create default feeds
             do {
                 try await DefaultDataService.shared.createDefaultFeedsIfNeeded()
@@ -73,16 +74,15 @@ struct BriefeedApp: App {
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-                    // Handle app becoming active with V2 services
-                    Task {
-                        await QueueServiceV2.shared.loadQueue()
-                    }
+                    // App became active - could refresh queue state if needed
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
-                    // Handle app resigning active with V2 services
-                    Task {
-                        await QueueServiceV2.shared.saveQueue()
-                    }
+                    // App going to background - save queue state immediately
+                    QueueCoordinator.shared.saveStateNow()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
+                    // App terminating - save queue state immediately
+                    QueueCoordinator.shared.saveStateNow()
                 }
         }
     }
@@ -110,7 +110,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     private func configureAudioSession() {
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.mixWithOthers])
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.allowBluetooth, .allowAirPlay])
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
             print("Failed to configure audio session: \(error)")

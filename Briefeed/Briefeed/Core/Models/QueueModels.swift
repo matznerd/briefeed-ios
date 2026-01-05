@@ -56,7 +56,13 @@ struct EnhancedQueueItem: Codable {
     // State
     var isListened: Bool = false
     var lastPosition: Double = 0.0 // 0.0 to 1.0 progress
-    
+
+    // Error tracking
+    var errorMessage: String? = nil
+    var retryCount: Int = 0
+    var hasFailed: Bool { errorMessage != nil }
+    var canRetry: Bool { hasFailed && retryCount < 3 }
+
     // Computed properties
     var isExpired: Bool {
         guard let expiresAt = expiresAt else { return false }

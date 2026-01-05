@@ -93,6 +93,12 @@ final class AppViewModel: ObservableObject {
     func play(episode: RSSEpisode) async {
         await audioPlayerViewModel.play(episode: episode)
     }
+
+    /// Stream episode immediately WITHOUT queuing to Brief
+    /// Per PRD: Per-episode "Play Now" in Live News uses streaming mode
+    func streamEpisode(_ episode: RSSEpisode) async {
+        await audioPlayerViewModel.streamEpisode(episode)
+    }
     
     func togglePlayPause() {
         audioPlayerViewModel.togglePlayPause()

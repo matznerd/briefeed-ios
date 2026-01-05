@@ -93,16 +93,16 @@ class GeminiTTSService: ObservableObject {
     static let shared = GeminiTTSService()
     
     // MARK: - Properties
-    private let modelName = "models/gemini-2.5-flash-preview-tts" // Use dedicated TTS model for audio generation
+    private let modelName = "models/gemini-2.5-flash-preview-tts" // Dedicated TTS model for audio generation
     private let defaultVoice = "Autonoe"
     
-    // Available Gemini voices
+    // Available Gemini voices (30 total) - official names from Google docs
     static let availableVoices = [
         "Autonoe", "Zephyr", "Puck", "Charon", "Kore", "Fenrir",
-        "Leda", "Orus", "Aoede", "Callirhoe", "Enceladus", "Iapetus",
+        "Leda", "Orus", "Aoede", "Callirrhoe", "Enceladus", "Iapetus",
         "Umbriel", "Algieba", "Despina", "Erinome", "Algenib", "Rasalgethi",
         "Laomedeia", "Achernar", "Alnilam", "Schedar", "Gacrux", "Pulcherrima",
-        "Achird", "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafar"
+        "Achird", "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"
     ]
     
     // Cache for API key

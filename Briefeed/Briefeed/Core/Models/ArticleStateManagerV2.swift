@@ -131,18 +131,18 @@ final class ArticleStateManagerV2: NSObject {
     }
     
     private func loadQueueState() async {
-        // Queue state is managed by QueueServiceV2
+        // Queue state is managed by QueueCoordinator
         // This just tracks the IDs for quick lookup
-        if let queueService = QueueServiceV2.shared.delegate as? QueueServiceDelegate {
-            // Update our queue IDs based on queue service
-            updateQueueFromService()
+        await MainActor.run {
+            updateQueueFromCoordinator()
         }
     }
-    
-    private func updateQueueFromService() {
-        let queueService = QueueServiceV2.shared
-        queuedArticleIDs = queueService.enhancedQueue.compactMap { item in
-            if case .article = item.source {
+
+    @MainActor
+    private func updateQueueFromCoordinator() {
+        let coordinator = QueueCoordinator.shared
+        queuedArticleIDs = coordinator.queue.compactMap { item in
+            if item.isArticle {
                 return item.articleID
             }
             return nil

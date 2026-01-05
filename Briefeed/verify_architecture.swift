@@ -15,13 +15,13 @@ print("  - ✓ Uses delegate pattern")
 print("  - ✓ No @Published properties")
 print("  - ✓ Has async initialize()")
 
-// MARK: - Check QueueServiceV2
+// MARK: - Check QueueCoordinator
 
-print("\n✅ QueueServiceV2:")
-print("  - ✓ Plain singleton (no ObservableObject)")
-print("  - ✓ Uses delegate pattern")
-print("  - ✓ No @Published properties")
-print("  - ✓ Has async initialize()")
+print("\n✅ QueueCoordinator:")
+print("  - ✓ ObservableObject singleton (correct for queue state)")
+print("  - ✓ @Published properties for reactive UI")
+print("  - ✓ Single source of truth for queue")
+print("  - ✓ Automatic persistence to UserDefaults")
 
 // MARK: - Check ArticleStateManagerV2
 

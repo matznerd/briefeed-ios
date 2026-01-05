@@ -179,7 +179,7 @@ final class TTSGeneratorService {
                             )
                         } else if let episode = item as? RSSEpisode {
                             // RSS episodes have their own audio URLs, no TTS needed
-                            return URL(string: episode.audioUrl ?? "")
+                            return URL(string: episode.audioUrl)
                         }
                         
                         return nil
