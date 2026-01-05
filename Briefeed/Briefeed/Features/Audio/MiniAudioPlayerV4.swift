@@ -40,7 +40,7 @@ struct MiniAudioPlayerV4: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
-            .background(Color(UIColor.secondarySystemBackground).opacity(0.3))
+            .background(Color(UIColor.secondarySystemBackground))
             
             // Player content
             HStack(spacing: 12) {
