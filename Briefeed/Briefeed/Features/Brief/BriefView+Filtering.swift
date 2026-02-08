@@ -15,6 +15,7 @@ struct FilteredBriefView: View {
     @StateObject private var viewModel = BriefViewModel()
     @EnvironmentObject var audioPlayerViewModel: AudioPlayerViewModelV2
     @EnvironmentObject var appViewModel: AppViewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var editMode = EditMode.inactive
     @State private var showingClearQueueAlert = false
     @State private var currentFilter: QueueFilter = .all
@@ -134,8 +135,20 @@ struct FilteredBriefView: View {
                     // Navigate to article detail when content is tapped
                     navigateToArticle(item: item)
                 }
+                .transition(reduceMotion ? .opacity : .flingUp)
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     swipeActions(for: item)
+                }
+                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                    Button {
+                        toggleBookmark(item)
+                    } label: {
+                        Label(
+                            item.isBookmarked ? "Unbookmark" : "Bookmark",
+                            systemImage: item.isBookmarked ? "bookmark.slash" : "bookmark.fill"
+                        )
+                    }
+                    .tint(.blue)
                 }
             }
             .onDelete { indexSet in
@@ -146,6 +159,7 @@ struct FilteredBriefView: View {
             }
         }
         .listStyle(.plain)
+        .animation(.spring(response: 0.4, dampingFraction: 0.65), value: filteredQueue.map(\.id))
     }
 
     private func navigateToArticle(item: EnhancedQueueItem) {
@@ -323,6 +337,10 @@ struct FilteredBriefView: View {
         }
     }
     
+    private func toggleBookmark(_ item: EnhancedQueueItem) {
+        QueueCoordinator.shared.toggleBookmark(for: item.id)
+    }
+
     private func saveItem(_ item: EnhancedQueueItem) {
         // Remove expiration for saved items
         if let index = audioPlayerViewModel.queueItems.firstIndex(where: { 
@@ -451,8 +469,15 @@ struct EnhancedQueueRow: View {
 
                 Spacer()
 
-                // Trailing: readiness + playing indicator
+                // Trailing: bookmark + readiness + playing indicator
                 HStack(spacing: 6) {
+                    // Bookmark indicator
+                    if item.isBookmarked {
+                        Image(systemName: "bookmark.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(.blue)
+                    }
+
                     // Readiness badge
                     if item.hasFailed {
                         if item.canRetry {
@@ -496,7 +521,7 @@ struct EnhancedQueueRow: View {
             }
         }
         .padding(.vertical, 8)
-        .opacity(item.isListened ? 0.6 : 1.0)
+        .opacity(item.isListened && !item.isBookmarked ? 0.6 : 1.0)
         // Progress bar for currently playing item
         .overlay(alignment: .bottom) {
             if isCurrentlyPlaying && audioPlayerViewModel.duration > 0 {

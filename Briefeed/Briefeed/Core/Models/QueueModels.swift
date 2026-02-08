@@ -72,6 +72,7 @@ struct EnhancedQueueItem: Codable {
 
     // State
     var isListened: Bool = false
+    var isBookmarked: Bool = false
     var lastPosition: Double = 0.0 // 0.0 to 1.0 progress
     var readiness: ReadinessState = .pending
     var hasSummary: Bool = false

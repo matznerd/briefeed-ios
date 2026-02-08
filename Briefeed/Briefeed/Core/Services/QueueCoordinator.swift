@@ -33,6 +33,7 @@ struct QueueItem: Codable, Identifiable, Equatable {
     // Playback state
     var lastPosition: TimeInterval
     var isListened: Bool
+    var isBookmarked: Bool
 
     // Error tracking (Phase 2)
     var errorMessage: String?
@@ -69,7 +70,7 @@ struct QueueItem: Codable, Identifiable, Equatable {
         case id, type, title, source, addedAt, expiresAt
         case articleID, summaryState, cachedAudioURL
         case episodeID, streamURL
-        case lastPosition, isListened
+        case lastPosition, isListened, isBookmarked
         case errorMessage, retryCount
     }
 
@@ -92,6 +93,7 @@ struct QueueItem: Codable, Identifiable, Equatable {
 
         lastPosition = try container.decode(TimeInterval.self, forKey: .lastPosition)
         isListened = try container.decode(Bool.self, forKey: .isListened)
+        isBookmarked = try container.decodeIfPresent(Bool.self, forKey: .isBookmarked) ?? false
 
         // Backward-compatible: default to nil/0 if missing from old persisted data
         errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
@@ -113,6 +115,7 @@ struct QueueItem: Codable, Identifiable, Equatable {
         streamURL: URL?,
         lastPosition: TimeInterval,
         isListened: Bool,
+        isBookmarked: Bool = false,
         errorMessage: String? = nil,
         retryCount: Int = 0
     ) {
@@ -129,6 +132,7 @@ struct QueueItem: Codable, Identifiable, Equatable {
         self.streamURL = streamURL
         self.lastPosition = lastPosition
         self.isListened = isListened
+        self.isBookmarked = isBookmarked
         self.errorMessage = errorMessage
         self.retryCount = retryCount
     }
@@ -596,11 +600,35 @@ final class QueueCoordinator: ObservableObject {
                 episodeID: item.episodeID,
                 streamURL: item.streamURL,
                 lastPosition: item.lastPosition,
-                isListened: item.isListened
+                isListened: item.isListened,
+                isBookmarked: item.isBookmarked
             )
             persistState()
             print("[QueueCoordinator] Prevented expiration for: \(item.title)")
         }
+    }
+
+    // MARK: - Bookmark Management
+
+    /// Toggle bookmark state for a queue item
+    func toggleBookmark(for itemID: UUID) {
+        if let index = queue.firstIndex(where: { $0.id == itemID }) {
+            queue[index].isBookmarked.toggle()
+            persistState()
+            print("[QueueCoordinator] Toggled bookmark for: \(queue[index].title) -> \(queue[index].isBookmarked)")
+        }
+    }
+
+    /// Auto-remove an item if it has been listened and is not bookmarked
+    /// Returns the removed item's ID if removal occurred, nil otherwise
+    func autoRemoveIfListened(at index: Int) -> UUID? {
+        guard index >= 0 && index < queue.count else { return nil }
+        let item = queue[index]
+        if item.isListened && !item.isBookmarked {
+            removeItem(at: index)
+            return item.id
+        }
+        return nil
     }
 
     // MARK: - Persistence
@@ -695,6 +723,16 @@ final class QueueCoordinator: ObservableObject {
         positionPersistTimer?.invalidate()
     }
 }
+
+// MARK: - Test Helpers
+
+#if DEBUG
+extension QueueCoordinator {
+    func injectForTesting(_ items: [QueueItem]) {
+        queue = items
+    }
+}
+#endif
 
 // MARK: - UserDefaultsManager Extension
 

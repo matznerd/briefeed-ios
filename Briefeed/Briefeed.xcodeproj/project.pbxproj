@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1F38E1BA325BE1B9E9FA7B66 /* ProcessingChamberTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A6A9E39A0C2AE3A5F99065C /* ProcessingChamberTests.swift */; };
+		7988BFDB2D2B81F175A00CAE /* FlingTransition.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8530265749561B679D23BFD /* FlingTransition.swift */; };
 		8C0090FE2F383EE600405E04 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 8C0090FD2F383EE600405E04 /* FluidAudio */; };
 		8C0091002F383EE600405E04 /* FluidAudioTTS in Frameworks */ = {isa = PBXBuildFile; productRef = 8C0090FF2F383EE600405E04 /* FluidAudioTTS */; };
 		8C3D090E2E48490400819F12 /* SwiftAudioEx in Frameworks */ = {isa = PBXBuildFile; productRef = 8C3D090D2E48490400819F12 /* SwiftAudioEx */; };
@@ -33,11 +35,13 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		3A6A9E39A0C2AE3A5F99065C /* ProcessingChamberTests.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; lastKnownFileType = sourcecode.swift; name = ProcessingChamberTests.swift; path = ProcessingChamberTests.swift; sourceTree = "<group>"; };
 		405748BBBA74F0E559FE568C /* TranscriptReaderView.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; path = TranscriptReaderView.swift; sourceTree = "<group>"; };
 		8CA65EE52E075E5C005E6FC0 /* Briefeed.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Briefeed.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8CA65EFA2E075E5F005E6FC0 /* BriefeedTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BriefeedTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8CA65F042E075E5F005E6FC0 /* BriefeedUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BriefeedUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		A44452AE8CBDB208474ABA63 /* AudioPipelineFlowTests.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; lastKnownFileType = sourcecode.swift; name = AudioPipelineFlowTests.swift; path = AudioPipelineFlowTests.swift; sourceTree = "<group>"; };
+		A44452AE8CBDB208474ABA63 /* AudioPipelineFlowTests.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; path = AudioPipelineFlowTests.swift; sourceTree = "<group>"; };
+		D8530265749561B679D23BFD /* FlingTransition.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; lastKnownFileType = sourcecode.swift; name = FlingTransition.swift; path = FlingTransition.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -104,8 +108,8 @@
 			isa = PBXGroup;
 			children = (
 				A44452AE8CBDB208474ABA63 /* AudioPipelineFlowTests.swift */,
+				3A6A9E39A0C2AE3A5F99065C /* ProcessingChamberTests.swift */,
 			);
-			name = TDD;
 			path = TDD;
 			sourceTree = "<group>";
 		};
@@ -122,7 +126,6 @@
 			children = (
 				2006D082ADB86E6292880BFE /* TDD */,
 			);
-			name = BriefeedTests;
 			path = BriefeedTests;
 			sourceTree = "<group>";
 		};
@@ -156,12 +159,29 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		97D29B135B0BF82AC7784450 /* Utilities */ = {
+			isa = PBXGroup;
+			children = (
+				D8530265749561B679D23BFD /* FlingTransition.swift */,
+			);
+			path = Utilities;
+			sourceTree = "<group>";
+		};
 		ACDB452CBE32D5648DF8C330 /* Briefeed */ = {
 			isa = PBXGroup;
 			children = (
 				49C20F016D254CB2CB183599 /* Features */,
+				C8DF3399D96D2406538E8E18 /* Core */,
 			);
 			path = Briefeed;
+			sourceTree = "<group>";
+		};
+		C8DF3399D96D2406538E8E18 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				97D29B135B0BF82AC7784450 /* Utilities */,
+			);
+			path = Core;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -339,6 +359,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				EA1D4E3BD59EC126B3EE7F59 /* TranscriptReaderView.swift in Sources */,
+				7988BFDB2D2B81F175A00CAE /* FlingTransition.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -347,6 +368,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F9454960CBECE997ABEB97F4 /* AudioPipelineFlowTests.swift in Sources */,
+				1F38E1BA325BE1B9E9FA7B66 /* ProcessingChamberTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

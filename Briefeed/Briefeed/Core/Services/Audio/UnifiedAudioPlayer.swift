@@ -683,7 +683,48 @@ final class UnifiedAudioPlayer: ObservableObject {
             }
         }
     }
-    
+
+    /// Handle natural track completion: auto-remove played items (processing chamber)
+    /// Only called when a track finishes naturally, NOT on manual skip-next.
+    private func handleTrackFinished() async {
+        // In Live News streaming mode, just advance
+        if isStreamingLiveNews {
+            await playNextLiveNewsStreamItem()
+            return
+        }
+
+        let finishedIndex = currentIndex
+        guard finishedIndex >= 0 && finishedIndex < queue.count else {
+            return
+        }
+
+        // Check if the finished item is bookmarked
+        let isBookmarked = queueCoordinator.queue[safe: finishedIndex]?.isBookmarked ?? false
+
+        if isBookmarked {
+            // Bookmarked items stay in queue — just advance
+            await playNext()
+        } else {
+            // Wait 500ms so user sees the "listened" state before the fling
+            try? await Task.sleep(for: .milliseconds(500))
+
+            // Guard: verify state hasn't changed during the delay
+            guard currentIndex == finishedIndex,
+                  finishedIndex < queueCoordinator.queue.count else {
+                return
+            }
+
+            // Auto-remove the listened item
+            let _ = queueCoordinator.autoRemoveIfListened(at: finishedIndex)
+
+            // After removal, currentIndex is adjusted by removeItem().
+            // Play whatever is now at the adjusted currentIndex.
+            if currentIndex >= 0 && currentIndex < queue.count {
+                await play(at: currentIndex)
+            }
+        }
+    }
+
     /// Play previous item
     func playPrevious() async {
         if isStreamingLiveNews {
@@ -1299,14 +1340,14 @@ extension UnifiedAudioPlayer: @preconcurrency SwiftAudioExServiceDelegate {
     
     nonisolated func audioDidFinishPlaying(successfully: Bool) {
         if successfully {
-            // Auto-play next item
             Task {
-                await playNext()
+                await handleTrackFinished()
             }
         }
     }
 
     nonisolated func audioRequestNextTrack() {
+        // Manual skip does NOT auto-remove — only natural completion removes
         Task {
             await playNext()
         }
