@@ -40,6 +40,23 @@ enum QueueItemSource: Codable {
     }
 }
 
+// MARK: - Readiness State
+enum ReadinessState: Codable, Equatable {
+    case pending       // Not yet started
+    case generating    // TTS in progress
+    case ready         // Audio ready to play
+    case failed        // Generation failed
+
+    var icon: String {
+        switch self {
+        case .pending: return "clock"
+        case .generating: return "arrow.trianglehead.2.clockwise"
+        case .ready: return "checkmark.circle.fill"
+        case .failed: return "exclamationmark.circle.fill"
+        }
+    }
+}
+
 // MARK: - Enhanced Queue Item
 struct EnhancedQueueItem: Codable {
     let id: UUID
@@ -47,20 +64,22 @@ struct EnhancedQueueItem: Codable {
     let source: QueueItemSource
     let addedDate: Date
     let expiresAt: Date?
-    
+
     // Content
     let articleID: UUID? // For article-based items
     let audioUrl: URL? // For RSS episodes
     let duration: Int? // Duration in seconds
-    
+
     // State
     var isListened: Bool = false
     var lastPosition: Double = 0.0 // 0.0 to 1.0 progress
+    var readiness: ReadinessState = .pending
+    var hasSummary: Bool = false
 
     // Error tracking
     var errorMessage: String? = nil
     var retryCount: Int = 0
-    var hasFailed: Bool { errorMessage != nil }
+    var hasFailed: Bool { errorMessage != nil || readiness == .failed }
     var canRetry: Bool { hasFailed && retryCount < 3 }
 
     // Computed properties

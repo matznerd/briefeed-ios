@@ -9,14 +9,8 @@ import SwiftUI
 
 struct MiniAudioPlayerV4: View {
     @EnvironmentObject var viewModel: AudioPlayerViewModelV2
-    @State private var isExpanded = false
-    @State private var dragOffset: CGFloat = 0
-    @State private var isDragging = false
-    
-    private let height: CGFloat = 85 // Total height with title line
-    private let expandThreshold: CGFloat = -50
-    private let dismissThreshold: CGFloat = 100
-    
+    @State private var showTranscript = false
+
     var body: some View {
         VStack(spacing: 0) {
             // Divider
@@ -30,6 +24,7 @@ struct MiniAudioPlayerV4: View {
                         .foregroundColor(.primary)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        .accessibilityIdentifier(AccessibilityID.MiniPlayer.title)
                 } else {
                     Text("Not Playing")
                         .font(.system(size: 13, weight: .medium))
@@ -41,7 +36,13 @@ struct MiniAudioPlayerV4: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
             .background(Color(UIColor.secondarySystemBackground))
-            
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if viewModel.currentItemType == .article {
+                    showTranscript = true
+                }
+            }
+
             // Player content
             HStack(spacing: 12) {
                 // Thumbnail or waveform
@@ -119,6 +120,7 @@ struct MiniAudioPlayerV4: View {
                     }
                     .disabled(!viewModel.canPlayPrevious)
                     .accessibilityLabel("Previous track")
+                    .accessibilityIdentifier(AccessibilityID.MiniPlayer.previous)
                     
                     // Rewind 10 seconds button
                     Button(action: {
@@ -131,6 +133,7 @@ struct MiniAudioPlayerV4: View {
                             .contentShape(Rectangle())
                     }
                     .accessibilityLabel("Rewind 10 seconds")
+                    .accessibilityIdentifier(AccessibilityID.MiniPlayer.rewind)
                     
                     // Play/Pause button (center, larger)
                     Button(action: {
@@ -161,6 +164,7 @@ struct MiniAudioPlayerV4: View {
                     }
                     .disabled(!viewModel.isStreamingLiveNews && viewModel.queueItems.isEmpty)
                     .accessibilityLabel(viewModel.isPlaying ? "Pause" : "Play")
+                    .accessibilityIdentifier(AccessibilityID.MiniPlayer.playPause)
                     
                     // Forward 10 seconds button
                     Button(action: {
@@ -173,6 +177,7 @@ struct MiniAudioPlayerV4: View {
                             .contentShape(Rectangle())
                     }
                     .accessibilityLabel("Forward 10 seconds")
+                    .accessibilityIdentifier(AccessibilityID.MiniPlayer.forward)
                     
                     // Next track button
                     Button(action: {
@@ -188,6 +193,7 @@ struct MiniAudioPlayerV4: View {
                     }
                     .disabled(!viewModel.canPlayNext)
                     .accessibilityLabel("Next track")
+                    .accessibilityIdentifier(AccessibilityID.MiniPlayer.next)
                 }
                 .padding(.trailing, 8)
             }
@@ -214,36 +220,12 @@ struct MiniAudioPlayerV4: View {
                 .frame(height: 2)
             }
         }
-        .offset(y: dragOffset)
-        .gesture(
-            DragGesture()
-                .onChanged { value in
-                    isDragging = true
-                    dragOffset = value.translation.height
-                    
-                    if dragOffset < expandThreshold {
-                        HapticManager.shared.lightImpact()
-                        isExpanded = true
-                    }
-                }
-                .onEnded { value in
-                    isDragging = false
-                    
-                    withAnimation(.spring()) {
-                        if dragOffset < expandThreshold {
-                            // Expand to full player
-                            isExpanded = true
-                        } else if dragOffset > dismissThreshold {
-                            // Dismiss player (stop playback)
-                            viewModel.stop()
-                        }
-                        dragOffset = 0
-                    }
-                }
-        )
-        .sheet(isPresented: $isExpanded) {
-            ExpandedAudioPlayerV2()
+        .accessibilityIdentifier(AccessibilityID.MiniPlayer.container)
+        .sheet(isPresented: $showTranscript) {
+            TranscriptReaderView()
                 .environmentObject(viewModel)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
     }
     
@@ -269,6 +251,10 @@ struct MiniAudioPlayerV4: View {
             return "arrow.down.doc"
         case .summarizing:
             return "text.badge.star"
+        case .downloadingModels:
+            return "arrow.down.to.line"
+        case .initializingOnDevice:
+            return "cpu"
         case .generatingAudio:
             return "waveform"
         case .downloadingAudio:
@@ -291,6 +277,10 @@ struct MiniAudioPlayerV4: View {
             return .blue
         case .summarizing:
             return .purple
+        case .downloadingModels:
+            return .blue
+        case .initializingOnDevice:
+            return .orange
         case .generatingAudio:
             return .orange
         case .downloadingAudio:

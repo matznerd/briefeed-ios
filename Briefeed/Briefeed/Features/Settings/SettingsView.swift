@@ -20,6 +20,7 @@ struct SettingsView: View {
                 // MARK: - Appearance Section
                 Section {
                     Toggle("Dark Mode", isOn: $viewModel.userDefaultsManager.isDarkMode)
+                        .accessibilityIdentifier(AccessibilityID.Settings.darkMode)
                         .onChange(of: viewModel.userDefaultsManager.isDarkMode) { _, newValue in
                             updateColorScheme(isDark: newValue)
                         }
@@ -38,6 +39,7 @@ struct SettingsView: View {
                                 in: 12...24,
                                 step: 1
                             )
+                            .accessibilityIdentifier(AccessibilityID.Settings.textSize)
                             
                             Text("A")
                                 .font(.system(size: 20))
@@ -58,6 +60,7 @@ struct SettingsView: View {
                             Text(length.rawValue).tag(length)
                         }
                     }
+                    .accessibilityIdentifier(AccessibilityID.Settings.summaryLength)
                     
                     Picker("Reading Font", selection: $viewModel.userDefaultsManager.preferredReadingFont) {
                         ForEach(viewModel.availableFonts, id: \.self) { font in
@@ -136,7 +139,17 @@ struct SettingsView: View {
                                 .foregroundColor(.secondary)
                         }
                     }
-                    
+
+                    NavigationLink(destination: OnDeviceTTSSettingsView()) {
+                        HStack {
+                            Label("On-Device TTS", systemImage: "brain")
+                            Spacer()
+                            Text(FluidAudioTTSService.shared.isModelReady ? "Ready" : "Setup")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
                     APIKeyRow(
                         service: .gemini,
                         apiKey: $viewModel.tempGeminiKey,

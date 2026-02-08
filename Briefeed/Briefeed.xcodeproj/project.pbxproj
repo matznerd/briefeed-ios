@@ -7,8 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		8C0090FE2F383EE600405E04 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 8C0090FD2F383EE600405E04 /* FluidAudio */; };
+		8C0091002F383EE600405E04 /* FluidAudioTTS in Frameworks */ = {isa = PBXBuildFile; productRef = 8C0090FF2F383EE600405E04 /* FluidAudioTTS */; };
 		8C3D090E2E48490400819F12 /* SwiftAudioEx in Frameworks */ = {isa = PBXBuildFile; productRef = 8C3D090D2E48490400819F12 /* SwiftAudioEx */; };
 		8CC555A82E4AAA1900D7B3CB /* OpenAI in Frameworks */ = {isa = PBXBuildFile; productRef = 8CC555A72E4AAA1900D7B3CB /* OpenAI */; };
+		EA1D4E3BD59EC126B3EE7F59 /* TranscriptReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 405748BBBA74F0E559FE568C /* TranscriptReaderView.swift */; };
+		F9454960CBECE997ABEB97F4 /* AudioPipelineFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A44452AE8CBDB208474ABA63 /* AudioPipelineFlowTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -29,13 +33,15 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		405748BBBA74F0E559FE568C /* TranscriptReaderView.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; path = TranscriptReaderView.swift; sourceTree = "<group>"; };
 		8CA65EE52E075E5C005E6FC0 /* Briefeed.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Briefeed.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8CA65EFA2E075E5F005E6FC0 /* BriefeedTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BriefeedTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8CA65F042E075E5F005E6FC0 /* BriefeedUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BriefeedUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A44452AE8CBDB208474ABA63 /* AudioPipelineFlowTests.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; lastKnownFileType = sourcecode.swift; name = AudioPipelineFlowTests.swift; path = AudioPipelineFlowTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		8CC555A32E4A619600D7B3CB /* Exceptions for "Briefeed" folder in "Briefeed" target */ = {
+		8CC555A32E4A619600D7B3CB /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -48,7 +54,7 @@
 		8CA65EE72E075E5C005E6FC0 /* Briefeed */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				8CC555A32E4A619600D7B3CB /* Exceptions for "Briefeed" folder in "Briefeed" target */,
+				8CC555A32E4A619600D7B3CB /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
 			);
 			path = Briefeed;
 			sourceTree = "<group>";
@@ -71,6 +77,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				8CC555A82E4AAA1900D7B3CB /* OpenAI in Frameworks */,
+				8C0090FE2F383EE600405E04 /* FluidAudio in Frameworks */,
+				8C0091002F383EE600405E04 /* FluidAudioTTS in Frameworks */,
 				8C3D090E2E48490400819F12 /* SwiftAudioEx in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -92,6 +100,40 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		2006D082ADB86E6292880BFE /* TDD */ = {
+			isa = PBXGroup;
+			children = (
+				A44452AE8CBDB208474ABA63 /* AudioPipelineFlowTests.swift */,
+			);
+			name = TDD;
+			path = TDD;
+			sourceTree = "<group>";
+		};
+		2AE9CC3D4C13812557A64030 /* Audio */ = {
+			isa = PBXGroup;
+			children = (
+				405748BBBA74F0E559FE568C /* TranscriptReaderView.swift */,
+			);
+			path = Audio;
+			sourceTree = "<group>";
+		};
+		3E2771A476EDA7B861BF9AC8 /* BriefeedTests */ = {
+			isa = PBXGroup;
+			children = (
+				2006D082ADB86E6292880BFE /* TDD */,
+			);
+			name = BriefeedTests;
+			path = BriefeedTests;
+			sourceTree = "<group>";
+		};
+		49C20F016D254CB2CB183599 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				2AE9CC3D4C13812557A64030 /* Audio */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
 		8CA65EDC2E075E5C005E6FC0 = {
 			isa = PBXGroup;
 			children = (
@@ -99,6 +141,8 @@
 				8CA65EFD2E075E5F005E6FC0 /* BriefeedTests */,
 				8CA65F072E075E5F005E6FC0 /* BriefeedUITests */,
 				8CA65EE62E075E5C005E6FC0 /* Products */,
+				ACDB452CBE32D5648DF8C330 /* Briefeed */,
+				3E2771A476EDA7B861BF9AC8 /* BriefeedTests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -110,6 +154,14 @@
 				8CA65F042E075E5F005E6FC0 /* BriefeedUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		ACDB452CBE32D5648DF8C330 /* Briefeed */ = {
+			isa = PBXGroup;
+			children = (
+				49C20F016D254CB2CB183599 /* Features */,
+			);
+			path = Briefeed;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -135,6 +187,8 @@
 			packageProductDependencies = (
 				8C3D090D2E48490400819F12 /* SwiftAudioEx */,
 				8CC555A72E4AAA1900D7B3CB /* OpenAI */,
+				8C0090FD2F383EE600405E04 /* FluidAudio */,
+				8C0090FF2F383EE600405E04 /* FluidAudioTTS */,
 			);
 			productName = Briefeed;
 			productReference = 8CA65EE52E075E5C005E6FC0 /* Briefeed.app */;
@@ -220,7 +274,8 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				8C3D090C2E48490400819F12 /* XCRemoteSwiftPackageReference "SwiftAudioEx" */,
-				8CC555A62E4AAA1900D7B3CB /* XCRemoteSwiftPackageReference "OpenAI" */,
+				8CC555A62E4AAA1900D7B3CB /* XCRemoteSwiftPackageReference "OpenAI#mcp-model-context-protocol" */,
+				8C0090FC2F383EE600405E04 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 8CA65EE62E075E5C005E6FC0 /* Products */;
@@ -283,6 +338,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EA1D4E3BD59EC126B3EE7F59 /* TranscriptReaderView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -290,6 +346,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F9454960CBECE997ABEB97F4 /* AudioPipelineFlowTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -609,6 +666,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		8C0090FC2F383EE600405E04 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
 		8C3D090C2E48490400819F12 /* XCRemoteSwiftPackageReference "SwiftAudioEx" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/doublesymmetry/SwiftAudioEx";
@@ -617,7 +682,7 @@
 				version = 1.0.0;
 			};
 		};
-		8CC555A62E4AAA1900D7B3CB /* XCRemoteSwiftPackageReference "OpenAI" */ = {
+		8CC555A62E4AAA1900D7B3CB /* XCRemoteSwiftPackageReference "OpenAI#mcp-model-context-protocol" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/MacPaw/OpenAI#mcp-model-context-protocol";
 			requirement = {
@@ -628,6 +693,16 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		8C0090FD2F383EE600405E04 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8C0090FC2F383EE600405E04 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
+		8C0090FF2F383EE600405E04 /* FluidAudioTTS */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8C0090FC2F383EE600405E04 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudioTTS;
+		};
 		8C3D090D2E48490400819F12 /* SwiftAudioEx */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 8C3D090C2E48490400819F12 /* XCRemoteSwiftPackageReference "SwiftAudioEx" */;
@@ -635,7 +710,7 @@
 		};
 		8CC555A72E4AAA1900D7B3CB /* OpenAI */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 8CC555A62E4AAA1900D7B3CB /* XCRemoteSwiftPackageReference "OpenAI" */;
+			package = 8CC555A62E4AAA1900D7B3CB /* XCRemoteSwiftPackageReference "OpenAI#mcp-model-context-protocol" */;
 			productName = OpenAI;
 		};
 /* End XCSwiftPackageProductDependency section */

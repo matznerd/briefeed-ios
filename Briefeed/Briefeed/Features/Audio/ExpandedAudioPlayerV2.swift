@@ -65,6 +65,7 @@ struct ExpandedAudioPlayerV2: View {
                     .foregroundColor(.primary)
                     .frame(width: 44, height: 44)
             }
+            .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.dismiss)
             
             Spacer()
             
@@ -79,6 +80,7 @@ struct ExpandedAudioPlayerV2: View {
                     .foregroundColor(.primary)
                     .frame(width: 44, height: 44)
             }
+            .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.queue)
         }
         .padding(.horizontal, 4)
         .overlay(
@@ -210,6 +212,7 @@ struct ExpandedAudioPlayerV2: View {
                 }
                 .foregroundColor(.primary)
             }
+            .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.skipBackward)
             
             // Previous
             Button(action: {
@@ -222,7 +225,8 @@ struct ExpandedAudioPlayerV2: View {
                     .foregroundColor(viewModel.canPlayPrevious ? .primary : .secondary.opacity(0.5))
             }
             .disabled(!viewModel.canPlayPrevious)
-            
+            .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.previous)
+
             // Play/Pause
             Button(action: {
                 viewModel.togglePlayPause()
@@ -244,7 +248,8 @@ struct ExpandedAudioPlayerV2: View {
                     }
                 }
             }
-            
+            .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.playPause)
+
             // Next
             Button(action: {
                 Task {
@@ -256,7 +261,8 @@ struct ExpandedAudioPlayerV2: View {
                     .foregroundColor(viewModel.canPlayNext ? .primary : .secondary.opacity(0.5))
             }
             .disabled(!viewModel.canPlayNext)
-            
+            .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.next)
+
             // Skip Forward
             Button(action: {
                 viewModel.skipForward(30)
@@ -269,6 +275,7 @@ struct ExpandedAudioPlayerV2: View {
                 }
                 .foregroundColor(.primary)
             }
+            .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.skipForward)
         }
     }
     
@@ -286,13 +293,14 @@ struct ExpandedAudioPlayerV2: View {
                     HStack(spacing: 4) {
                         Text(formatSpeed(viewModel.playbackSpeed))
                             .font(.system(size: 16, weight: .semibold))
-                        
+
                         Image(systemName: "chevron.right")
                             .font(.system(size: 12, weight: .medium))
                             .rotationEffect(.degrees(showSpeedPicker ? 90 : 0))
                     }
                     .foregroundColor(.accentColor)
                 }
+                .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.speed)
             }
             
             if showSpeedPicker {

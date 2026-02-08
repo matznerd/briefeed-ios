@@ -22,6 +22,7 @@ struct AddFeedView: View {
                     TextField("Enter subreddit name", text: $feedName)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .accessibilityIdentifier(AccessibilityID.AddFeed.nameField)
                         .onChange(of: feedName) { _, newValue in
                             if !newValue.isEmpty {
                                 Task {
@@ -72,13 +73,15 @@ struct AddFeedView: View {
                     Button("Cancel") {
                         dismiss()
                     }
+                    .accessibilityIdentifier(AccessibilityID.AddFeed.cancel)
                 }
-                
+
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Add") {
                         addFeed()
                     }
                     .disabled(feedName.isEmpty || viewModel.isLoading)
+                    .accessibilityIdentifier(AccessibilityID.AddFeed.add)
                 }
             }
             .overlay {

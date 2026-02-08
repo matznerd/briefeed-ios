@@ -23,6 +23,10 @@ class ArticleViewModel: ObservableObject {
     @Published var isLoadingContent = false
     @Published var fontSize: CGFloat = 16
     @Published var isReaderMode = false
+
+    // MARK: - Instant Content Display (Epic 1)
+    /// Tracks whether background Firecrawl fetch is in progress
+    @Published var isBackgroundFetching = false
     
     // Audio playback properties
     @Published var audioState: AudioPlayerState = .idle
@@ -228,7 +232,52 @@ class ArticleViewModel: ObservableObject {
         }
         return true
     }
-    
+
+    // MARK: - Instant Content Display (Epic 1)
+
+    /// URL for immediate WebView loading - available instantly without waiting for Firecrawl
+    var webViewURL: String? {
+        return article.url
+    }
+
+    /// Starts background Firecrawl fetch without blocking the UI
+    /// The WebView can display the article URL while this runs in the background
+    func startBackgroundContentFetch() async {
+        // Skip if content already exists or no URL
+        guard articleContent == nil || articleContent?.isEmpty == true,
+              let url = article.url else { return }
+
+        // Skip if already fetching
+        guard !isBackgroundFetching else { return }
+
+        isBackgroundFetching = true
+
+        // Run in detached task to not block
+        Task.detached { [weak self] in
+            guard let self = self else { return }
+
+            do {
+                let response = try await self.firecrawlService.fetchArticleContent(from: url)
+                let content = response.markdown ?? response.content
+
+                await MainActor.run {
+                    self.articleContent = content
+                    self.article.content = content
+                    self.isBackgroundFetching = false
+                }
+
+                // Save to Core Data
+                try await self.storageService.saveContext()
+
+            } catch {
+                await MainActor.run {
+                    // Don't set error message - this is background, UI should still work
+                    self.isBackgroundFetching = false
+                }
+            }
+        }
+    }
+
     // MARK: - Audio Playback Methods
     
     func startAudioPlayback() async {

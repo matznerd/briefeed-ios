@@ -42,6 +42,7 @@ struct CombinedFeedView: View {
                     } label: {
                         Image(systemName: "plus.circle")
                     }
+                    .accessibilityIdentifier(AccessibilityID.Feed.addFeed)
                 }
             }
             .sheet(isPresented: $showingAddFeed) {
@@ -225,6 +226,7 @@ struct FeedSelectorButton: View {
                 )
         }
         .buttonStyle(PlainButtonStyle())
+        .accessibilityIdentifier(AccessibilityID.Feed.selector(title))
     }
 }
 

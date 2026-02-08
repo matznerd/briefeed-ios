@@ -387,6 +387,13 @@ final class QueueCoordinator: ObservableObject {
             }
         }
 
+        // Final safety clamp
+        if !queue.isEmpty {
+            currentIndex = max(-1, min(currentIndex, queue.count - 1))
+        } else {
+            currentIndex = -1
+        }
+
         persistState()
         print("[QueueCoordinator] Removed item at index \(index)")
     }

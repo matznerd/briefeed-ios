@@ -282,15 +282,17 @@ struct ArticleView: View {
                     .foregroundColor(.briefeedRed)
                 }
                 .disabled(appViewModel.isLoading && appViewModel.isArticlePlaying(article))
+                .accessibilityIdentifier(AccessibilityID.Article.play)
             }
-            
+
             // Reader settings
             Button(action: {
                 showReaderSettings = true
             }) {
                 Image(systemName: "textformat.size")
             }
-            
+            .accessibilityIdentifier(AccessibilityID.Article.readerSettings)
+
             // Save button
             Button(action: {
                 Task {
@@ -300,13 +302,15 @@ struct ArticleView: View {
                 Image(systemName: viewModel.article.isSaved ? "bookmark.fill" : "bookmark")
                     .foregroundColor(viewModel.article.isSaved ? .orange : .primary)
             }
-            
+            .accessibilityIdentifier(AccessibilityID.Article.save)
+
             // Share button
             Button(action: {
                 showShareSheet = true
             }) {
                 Image(systemName: "square.and.arrow.up")
             }
+            .accessibilityIdentifier(AccessibilityID.Article.share)
         }
     }
     

@@ -37,6 +37,18 @@ extension UnifiedQueueItem {
         let errorMessage = queueItem?.errorMessage
         let retryCount = queueItem?.retryCount ?? 0
 
+        // Map generationState to ReadinessState
+        let readiness: ReadinessState
+        switch generationState {
+        case .pending: readiness = .pending
+        case .generating: readiness = .generating
+        case .ready: readiness = .ready
+        case .failed: readiness = .failed
+        }
+
+        // Check if article already has a summary
+        let hasSummary = article?.summary != nil && !(article?.summary?.isEmpty ?? true)
+
         return EnhancedQueueItem(
             id: itemUUID,
             title: title,
@@ -46,8 +58,10 @@ extension UnifiedQueueItem {
             articleID: articleID,
             audioUrl: audioUrl,
             duration: Int(duration),
-            isListened: false,
-            lastPosition: 0.0,
+            isListened: queueItem?.isListened ?? false,
+            lastPosition: queueItem?.lastPosition ?? 0.0,
+            readiness: readiness,
+            hasSummary: hasSummary,
             errorMessage: errorMessage,
             retryCount: retryCount
         )
@@ -63,6 +77,7 @@ extension UnifiedQueueItem {
 extension EnhancedQueueItem {
     /// Create from Article
     init(from article: Article) {
+        let hasSummary = article.summary != nil && !(article.summary?.isEmpty ?? true)
         self.init(
             id: article.id ?? UUID(),
             title: article.title ?? "Untitled",
@@ -74,13 +89,16 @@ extension EnhancedQueueItem {
             duration: nil,
             isListened: false,
             lastPosition: 0.0,
+            readiness: .pending,
+            hasSummary: hasSummary,
             errorMessage: nil,
             retryCount: 0
         )
     }
 
-    /// Create from RSS Episode
+    /// Create from RSS Episode (RSS episodes with audio URLs are always ready)
     init(from episode: RSSEpisode) {
+        let hasAudio = !episode.audioUrl.isEmpty
         self.init(
             id: UUID(uuidString: episode.id) ?? UUID(),
             title: episode.title,
@@ -95,6 +113,8 @@ extension EnhancedQueueItem {
             duration: nil,
             isListened: episode.isListened,
             lastPosition: 0.0,
+            readiness: hasAudio ? .ready : .pending,
+            hasSummary: false,
             errorMessage: nil,
             retryCount: 0
         )

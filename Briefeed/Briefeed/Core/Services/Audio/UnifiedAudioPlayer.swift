@@ -90,18 +90,27 @@ class UnifiedQueueItem: ObservableObject, Identifiable {
         self.article = article
         self.episode = episode
 
-        let resolvedAudioURL = queueItem.cachedAudioURL ?? queueItem.streamURL
-        self.cachedAudioURL = resolvedAudioURL
+        // Validate cached audio file still exists on disk before trusting it.
+        // Library/Caches/ can be purged by iOS under storage pressure.
+        let candidateURL = queueItem.cachedAudioURL ?? queueItem.streamURL
+        let audioFileExists: Bool
+        if let url = candidateURL, url.isFileURL {
+            audioFileExists = FileManager.default.fileExists(atPath: url.path)
+        } else {
+            // Remote stream URLs are assumed available
+            audioFileExists = candidateURL != nil
+        }
+        self.cachedAudioURL = audioFileExists ? candidateURL : nil
 
         // Map QueueItem state to audio generation state.
-        // For playback, "ready" means we have an audio URL (cached or stream).
+        // For playback, "ready" means we have a verified audio URL.
         switch queueItem.summaryState {
         case .failed:
             self.generationState = .failed(NSError(domain: "QueueItem", code: -1))
         case .generating:
             self.generationState = .generating
         case .pending, .ready:
-            self.generationState = resolvedAudioURL != nil ? .ready : .pending
+            self.generationState = audioFileExists ? .ready : .pending
         }
     }
 }
@@ -115,6 +124,8 @@ enum GenerationPhase: Equatable {
     case checkingCache(title: String)
     case fetchingContent(domain: String)
     case summarizing(wordCount: Int, provider: String)
+    case downloadingModels(progress: Double)
+    case initializingOnDevice
     case generatingAudio(provider: String)
     case downloadingAudio(progress: Double)  // 0.0 to 1.0
     case finalizing
@@ -132,6 +143,11 @@ enum GenerationPhase: Equatable {
         case .summarizing(let wordCount, let provider):
             let wordStr = wordCount > 0 ? "\(wordCount) words" : "content"
             return "Summarizing \(wordStr) via \(provider)..."
+        case .downloadingModels(let progress):
+            let percent = Int(progress * 100)
+            return "Downloading TTS models... \(percent)%"
+        case .initializingOnDevice:
+            return "Initializing on-device TTS..."
         case .generatingAudio(let provider):
             return "Generating audio via \(provider)..."
         case .downloadingAudio(let progress):
@@ -155,6 +171,10 @@ enum GenerationPhase: Equatable {
             return "Fetching article..."
         case .summarizing(_, let provider):
             return "Summarizing (\(provider))..."
+        case .downloadingModels(let progress):
+            return "Models \(Int(progress * 100))%..."
+        case .initializingOnDevice:
+            return "Initializing TTS..."
         case .generatingAudio(let provider):
             return "Audio (\(provider))..."
         case .downloadingAudio(let progress):
@@ -190,9 +210,11 @@ final class UnifiedAudioPlayer: ObservableObject {
 
     private let ttsGenerator = TTSGeneratorService.shared
     private let openAITTS = OpenAITTSServiceSimple.shared
+    private let fluidAudioService = FluidAudioTTSService.shared
     private let audioPlayer = SwiftAudioExService()
     private let cacheManager = AudioCacheManager.shared
     private let queueCoordinator = QueueCoordinator.shared
+    private let pipelineTimer = PipelineTimer.shared
 
     // MARK: - Published Properties
 
@@ -284,12 +306,18 @@ final class UnifiedAudioPlayer: ObservableObject {
 
     /// Subscribe to QueueCoordinator changes - QueueCoordinator is the single source of truth
     private func setupQueueCoordinatorBindings() {
-        // Sync current index from coordinator
+        // Sync current index from coordinator (with bounds clamping)
         queueCoordinator.$currentIndex
             .receive(on: DispatchQueue.main)
             .sink { [weak self] index in
                 guard let self = self else { return }
-                self.currentIndex = index
+                if self.queue.isEmpty {
+                    self.currentIndex = -1
+                } else if index >= 0 && index < self.queue.count {
+                    self.currentIndex = index
+                } else {
+                    self.currentIndex = max(-1, min(index, self.queue.count - 1))
+                }
             }
             .store(in: &cancellables)
 
@@ -306,7 +334,7 @@ final class UnifiedAudioPlayer: ObservableObject {
     /// Rebuild local queue from QueueCoordinator, hydrating Core Data objects by ID
     /// NOTE: This must work after app restart when in-memory caches are empty
     private func rebuildQueueFromCoordinator(_ coordinatorQueue: [QueueItem]) {
-        queue = coordinatorQueue.compactMap { queueItem -> UnifiedQueueItem? in
+        queue = coordinatorQueue.map { queueItem -> UnifiedQueueItem in
             // First try cached Core Data object, then fetch from database
             var article: Article? = queueItem.articleID.flatMap { articleCache[$0] }
             var episode: RSSEpisode? = queueItem.episodeID.flatMap { episodeCache[$0] }
@@ -371,9 +399,15 @@ final class UnifiedAudioPlayer: ObservableObject {
     // MARK: - Queue Management (delegates to QueueCoordinator)
 
     /// Load queue from articles - adds to QueueCoordinator, queue syncs via Combine
-    func loadQueue(from articles: [Article]) async {
+    /// Set `replace` to true (used by "Play All") to clear existing queue first
+    func loadQueue(from articles: [Article], replace: Bool = false) async {
         // Exit Live News streaming mode if active
         stopLiveNewsStream()
+
+        // Clear existing queue if replacing (e.g. "Play All")
+        if replace {
+            queueCoordinator.clearQueue()
+        }
 
         // Cache Core Data objects for queue rebuilding
         cacheObjects(articles: articles)
@@ -520,8 +554,8 @@ final class UnifiedAudioPlayer: ObservableObject {
 	            rebuildQueueFromCoordinator(queueCoordinator.queue)
 	            currentIndex = queueCoordinator.currentIndex
 
-	            // Pre-generate if queue is small
-	            if queueCoordinator.itemCount <= 3 {
+	            // Pre-generate if queue is small or playing immediately
+	            if queueCoordinator.itemCount <= 3 || playNow {
 	                // Find the item in rebuilt queue and generate
 	                if let queueItem = queue.first(where: { $0.article?.id == article.id }) {
                     await generateAudioForItem(queueItem)
@@ -584,7 +618,10 @@ final class UnifiedAudioPlayer: ObservableObject {
         // Yield to allow UI to update before heavy generation work
         await Task.yield()
 
-        // Ensure audio is ready
+        // Ensure audio is ready — reset failed items so they can retry
+        if case .failed = item.generationState {
+            item.generationState = .pending
+        }
         if item.generationState != .ready {
             await generateAudioForItem(item)
         }
@@ -740,6 +777,7 @@ final class UnifiedAudioPlayer: ObservableObject {
             item.generationState = .generating
             isGenerating = true
             generationPhase = .checkingCache(title: item.title)
+            pipelineTimer.beginRun()
 
             do {
                 print("[UnifiedPlayer] Starting audio generation for article: \(article.title ?? "Unknown")")
@@ -759,6 +797,7 @@ final class UnifiedAudioPlayer: ObservableObject {
                         // Fetch content from URL if needed
                         let domain = URL(string: url)?.host ?? "article"
                         generationPhase = .fetchingContent(domain: domain)
+                        let fetchStepIdx = pipelineTimer.startStep("content_fetch")
                         let firecrawlService = FirecrawlService()
                         do {
                             let firecrawlData = try await firecrawlService.fetchArticleContent(from: url)
@@ -776,6 +815,7 @@ final class UnifiedAudioPlayer: ObservableObject {
                             // Try to use article description as fallback
                             contentToSummarize = article.content ?? ""
                         }
+                        pipelineTimer.endStep(fetchStepIdx)
                     }
 
                     if !contentToSummarize.isEmpty {
@@ -785,6 +825,7 @@ final class UnifiedAudioPlayer: ObservableObject {
                         // Calculate word count for display
                         let wordCount = contentToSummarize.split(separator: " ").count
                         generationPhase = .summarizing(wordCount: wordCount, provider: "Gemini")
+                        let summarizeStepIdx = pipelineTimer.startStep("summarize")
                         let geminiService = GeminiService()
                         
                         // Smart truncation to avoid token limit while preserving article quality
@@ -869,6 +910,7 @@ final class UnifiedAudioPlayer: ObservableObject {
                                 try? context.save()
                             }
                         }
+                        pipelineTimer.endStep(summarizeStepIdx)
                     }
                 }
                 
@@ -886,11 +928,27 @@ final class UnifiedAudioPlayer: ObservableObject {
                 // Yield before heavy TTS generation work
                 await Task.yield()
 
-                // Generate audio file - try OpenAI first if configured, fallback to Gemini
-                let audioURL: URL
+                // Generate audio file - 4-tier TTS provider chain
+                let ttsStepIdx = pipelineTimer.startStep("tts_generate")
+                var audioURL: URL
 
-                if UserDefaultsManager.shared.openAIAPIKey != nil && !UserDefaultsManager.shared.openAIAPIKey!.isEmpty {
-                    // Use OpenAI TTS if API key is configured
+                // Tier 1: On-device Pocket TTS (fastest, no API cost)
+                if UserDefaultsManager.shared.preferOnDeviceTTS,
+                   await fluidAudioService.awaitReadyIfCompiling(timeout: 5.0) {
+                    generationPhase = .generatingAudio(provider: "On-Device")
+                    print("[UnifiedPlayer] Using Pocket TTS (on-device)")
+                    do {
+                        audioURL = try await fluidAudioService.synthesizeToFile(
+                            text: text,
+                            voice: UserDefaultsManager.shared.fluidAudioVoice
+                        )
+                    } catch {
+                        print("[UnifiedPlayer] On-device TTS failed: \(error), falling back to cloud TTS")
+                        audioURL = try await fallbackToCloudTTS(text: text, article: article)
+                    }
+                }
+                // Tier 2: OpenAI TTS (low latency, paid)
+                else if let apiKey = UserDefaultsManager.shared.openAIAPIKey, !apiKey.isEmpty {
                     generationPhase = .generatingAudio(provider: "OpenAI")
                     print("[UnifiedPlayer] Using OpenAI TTS for audio generation")
                     do {
@@ -899,10 +957,8 @@ final class UnifiedAudioPlayer: ObservableObject {
                             content: text,
                             useStreaming: UserDefaultsManager.shared.useOpenAIStreaming
                         )
-                        print("[UnifiedPlayer] OpenAI TTS generated audio successfully")
                     } catch {
                         print("[UnifiedPlayer] OpenAI TTS failed: \(error), falling back to Gemini")
-                        // Fallback to Gemini TTS
                         generationPhase = .generatingAudio(provider: "Gemini")
                         audioURL = try await ttsGenerator.generateAudioFile(
                             from: text,
@@ -910,10 +966,11 @@ final class UnifiedAudioPlayer: ObservableObject {
                             for: article
                         )
                     }
-                } else {
-                    // Use Gemini TTS as primary (but may hit 100/day limit)
+                }
+                // Tier 3: Gemini TTS (high latency ~26s, free with quota)
+                else {
                     generationPhase = .generatingAudio(provider: "Gemini")
-                    print("[UnifiedPlayer] Using Gemini TTS (no OpenAI key configured)")
+                    print("[UnifiedPlayer] Using Gemini TTS (no OpenAI key, on-device not ready)")
                     do {
                         audioURL = try await ttsGenerator.generateAudioFile(
                             from: text,
@@ -921,16 +978,18 @@ final class UnifiedAudioPlayer: ObservableObject {
                             for: article
                         )
                     } catch {
-                        // If Gemini fails (possibly due to quota), try to inform user
                         print("[UnifiedPlayer] Gemini TTS failed: \(error)")
                         if error.localizedDescription.contains("quota") || error.localizedDescription.contains("limit") {
-                            print("[UnifiedPlayer] Likely hit Gemini 100 generations/day limit. Configure OpenAI API key for unlimited TTS.")
+                            print("[UnifiedPlayer] Likely hit Gemini 100/day limit. Configure OpenAI API key or download on-device models.")
                         }
                         throw error
                     }
                 }
 
+                pipelineTimer.endStep(ttsStepIdx)
+
                 generationPhase = .finalizing
+                let audioLoadStepIdx = pipelineTimer.startStep("audio_load")
                 item.cachedAudioURL = audioURL
                 item.generationState = .ready
 
@@ -938,9 +997,11 @@ final class UnifiedAudioPlayer: ObservableObject {
                 if let player = try? AVAudioPlayer(contentsOf: audioURL) {
                     item.duration = player.duration
                 }
+                pipelineTimer.endStep(audioLoadStepIdx)
 
                 print("[UnifiedPlayer] Generated audio for: \(item.title)")
                 print("[UnifiedPlayer] Audio URL: \(audioURL.path)")
+                let _ = pipelineTimer.report()
             } catch {
                 print("[UnifiedPlayer] Failed to generate audio: \(error)")
                 print("[UnifiedPlayer] Error details: \(error.localizedDescription)")
@@ -957,6 +1018,31 @@ final class UnifiedAudioPlayer: ObservableObject {
         }
     }
     
+    /// Fallback to cloud TTS when on-device fails
+    private func fallbackToCloudTTS(text: String, article: Article) async throws -> URL {
+        // Try OpenAI first
+        if let apiKey = UserDefaultsManager.shared.openAIAPIKey, !apiKey.isEmpty {
+            generationPhase = .generatingAudio(provider: "OpenAI")
+            do {
+                return try await openAITTS.generateAudioForArticle(
+                    title: article.title,
+                    content: text,
+                    useStreaming: UserDefaultsManager.shared.useOpenAIStreaming
+                )
+            } catch {
+                print("[UnifiedPlayer] OpenAI fallback also failed: \(error)")
+            }
+        }
+
+        // Fall back to Gemini
+        generationPhase = .generatingAudio(provider: "Gemini")
+        return try await ttsGenerator.generateAudioFile(
+            from: text,
+            trackingIn: context,
+            for: article
+        )
+    }
+
     /// Pre-generate audio for next items
     private func preGenerateNextItems() async {
         // Cancel existing pre-generation

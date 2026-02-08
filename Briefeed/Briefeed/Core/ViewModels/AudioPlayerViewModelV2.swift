@@ -327,9 +327,9 @@ final class AudioPlayerViewModelV2: ObservableObject {
         // CRITICAL: Yield to allow SwiftUI to update UI before heavy work
         await Task.yield()
 
-        // Load full queue
-        await unifiedPlayer.loadQueue(from: articles)
-        
+        // Replace queue and load fresh (clear stale items from previous sessions)
+        await unifiedPlayer.loadQueue(from: articles, replace: true)
+
         // Start playing from beginning
         if !articles.isEmpty {
             await unifiedPlayer.play(at: 0)
@@ -338,6 +338,11 @@ final class AudioPlayerViewModelV2: ObservableObject {
         isLoading = false
     }
     
+    /// Sync articles to the queue without starting playback (used by Brief tab onAppear)
+    func syncToQueue(articles: [Article]) async {
+        await unifiedPlayer.loadQueue(from: articles)
+    }
+
     func playQueue(episodes: [RSSEpisode]) async {
         isLoading = true
         lastError = nil
@@ -488,17 +493,6 @@ final class AudioPlayerViewModelV2: ObservableObject {
         print("[AudioPlayerViewModel] Error: \(error)")
     }
     
-    // MARK: - State Persistence
-    
-    func saveQueueState() {
-        // Save current queue to UserDefaults or Core Data
-        // This would include queue items and current index
-    }
-    
-    func restoreQueueState() async {
-        // Restore saved queue from persistence
-        // This would reload the queue and position
-    }
 }
 
 // MARK: - Live News Support

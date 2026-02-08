@@ -121,7 +121,7 @@ final class OpenAITTSServiceSimple: NSObject {
     
     // MARK: - Properties
     
-    private let apiKey: String
+    private var apiKey: String { UserDefaultsManager.shared.openAIAPIKey ?? "" }
     private let baseURL = "https://api.openai.com/v1/audio/speech"
     private let newsProfile = NewsVoiceProfile()
     
@@ -132,7 +132,6 @@ final class OpenAITTSServiceSimple: NSObject {
     // MARK: - Initialization
     
     private override init() {
-        self.apiKey = UserDefaultsManager.shared.openAIAPIKey ?? ""
         super.init()
     }
     
@@ -241,15 +240,36 @@ final class OpenAITTSServiceSimple: NSObject {
 // MARK: - UserDefaults Extension
 
 extension UserDefaultsManager {
-    private static let openAIAPIKeyKey = "openAIAPIKey"
     private static let preferredOpenAIVoiceKey = "preferredOpenAIVoice"
     private static let useOpenAIStreamingKey = "useOpenAIStreaming"
-    
+
     var openAIAPIKey: String? {
-        get { UserDefaults.standard.string(forKey: Self.openAIAPIKeyKey) }
-        set { UserDefaults.standard.set(newValue, forKey: Self.openAIAPIKeyKey) }
+        get {
+            if let keychainValue = KeychainHelper.shared.get(forKey: "openAIAPIKey") {
+                return keychainValue
+            }
+            if let defaultsValue = UserDefaults.standard.string(forKey: "openAIAPIKey") {
+                if KeychainHelper.shared.set(defaultsValue, forKey: "openAIAPIKey") {
+                    UserDefaults.standard.removeObject(forKey: "openAIAPIKey")
+                }
+                return defaultsValue
+            }
+            return nil
+        }
+        set {
+            if let newValue = newValue, !newValue.isEmpty {
+                if !KeychainHelper.shared.set(newValue, forKey: "openAIAPIKey") {
+                    UserDefaults.standard.set(newValue, forKey: "openAIAPIKey")
+                } else {
+                    UserDefaults.standard.removeObject(forKey: "openAIAPIKey")
+                }
+            } else {
+                KeychainHelper.shared.delete(forKey: "openAIAPIKey")
+                UserDefaults.standard.removeObject(forKey: "openAIAPIKey")
+            }
+        }
     }
-    
+
     var preferredOpenAIVoice: OpenAIVoice {
         get {
             if let rawValue = UserDefaults.standard.string(forKey: Self.preferredOpenAIVoiceKey),
@@ -262,7 +282,7 @@ extension UserDefaultsManager {
             UserDefaults.standard.set(newValue.rawValue, forKey: Self.preferredOpenAIVoiceKey)
         }
     }
-    
+
     var useOpenAIStreaming: Bool {
         get { UserDefaults.standard.bool(forKey: Self.useOpenAIStreamingKey) }
         set { UserDefaults.standard.set(newValue, forKey: Self.useOpenAIStreamingKey) }

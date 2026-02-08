@@ -86,7 +86,8 @@ struct LiveNewsViewV2: View {
                         .foregroundColor(.briefeedRed)
                     }
                     .buttonStyle(.plain)
-                    
+                    .accessibilityIdentifier(AccessibilityID.LiveNews.playAll)
+
                     Divider()
                 }
             }
@@ -158,6 +159,7 @@ struct LiveNewsViewV2: View {
             } label: {
                 Image(systemName: "plus.circle")
             }
+            .accessibilityIdentifier(AccessibilityID.LiveNews.addFeed)
         }
     }
     
@@ -356,6 +358,7 @@ struct FeedRowV2: View {
             .padding(.vertical, 8)
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier(AccessibilityID.LiveNews.feedRow(feed.displayName))
     }
 }
 
@@ -456,6 +459,7 @@ struct AddRSSFeedViewV2: View {
                     TextField("Feed URL", text: $feedURL)
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
+                        .accessibilityIdentifier(AccessibilityID.AddRSSFeed.urlField)
                 } header: {
                     Text("RSS Feed URL")
                 } footer: {
@@ -476,8 +480,9 @@ struct AddRSSFeedViewV2: View {
                     Button("Cancel") {
                         dismiss()
                     }
+                    .accessibilityIdentifier(AccessibilityID.AddRSSFeed.cancel)
                 }
-                
+
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Add") {
                         Task {
@@ -485,6 +490,7 @@ struct AddRSSFeedViewV2: View {
                         }
                     }
                     .disabled(feedURL.isEmpty || isLoading)
+                    .accessibilityIdentifier(AccessibilityID.AddRSSFeed.add)
                 }
             }
             .overlay {

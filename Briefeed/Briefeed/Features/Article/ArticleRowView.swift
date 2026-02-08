@@ -246,8 +246,9 @@ struct ArticleRowView: View {
             .padding(.vertical, 12)
         }
         .buttonStyle(PlainButtonStyle())
+        .accessibilityIdentifier(AccessibilityID.ArticleRow.row(article.id?.uuidString ?? "unknown"))
     }
-    
+
     private var saveActionBackground: some View {
         ZStack {
             // Green background that expands as you swipe
@@ -391,22 +392,11 @@ struct ArticleRowView: View {
     private func performSaveAction() {
         // Haptic feedback
         HapticManager.shared.saveAction()
-        
-        // Check if article is being saved (not already saved)
-        let isBeingSaved = !article.isSaved
-        
-        // Toggle saved state
-        onSave()
-        
-        // Add to audio queue if article is being saved
-        if isBeingSaved {
-            Task { @MainActor in
-                await audioPlayerViewModel.addToQueue(article)
-            }
-        }
-        
-        // Don't show action buttons - swipe should just add to queue
-        // Users can tap the article to open it and see play options there
+
+        // Show action buttons for Play Now / Play Next / Save
+        showActionButtons = true
+        timeRemaining = 5
+        startActionButtonsTimer()
     }
     
     private func performArchiveAction() {
@@ -433,45 +423,61 @@ struct ArticleRowView: View {
     
     private var actionButtonsOverlay: some View {
         ZStack {
-            // Semi-transparent background
+            // Semi-transparent background — tap to dismiss
             Color.black.opacity(0.6)
-                .allowsHitTesting(false)
-            
-            VStack(spacing: 20) {
-                // Buttons
-                HStack(spacing: 20) {
-                    // Play Now button
+                .onTapGesture { dismissActionButtons() }
+
+            VStack(spacing: 16) {
+                HStack(spacing: 12) {
+                    // Play Now
                     Button(action: handlePlayNow) {
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             Image(systemName: "play.fill")
-                                .font(.system(size: 18))
+                                .font(.system(size: 14))
                             Text("Play Now")
-                                .font(.system(size: 16, weight: .medium))
+                                .font(.system(size: 14, weight: .medium))
                         }
                         .foregroundColor(.white)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
                         .background(Color.blue)
-                        .cornerRadius(25)
+                        .cornerRadius(20)
                     }
-                    
-                    // Play Next button
+                    .accessibilityIdentifier(AccessibilityID.ArticleRow.playNow)
+
+                    // Play Next
                     Button(action: handlePlayNext) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 18))
+                        HStack(spacing: 6) {
+                            Image(systemName: "text.line.last.and.arrowtriangle.forward")
+                                .font(.system(size: 14))
                             Text("Play Next")
-                                .font(.system(size: 16, weight: .medium))
+                                .font(.system(size: 14, weight: .medium))
                         }
                         .foregroundColor(.white)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
-                        .background(Color.green)
-                        .cornerRadius(25)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Color.orange)
+                        .cornerRadius(20)
                     }
+                    .accessibilityIdentifier(AccessibilityID.ArticleRow.playNext)
+
+                    // Save (queue at end)
+                    Button(action: handleSaveToQueue) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "bookmark.fill")
+                                .font(.system(size: 14))
+                            Text("Save")
+                                .font(.system(size: 14, weight: .medium))
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Color.green)
+                        .cornerRadius(20)
+                    }
+                    .accessibilityIdentifier(AccessibilityID.ArticleRow.save)
                 }
-                
-                // Timer
+
                 Text("\(timeRemaining)s")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.6))
@@ -492,10 +498,37 @@ struct ArticleRowView: View {
     private func handlePlayNext() {
         showActionButtons = false
         actionButtonsTimer?.invalidate()
-        
+
         Task { @MainActor in
-            // Queue article immediately after current item
+            await audioPlayerViewModel.addToQueue(article, playNext: true)
+        }
+    }
+
+    private func handleSaveToQueue() {
+        showActionButtons = false
+        actionButtonsTimer?.invalidate()
+
+        onSave()
+        Task { @MainActor in
             await audioPlayerViewModel.addToQueue(article)
+        }
+    }
+
+    private func dismissActionButtons() {
+        showActionButtons = false
+        actionButtonsTimer?.invalidate()
+    }
+
+    private func startActionButtonsTimer() {
+        actionButtonsTimer?.invalidate()
+        timeRemaining = 5
+        actionButtonsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            Task { @MainActor in
+                timeRemaining -= 1
+                if timeRemaining <= 0 {
+                    dismissActionButtons()
+                }
+            }
         }
     }
 }

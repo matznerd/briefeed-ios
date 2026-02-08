@@ -53,6 +53,12 @@ enum UserDefaultsKey: String, CaseIterable {
     case rssRetentionHours = "rssRetentionHours"
     case rssFeedPriorities = "rssFeedPriorities"
     case rssLastPlayedEpisodeId = "rssLastPlayedEpisodeId"
+
+    // FluidAudio On-Device TTS
+    case preferOnDeviceTTS = "preferOnDeviceTTS"
+    case fluidAudioVoice = "fluidAudioVoice"
+    case fluidAudioModelsDownloaded = "fluidAudioModelsDownloaded"
+    case fluidAudioTemperature = "fluidAudioTemperature"
 }
 
 // MARK: - Summary Length Options
@@ -108,7 +114,12 @@ class UserDefaultsManager: ObservableObject {
             "autoRefreshLiveNewsOnOpen": true,
             "rssPlaybackSpeed": 1.0,
             "defaultBriefFilter": "all",
-            "rssRetentionHours": 168
+            "rssRetentionHours": 168,
+            // FluidAudio On-Device TTS
+            UserDefaultsKey.preferOnDeviceTTS.rawValue: true,
+            UserDefaultsKey.fluidAudioVoice.rawValue: "alba",
+            UserDefaultsKey.fluidAudioModelsDownloaded.rawValue: false,
+            UserDefaultsKey.fluidAudioTemperature.rawValue: 0.5
             // API keys should be set by the user, not hardcoded
         ]
         userDefaults.register(defaults: defaults)
@@ -215,6 +226,30 @@ class UserDefaultsManager: ObservableObject {
         }
     }
     
+    // MARK: - FluidAudio On-Device TTS Settings
+    @Published var preferOnDeviceTTS: Bool = true {
+        didSet {
+            userDefaults.set(preferOnDeviceTTS, forKey: UserDefaultsKey.preferOnDeviceTTS.rawValue)
+        }
+    }
+
+    @Published var fluidAudioVoice: String = "alba" {
+        didSet {
+            userDefaults.set(fluidAudioVoice, forKey: UserDefaultsKey.fluidAudioVoice.rawValue)
+        }
+    }
+
+    var fluidAudioModelsDownloaded: Bool {
+        get { userDefaults.bool(forKey: UserDefaultsKey.fluidAudioModelsDownloaded.rawValue) }
+        set { userDefaults.set(newValue, forKey: UserDefaultsKey.fluidAudioModelsDownloaded.rawValue) }
+    }
+
+    @Published var fluidAudioTemperature: Float = 0.5 {
+        didSet {
+            userDefaults.set(fluidAudioTemperature, forKey: UserDefaultsKey.fluidAudioTemperature.rawValue)
+        }
+    }
+
     // MARK: - RSS Settings
     @Published var autoPlayLiveNewsOnOpen: Bool = false {
         didSet {
@@ -249,28 +284,60 @@ class UserDefaultsManager: ObservableObject {
         }
     }
     
-    // MARK: - API Keys
+    // MARK: - API Keys (Keychain with UserDefaults fallback)
     var geminiAPIKey: String? {
         get {
-            userDefaults.string(forKey: UserDefaultsKey.geminiAPIKey.rawValue)
+            // Try Keychain first
+            if let keychainValue = KeychainHelper.shared.get(forKey: "geminiAPIKey") {
+                return keychainValue
+            }
+            // Fall back to UserDefaults (also attempts migration to Keychain)
+            if let defaultsValue = userDefaults.string(forKey: UserDefaultsKey.geminiAPIKey.rawValue) {
+                // Try to migrate — only remove from UserDefaults if Keychain write succeeds
+                if KeychainHelper.shared.set(defaultsValue, forKey: "geminiAPIKey") {
+                    userDefaults.removeObject(forKey: UserDefaultsKey.geminiAPIKey.rawValue)
+                }
+                return defaultsValue
+            }
+            return nil
         }
         set {
             if let newValue = newValue, !newValue.isEmpty {
-                userDefaults.set(newValue, forKey: UserDefaultsKey.geminiAPIKey.rawValue)
+                if !KeychainHelper.shared.set(newValue, forKey: "geminiAPIKey") {
+                    // Keychain failed — store in UserDefaults as fallback
+                    userDefaults.set(newValue, forKey: UserDefaultsKey.geminiAPIKey.rawValue)
+                } else {
+                    userDefaults.removeObject(forKey: UserDefaultsKey.geminiAPIKey.rawValue)
+                }
             } else {
+                KeychainHelper.shared.delete(forKey: "geminiAPIKey")
                 userDefaults.removeObject(forKey: UserDefaultsKey.geminiAPIKey.rawValue)
             }
         }
     }
-    
+
     var firecrawlAPIKey: String? {
         get {
-            userDefaults.string(forKey: UserDefaultsKey.firecrawlAPIKey.rawValue)
+            if let keychainValue = KeychainHelper.shared.get(forKey: "firecrawlAPIKey") {
+                return keychainValue
+            }
+            if let defaultsValue = userDefaults.string(forKey: UserDefaultsKey.firecrawlAPIKey.rawValue) {
+                if KeychainHelper.shared.set(defaultsValue, forKey: "firecrawlAPIKey") {
+                    userDefaults.removeObject(forKey: UserDefaultsKey.firecrawlAPIKey.rawValue)
+                }
+                return defaultsValue
+            }
+            return nil
         }
         set {
             if let newValue = newValue, !newValue.isEmpty {
-                userDefaults.set(newValue, forKey: UserDefaultsKey.firecrawlAPIKey.rawValue)
+                if !KeychainHelper.shared.set(newValue, forKey: "firecrawlAPIKey") {
+                    userDefaults.set(newValue, forKey: UserDefaultsKey.firecrawlAPIKey.rawValue)
+                } else {
+                    userDefaults.removeObject(forKey: UserDefaultsKey.firecrawlAPIKey.rawValue)
+                }
             } else {
+                KeychainHelper.shared.delete(forKey: "firecrawlAPIKey")
                 userDefaults.removeObject(forKey: UserDefaultsKey.firecrawlAPIKey.rawValue)
             }
         }
@@ -357,6 +424,11 @@ class UserDefaultsManager: ObservableObject {
         autoPlayNext = userDefaults.bool(forKey: UserDefaultsKey.autoPlayNext.rawValue)
         playbackSpeed = userDefaults.object(forKey: UserDefaultsKey.playbackSpeed.rawValue) as? Float ?? 1.0
         
+        // Load FluidAudio settings
+        preferOnDeviceTTS = userDefaults.bool(forKey: UserDefaultsKey.preferOnDeviceTTS.rawValue)
+        fluidAudioVoice = userDefaults.string(forKey: UserDefaultsKey.fluidAudioVoice.rawValue) ?? "alba"
+        fluidAudioTemperature = userDefaults.object(forKey: UserDefaultsKey.fluidAudioTemperature.rawValue) as? Float ?? 0.5
+
         // Load RSS settings
         autoPlayLiveNewsOnOpen = userDefaults.bool(forKey: "autoPlayLiveNewsOnOpen")
         autoRefreshLiveNewsOnOpen = userDefaults.bool(forKey: "autoRefreshLiveNewsOnOpen")

@@ -68,10 +68,11 @@ struct FilteredBriefView: View {
                         .foregroundColor(.white)
                         .cornerRadius(10)
                     }
+                    .accessibilityIdentifier(AccessibilityID.Brief.playAll)
                     .padding(.horizontal)
                     .padding(.bottom, 8)
                 }
-                
+
                 // Queue Content
                 ZStack {
                     if viewModel.isLoading && filteredQueue.isEmpty {
@@ -86,12 +87,9 @@ struct FilteredBriefView: View {
             .onAppear {
                 Task {
                     await viewModel.loadQueuedArticles()
-                    // Sync brief articles to audio queue if queue is empty or different
+                    // Sync saved articles to queue without starting playback
                     if !viewModel.queuedArticles.isEmpty && audioPlayerViewModel.queueItems.isEmpty {
-                        // Queue is empty, load the brief articles for pre-generation
-                        await audioPlayerViewModel.playQueue(articles: viewModel.queuedArticles)
-                        // Pause immediately to not auto-play
-                        audioPlayerViewModel.pause()
+                        await audioPlayerViewModel.syncToQueue(articles: viewModel.queuedArticles)
                     }
                 }
             }
@@ -123,6 +121,7 @@ struct FilteredBriefView: View {
             }
         }
         .pickerStyle(.segmented)
+        .accessibilityIdentifier(AccessibilityID.Brief.filterPicker)
         .onChange(of: currentFilter) { newValue in
             UserDefaultsManager.shared.defaultBriefFilter = newValue.rawValue
         }
@@ -241,6 +240,7 @@ struct FilteredBriefView: View {
                     } label: {
                         Label("Clear Queue", systemImage: "trash")
                     }
+                    .accessibilityIdentifier(AccessibilityID.Brief.clearQueue)
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -370,22 +370,25 @@ struct EnhancedQueueRow: View {
     
     var body: some View {
         HStack(spacing: 12) {
-            // Play/Pause Button or Error Button
-            if item.hasFailed {
-                Button(action: retryItem) {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .font(.system(size: 32))
-                        .foregroundColor(.red)
+            // Play/Pause Button with readiness state
+            Button(action: item.hasFailed ? retryItem : playItem) {
+                ZStack {
+                    if item.hasFailed {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundColor(.red)
+                    } else if item.readiness == .generating {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                            .frame(width: 32, height: 32)
+                    } else {
+                        Image(systemName: isCurrentlyPlaying && audioPlayerViewModel.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundColor(item.readiness == .ready ? .briefeedRed : .secondary)
+                    }
                 }
-                .buttonStyle(.plain)
-            } else {
-                Button(action: playItem) {
-                    Image(systemName: isCurrentlyPlaying && audioPlayerViewModel.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 32))
-                        .foregroundColor(.briefeedRed)
-                }
-                .buttonStyle(.plain)
             }
+            .buttonStyle(.plain)
 
             // Tappable content area for navigation
             HStack(spacing: 12) {
@@ -417,6 +420,20 @@ struct EnhancedQueueRow: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
 
+                            if item.readiness == .generating {
+                                Text("• Preparing...")
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
+                            } else if item.hasSummary && item.readiness == .ready {
+                                Text("• Ready")
+                                    .font(.caption)
+                                    .foregroundColor(.green)
+                            } else if item.hasSummary && item.readiness == .pending {
+                                Text("• Summary ready")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+
                             if let duration = item.formattedDuration {
                                 Text("• \(duration)")
                                     .font(.caption)
@@ -434,35 +451,38 @@ struct EnhancedQueueRow: View {
 
                 Spacer()
 
-                // Playing Indicator or Error Badge or Chevron
-                if item.hasFailed {
-                    if item.canRetry {
-                        Text("Retry")
-                            .font(.caption)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.orange)
-                            .cornerRadius(4)
+                // Trailing: readiness + playing indicator
+                HStack(spacing: 6) {
+                    // Readiness badge
+                    if item.hasFailed {
+                        if item.canRetry {
+                            Text("Retry")
+                                .font(.caption)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.orange)
+                                .cornerRadius(4)
+                        } else {
+                            Text("Skip")
+                                .font(.caption)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.red)
+                                .cornerRadius(4)
+                        }
+                    } else if isCurrentlyPlaying {
+                        Image(systemName: "waveform")
+                            .font(.system(size: 20))
+                            .foregroundColor(.briefeedRed)
+                            .symbolEffect(.variableColor.iterative)
                     } else {
-                        Text("Skip")
-                            .font(.caption)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.red)
-                            .cornerRadius(4)
+                        // Readiness indicator
+                        Image(systemName: item.readiness.icon)
+                            .font(.system(size: 14))
+                            .foregroundColor(readinessColor)
                     }
-                } else if isCurrentlyPlaying {
-                    Image(systemName: "waveform")
-                        .font(.system(size: 20))
-                        .foregroundColor(.briefeedRed)
-                        .symbolEffect(.variableColor.iterative)
-                } else if item.articleID != nil {
-                    // Show chevron for articles (navigable)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.secondary.opacity(0.5))
                 }
             }
             .contentShape(Rectangle())
@@ -477,8 +497,28 @@ struct EnhancedQueueRow: View {
         }
         .padding(.vertical, 8)
         .opacity(item.isListened ? 0.6 : 1.0)
+        // Progress bar for currently playing item
+        .overlay(alignment: .bottom) {
+            if isCurrentlyPlaying && audioPlayerViewModel.duration > 0 {
+                GeometryReader { geometry in
+                    Rectangle()
+                        .fill(Color.briefeedRed.opacity(0.6))
+                        .frame(width: geometry.size.width * CGFloat(audioPlayerViewModel.progress), height: 2)
+                }
+                .frame(height: 2)
+            }
+        }
     }
     
+    private var readinessColor: Color {
+        switch item.readiness {
+        case .pending: return .orange
+        case .generating: return .blue
+        case .ready: return .green
+        case .failed: return .red
+        }
+    }
+
     private func formatTimeRemaining(_ interval: TimeInterval) -> String {
         let hours = Int(interval) / 3600
         if hours > 0 {

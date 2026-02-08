@@ -92,30 +92,7 @@ class ScrollingTests: XCTestCase {
         article.id = id
         article.title = title
         article.content = "Test content"
-        article.publishedDate = Date()
+        article.createdAt = Date()
         return article
     }
-}
-
-// MARK: - UI Test for Scroll Position
-
-class ScrollPositionTests: XCTestCase {
-    
-    func testScrollViewMaintainsPosition() {
-        // This test ensures ScrollView maintains its position during updates
-        let scrollPosition = ScrollPosition()
-        
-        // Set initial position
-        scrollPosition.position = 100
-        
-        // Verify position is maintained
-        XCTAssertEqual(scrollPosition.position, 100,
-                      "ScrollView should maintain its position")
-    }
-}
-
-// MARK: - Helper ScrollPosition class for testing
-
-class ScrollPosition: ObservableObject {
-    @Published var position: CGFloat = 0
 }
