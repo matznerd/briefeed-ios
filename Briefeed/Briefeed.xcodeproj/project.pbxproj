@@ -7,17 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		1F38E1BA325BE1B9E9FA7B66 /* ProcessingChamberTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A6A9E39A0C2AE3A5F99065C /* ProcessingChamberTests.swift */; };
-		7988BFDB2D2B81F175A00CAE /* FlingTransition.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8530265749561B679D23BFD /* FlingTransition.swift */; };
-		82982501A12005E9A1D0EDF4 /* SwipeInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FD6AF6E30600E3150F62BFE /* SwipeInteractionTests.swift */; };
 		8C0090FE2F383EE600405E04 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 8C0090FD2F383EE600405E04 /* FluidAudio */; };
 		8C0091002F383EE600405E04 /* FluidAudioTTS in Frameworks */ = {isa = PBXBuildFile; productRef = 8C0090FF2F383EE600405E04 /* FluidAudioTTS */; };
 		8C3D090E2E48490400819F12 /* SwiftAudioEx in Frameworks */ = {isa = PBXBuildFile; productRef = 8C3D090D2E48490400819F12 /* SwiftAudioEx */; };
 		8CC555A82E4AAA1900D7B3CB /* OpenAI in Frameworks */ = {isa = PBXBuildFile; productRef = 8CC555A72E4AAA1900D7B3CB /* OpenAI */; };
-		92CB8FCC7D653EBB65853A09 /* SwipeInteractionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DCC5A17337D9B600439CE10 /* SwipeInteractionUITests.swift */; };
-		EA1D4E3BD59EC126B3EE7F59 /* TranscriptReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 405748BBBA74F0E559FE568C /* TranscriptReaderView.swift */; };
-		F9454960CBECE997ABEB97F4 /* AudioPipelineFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A44452AE8CBDB208474ABA63 /* AudioPipelineFlowTests.swift */; };
-		FFD81791300487531DB16F23 /* KokoroTTSIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9AFA415EBE268F49729A001 /* KokoroTTSIntegrationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -376,8 +369,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				EA1D4E3BD59EC126B3EE7F59 /* TranscriptReaderView.swift in Sources */,
-				7988BFDB2D2B81F175A00CAE /* FlingTransition.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -385,10 +376,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				F9454960CBECE997ABEB97F4 /* AudioPipelineFlowTests.swift in Sources */,
-				1F38E1BA325BE1B9E9FA7B66 /* ProcessingChamberTests.swift in Sources */,
-				FFD81791300487531DB16F23 /* KokoroTTSIntegrationTests.swift in Sources */,
-				82982501A12005E9A1D0EDF4 /* SwipeInteractionTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -396,7 +383,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				92CB8FCC7D653EBB65853A09 /* SwipeInteractionUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
