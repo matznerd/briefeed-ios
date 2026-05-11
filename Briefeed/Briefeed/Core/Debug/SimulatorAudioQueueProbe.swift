@@ -13,8 +13,10 @@ import Foundation
 @MainActor
 enum SimulatorAudioQueueProbe {
     private static let envKey = "BRIEFEED_SIM_PROBE"
-    private static let launchArg = "--briefeed-sim-probe"
-    private static let mode = "audio-queue"
+    private static let audioQueueLaunchArg = "--briefeed-sim-probe"
+    private static let playLatencyLaunchArg = "--briefeed-play-latency-probe"
+    private static let audioQueueMode = "audio-queue"
+    private static let playLatencyMode = "play-latency"
     private static let logPrefix = "[BriefeedSimProbe]"
 
     static func runIfRequested(audioPlayerViewModel: AudioPlayerViewModelV2) async {
@@ -22,12 +24,17 @@ enum SimulatorAudioQueueProbe {
         let arguments = ProcessInfo.processInfo.arguments
         let requestedMode = environment[envKey]
 
-        guard requestedMode == mode || arguments.contains(launchArg) else {
+        if requestedMode == playLatencyMode || arguments.contains(playLatencyLaunchArg) {
+            await runPlayLatencyProbe(audioPlayerViewModel: audioPlayerViewModel)
+            return
+        }
+
+        guard requestedMode == audioQueueMode || arguments.contains(audioQueueLaunchArg) else {
             return
         }
 
         do {
-            print("\(logPrefix) START mode=\(requestedMode ?? launchArg)")
+            print("\(logPrefix) START mode=\(requestedMode ?? audioQueueLaunchArg)")
 
             let context = PersistenceController.shared.container.viewContext
             let audioURL = try makeProofAudioFile()
@@ -45,6 +52,79 @@ enum SimulatorAudioQueueProbe {
         } catch {
             print("\(logPrefix) FAILED \(error.localizedDescription)")
         }
+    }
+
+    private static func runPlayLatencyProbe(audioPlayerViewModel: AudioPlayerViewModelV2) async {
+        do {
+            print("\(logPrefix) LATENCY_START")
+
+            let context = PersistenceController.shared.container.viewContext
+            let audioURL = try makeProofAudioFile()
+            let episode = try makeProofEpisode(audioURL: audioURL, context: context)
+
+            await audioPlayerViewModel.clearQueue()
+
+            let start = ContinuousClock.now
+            let playTask = Task { @MainActor in
+                await audioPlayerViewModel.play(episode: episode)
+            }
+
+            let firstFeedback = await waitForFirstFeedback(
+                audioPlayerViewModel: audioPlayerViewModel,
+                since: start
+            )
+
+            let playbackStarted = await waitForPlaybackStart(
+                audioPlayerViewModel: audioPlayerViewModel,
+                since: start
+            )
+
+            await playTask.value
+
+            print("\(logPrefix) LATENCY firstFeedbackMs=\(firstFeedback) playbackStartedMs=\(playbackStarted) queueCount=\(audioPlayerViewModel.queueItems.count) title=\(audioPlayerViewModel.currentTitle ?? "nil") isPlaying=\(audioPlayerViewModel.isPlaying) duration=\(audioPlayerViewModel.duration)")
+            print("\(logPrefix) LATENCY_COMPLETE")
+        } catch {
+            print("\(logPrefix) LATENCY_FAILED \(error.localizedDescription)")
+        }
+    }
+
+    private static func waitForFirstFeedback(
+        audioPlayerViewModel: AudioPlayerViewModelV2,
+        since start: ContinuousClock.Instant
+    ) async -> Int {
+        for _ in 0..<200 {
+            if audioPlayerViewModel.isLoading ||
+                !audioPlayerViewModel.queueItems.isEmpty ||
+                audioPlayerViewModel.currentTitle != nil ||
+                audioPlayerViewModel.isPlaying {
+                return elapsedMilliseconds(since: start)
+            }
+
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        return -1
+    }
+
+    private static func waitForPlaybackStart(
+        audioPlayerViewModel: AudioPlayerViewModelV2,
+        since start: ContinuousClock.Instant
+    ) async -> Int {
+        for _ in 0..<400 {
+            if audioPlayerViewModel.isPlaying && audioPlayerViewModel.duration > 0 {
+                return elapsedMilliseconds(since: start)
+            }
+
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        return -1
+    }
+
+    private static func elapsedMilliseconds(since start: ContinuousClock.Instant) -> Int {
+        let duration = start.duration(to: ContinuousClock.now)
+        let components = duration.components
+        return Int(components.seconds * 1000) + Int(components.attoseconds / 1_000_000_000_000_000)
     }
 
     private static func makeProofEpisode(audioURL: URL, context: NSManagedObjectContext) throws -> RSSEpisode {
