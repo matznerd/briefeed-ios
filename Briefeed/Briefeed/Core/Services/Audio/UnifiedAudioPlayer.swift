@@ -418,8 +418,8 @@ final class UnifiedAudioPlayer: ObservableObject {
             queueCoordinator.addArticle(article)
         }
 
-        // Start pre-generation for first items
-        await preGenerateNextItems()
+        // Do not generate audio just because the queue was hydrated.
+        // Generation starts when playback starts, then only the immediate next item is warmed.
     }
 
     /// Load queue from RSS episodes for Brief - adds to QueueCoordinator, queue syncs via Combine
@@ -458,7 +458,8 @@ final class UnifiedAudioPlayer: ObservableObject {
             queueCoordinator.addEpisode(episode)
         }
 
-        await preGenerateNextItems()
+        // Do not generate audio just because mixed content was queued.
+        // Generation starts when playback starts, then only the immediate next item is warmed.
     }
 
     // MARK: - Live News Streaming (immediate play, no queuing)
@@ -554,12 +555,8 @@ final class UnifiedAudioPlayer: ObservableObject {
 	            rebuildQueueFromCoordinator(queueCoordinator.queue)
 	            currentIndex = queueCoordinator.currentIndex
 
-	            // Pre-generate if queue is small or playing immediately
-	            if queueCoordinator.itemCount <= 3 || playNow {
-	                // Find the item in rebuilt queue and generate
-	                if let queueItem = queue.first(where: { $0.article?.id == article.id }) {
-                    await generateAudioForItem(queueItem)
-                }
+            if playNext && isPlaying {
+                await preGenerateNextItems()
             }
 	        } else if let episode = item as? RSSEpisode {
 	            // Cache the Core Data object
@@ -622,7 +619,8 @@ final class UnifiedAudioPlayer: ObservableObject {
         if case .failed = item.generationState {
             item.generationState = .pending
         }
-        if item.generationState != .ready {
+        // Skip if already generating (avoids double-trigger from addToQueue + play)
+        if item.generationState != .ready && item.generationState != .generating {
             await generateAudioForItem(item)
         }
 
@@ -973,15 +971,16 @@ final class UnifiedAudioPlayer: ObservableObject {
                 let ttsStepIdx = pipelineTimer.startStep("tts_generate")
                 var audioURL: URL
 
-                // Tier 1: On-device Pocket TTS (fastest, no API cost)
+                // Tier 1: On-device Kokoro TTS (non-autoregressive, handles any text length)
                 if UserDefaultsManager.shared.preferOnDeviceTTS,
                    await fluidAudioService.awaitReadyIfCompiling(timeout: 5.0) {
-                    generationPhase = .generatingAudio(provider: "On-Device")
-                    print("[UnifiedPlayer] Using Pocket TTS (on-device)")
+                    generationPhase = .generatingAudio(provider: "Kokoro (On-Device)")
+                    print("[UnifiedPlayer] Using Kokoro TTS (on-device, \(text.count) chars)")
                     do {
                         audioURL = try await fluidAudioService.synthesizeToFile(
                             text: text,
-                            voice: UserDefaultsManager.shared.fluidAudioVoice
+                            voice: UserDefaultsManager.shared.fluidAudioVoice,
+                            voiceSpeed: UserDefaultsManager.shared.fluidAudioVoiceSpeed
                         )
                     } catch {
                         print("[UnifiedPlayer] On-device TTS failed: \(error), falling back to cloud TTS")
@@ -1090,11 +1089,10 @@ final class UnifiedAudioPlayer: ObservableObject {
         preGenerationTask?.cancel()
         
         preGenerationTask = Task {
-            // Generate for current + next 2 items
+            // Pre-generate the immediate next item only. This keeps playback smooth without
+            // spending summary/TTS calls on items the user may never reach.
             let indicesToGenerate = [
-                currentIndex,
-                currentIndex + 1,
-                currentIndex + 2
+                currentIndex + 1
             ].filter { $0 >= 0 && $0 < queue.count }
             
             for index in indicesToGenerate {

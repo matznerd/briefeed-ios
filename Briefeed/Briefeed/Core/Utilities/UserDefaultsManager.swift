@@ -58,7 +58,7 @@ enum UserDefaultsKey: String, CaseIterable {
     case preferOnDeviceTTS = "preferOnDeviceTTS"
     case fluidAudioVoice = "fluidAudioVoice"
     case fluidAudioModelsDownloaded = "fluidAudioModelsDownloaded"
-    case fluidAudioTemperature = "fluidAudioTemperature"
+    case fluidAudioVoiceSpeed = "fluidAudioVoiceSpeed"
 }
 
 // MARK: - Summary Length Options
@@ -117,9 +117,9 @@ class UserDefaultsManager: ObservableObject {
             "rssRetentionHours": 168,
             // FluidAudio On-Device TTS
             UserDefaultsKey.preferOnDeviceTTS.rawValue: true,
-            UserDefaultsKey.fluidAudioVoice.rawValue: "alba",
+            UserDefaultsKey.fluidAudioVoice.rawValue: FluidAudioVoice.defaultVoice.rawValue,
             UserDefaultsKey.fluidAudioModelsDownloaded.rawValue: false,
-            UserDefaultsKey.fluidAudioTemperature.rawValue: 0.5
+            UserDefaultsKey.fluidAudioVoiceSpeed.rawValue: 1.0
             // API keys should be set by the user, not hardcoded
         ]
         userDefaults.register(defaults: defaults)
@@ -233,9 +233,16 @@ class UserDefaultsManager: ObservableObject {
         }
     }
 
-    @Published var fluidAudioVoice: String = "alba" {
+    @Published var fluidAudioVoice: String = FluidAudioVoice.defaultVoice.rawValue {
         didSet {
-            userDefaults.set(fluidAudioVoice, forKey: UserDefaultsKey.fluidAudioVoice.rawValue)
+            // Map unrecognized legacy voices (e.g. "alba") to Kokoro default
+            let resolved = FluidAudioVoice(rawValue: fluidAudioVoice) != nil
+                ? fluidAudioVoice
+                : FluidAudioVoice.defaultVoice.rawValue
+            userDefaults.set(resolved, forKey: UserDefaultsKey.fluidAudioVoice.rawValue)
+            if !resolved.elementsEqual(fluidAudioVoice) {
+                fluidAudioVoice = resolved
+            }
         }
     }
 
@@ -244,9 +251,9 @@ class UserDefaultsManager: ObservableObject {
         set { userDefaults.set(newValue, forKey: UserDefaultsKey.fluidAudioModelsDownloaded.rawValue) }
     }
 
-    @Published var fluidAudioTemperature: Float = 0.5 {
+    @Published var fluidAudioVoiceSpeed: Float = 1.0 {
         didSet {
-            userDefaults.set(fluidAudioTemperature, forKey: UserDefaultsKey.fluidAudioTemperature.rawValue)
+            userDefaults.set(fluidAudioVoiceSpeed, forKey: UserDefaultsKey.fluidAudioVoiceSpeed.rawValue)
         }
     }
 
@@ -426,8 +433,8 @@ class UserDefaultsManager: ObservableObject {
         
         // Load FluidAudio settings
         preferOnDeviceTTS = userDefaults.bool(forKey: UserDefaultsKey.preferOnDeviceTTS.rawValue)
-        fluidAudioVoice = userDefaults.string(forKey: UserDefaultsKey.fluidAudioVoice.rawValue) ?? "alba"
-        fluidAudioTemperature = userDefaults.object(forKey: UserDefaultsKey.fluidAudioTemperature.rawValue) as? Float ?? 0.5
+        fluidAudioVoice = userDefaults.string(forKey: UserDefaultsKey.fluidAudioVoice.rawValue) ?? FluidAudioVoice.defaultVoice.rawValue
+        fluidAudioVoiceSpeed = userDefaults.object(forKey: UserDefaultsKey.fluidAudioVoiceSpeed.rawValue) as? Float ?? 1.0
 
         // Load RSS settings
         autoPlayLiveNewsOnOpen = userDefaults.bool(forKey: "autoPlayLiveNewsOnOpen")

@@ -89,15 +89,9 @@ extension BriefeedApp {
                 }
             }
             
-            // Play all episodes using the new audio system
+            // Play all episodes through the shared player so the app-wide mini player updates.
             if !episodesToPlay.isEmpty {
-                await MainActor.run {
-                    Task {
-                        // Access the audio player through the app's instance
-                        // This will be available when ContentView sets up
-                        await AudioPlayerViewModelV2().playQueue(episodes: episodesToPlay)
-                    }
-                }
+                await UnifiedAudioPlayer.shared.playLiveNewsStream(episodes: episodesToPlay)
             }
         } catch {
             print("❌ Error playing live news radio: \(error)")

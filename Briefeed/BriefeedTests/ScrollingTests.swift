@@ -7,6 +7,7 @@
 
 import XCTest
 import SwiftUI
+import UIKit
 @testable import Briefeed
 
 class ScrollingTests: XCTestCase {
@@ -59,23 +60,24 @@ class ScrollingTests: XCTestCase {
     
     // MARK: - ScrollView OnAppear Tests
     
-    func testOnAppearCallsLoadMore() {
-        // This test verifies that the onAppear modifier is properly set up
-        // In a real UI test, we would verify that scrolling to an article triggers onAppear
-        
+    @MainActor
+    func testOnAppearCallsLoadMore() async {
+        // This test verifies that SwiftUI view lifecycle events fire when hosted.
         let expectation = XCTestExpectation(description: "onAppear should trigger loadMoreIfNeeded")
         
         // Create a mock article row view
         let article = createMockArticle()
-        let rowView = ArticleRowView(article: article, onTap: {}, onSave: {}, onDelete: {})
+        let rowView = ArticleRowView(article: article, onTap: {}, onSave: {})
             .onAppear {
                 expectation.fulfill()
             }
         
-        // Simulate the view appearing
-        _ = rowView.body
-        
-        wait(for: [expectation], timeout: 1.0)
+        let hostingController = UIHostingController(rootView: rowView)
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = hostingController
+        window.makeKeyAndVisible()
+
+        await fulfillment(of: [expectation], timeout: 1.0)
     }
     
     // MARK: - Helper Methods

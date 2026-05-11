@@ -26,6 +26,7 @@ enum AccessibilityID {
         static let playNow = "articleRow.playNow"
         static let playNext = "articleRow.playNext"
         static let save = "articleRow.save"
+        static let queue = "articleRow.queue"
     }
 
     enum Article {

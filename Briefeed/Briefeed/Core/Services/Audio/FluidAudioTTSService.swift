@@ -2,8 +2,9 @@
 //  FluidAudioTTSService.swift
 //  Briefeed
 //
-//  On-device TTS using FluidAudio's Pocket TTS engine
-//  Provides ~1-3s latency vs ~26s for cloud-based Gemini TTS
+//  On-device TTS using FluidAudio's Kokoro TTS engine
+//  Non-autoregressive: generates all audio frames in a single CoreML prediction per chunk
+//  Parallel chunk processing via TaskGroup for fast synthesis
 //
 
 import Foundation
@@ -39,8 +40,26 @@ enum FluidAudioModelState: Equatable {
 // MARK: - Voice Options
 
 enum FluidAudioVoice: String, CaseIterable {
-    case alba, azelma, cosette, javert
-    var displayName: String { rawValue.capitalized }
+    // American English Female
+    case af_alloy, af_aoede, af_bella, af_heart, af_jessica
+    case af_kore, af_nicole, af_nova, af_river, af_sarah, af_sky
+    // American English Male
+    case am_adam, am_echo, am_eric, am_fenrir, am_liam
+    case am_michael, am_onyx, am_puck, am_santa
+
+    var displayName: String {
+        // "af_heart" -> "Heart", "am_adam" -> "Adam"
+        let name = rawValue.dropFirst(3) // drop "af_" or "am_" prefix
+        return name.prefix(1).uppercased() + name.dropFirst()
+    }
+
+    var genderLabel: String {
+        rawValue.hasPrefix("af_") ? "Female" : "Male"
+    }
+
+    static var defaultVoice: FluidAudioVoice { .af_heart }
+    static let femaleVoices = allCases.filter { $0.genderLabel == "Female" }
+    static let maleVoices = allCases.filter { $0.genderLabel == "Male" }
 }
 
 // MARK: - Errors
@@ -75,14 +94,26 @@ final class FluidAudioTTSService: ObservableObject {
     private let cacheManager = AudioCacheManager.shared
 
     #if canImport(FluidAudioTTS)
-    private var pocketTts: PocketTtsManager?
+    private var kokoroTts: KokoroTtsManager?
     private var initializationTask: Task<Void, Never>?
     #endif
 
     var isModelReady: Bool { modelState == .ready }
 
     private init() {
+        migrateFromPocketTTSIfNeeded()
         checkExistingModels()
+    }
+
+    /// One-time migration: PocketTTS models ≠ Kokoro models.
+    /// Reset the download flag so users see "Download Models" for Kokoro.
+    private func migrateFromPocketTTSIfNeeded() {
+        let migrationKey = "kokoroTTSMigrationComplete"
+        guard !UserDefaults.standard.bool(forKey: migrationKey) else { return }
+
+        UserDefaultsManager.shared.fluidAudioModelsDownloaded = false
+        UserDefaults.standard.set(true, forKey: migrationKey)
+        print("[KokoroTTS] Migration: Reset model download state (PocketTTS -> Kokoro)")
     }
 
     /// Check if models are already downloaded (called at app launch)
@@ -91,16 +122,18 @@ final class FluidAudioTTSService: ObservableObject {
             #if canImport(FluidAudioTTS)
             // Models were previously downloaded — re-initialize in background
             modelState = .compiling
+            let voice = UserDefaultsManager.shared.fluidAudioVoice
             initializationTask = Task {
                 do {
-                    let manager = PocketTtsManager()
-                    try await manager.initialize()
-                    self.pocketTts = manager
+                    let manager = KokoroTtsManager(defaultVoice: voice)
+                    try await manager.initialize(preloadVoices: [voice])
+                    self.kokoroTts = manager
                     self.modelState = .ready
-                    print("[FluidAudioTTS] Re-initialized from previously downloaded models")
+                    print("[KokoroTTS] Re-initialized from previously downloaded models (voice: \(voice))")
                 } catch {
-                    self.modelState = .failed(error.localizedDescription)
-                    print("[FluidAudioTTS] Re-initialization failed: \(error)")
+                    self.modelState = .failed("\(error)")
+                    UserDefaultsManager.shared.fluidAudioModelsDownloaded = false
+                    print("[KokoroTTS] Re-initialization failed: \(error)")
                 }
                 self.initializationTask = nil
             }
@@ -122,7 +155,7 @@ final class FluidAudioTTSService: ObservableObject {
             return false
         }
 
-        print("[FluidAudioTTS] Awaiting model initialization (timeout: \(timeout)s)...")
+        print("[KokoroTTS] Awaiting model initialization (timeout: \(timeout)s)...")
 
         let ready = await withTaskGroup(of: Bool.self) { group in
             group.addTask {
@@ -139,9 +172,9 @@ final class FluidAudioTTSService: ObservableObject {
         }
 
         if ready {
-            print("[FluidAudioTTS] Model ready after wait")
+            print("[KokoroTTS] Model ready after wait")
         } else {
-            print("[FluidAudioTTS] Timeout waiting for model initialization")
+            print("[KokoroTTS] Timeout waiting for model initialization")
         }
         return isModelReady
         #else
@@ -150,27 +183,30 @@ final class FluidAudioTTSService: ObservableObject {
     }
 
     /// Download models and initialize the TTS engine
-    func downloadAndInitialize(voice: String = "alba") async throws {
+    func downloadAndInitialize(voice: String = FluidAudioVoice.defaultVoice.rawValue) async throws {
         #if canImport(FluidAudioTTS)
         modelState = .downloading(progress: 0.0)
 
         do {
-            let manager = PocketTtsManager()
+            let manager = KokoroTtsManager(defaultVoice: voice)
 
             // Initialize downloads models from HuggingFace and compiles CoreML
-            modelState = .downloading(progress: 0.5)
-            try await manager.initialize()
+            print("[KokoroTTS] Starting model download and initialization (voice: \(voice))...")
+            modelState = .downloading(progress: 0.3)
+            try await manager.initialize(preloadVoices: [voice])
             modelState = .compiling
+            print("[KokoroTTS] Models downloaded, compiling CoreML...")
 
-            self.pocketTts = manager
+            self.kokoroTts = manager
             modelState = .ready
             UserDefaultsManager.shared.fluidAudioModelsDownloaded = true
 
-            print("[FluidAudioTTS] Models downloaded and initialized successfully")
+            print("[KokoroTTS] Models downloaded and initialized successfully")
         } catch {
-            let errorMsg = error.localizedDescription
+            let errorMsg = "\(error)"
             modelState = .failed(errorMsg)
-            print("[FluidAudioTTS] Initialization failed: \(errorMsg)")
+            UserDefaultsManager.shared.fluidAudioModelsDownloaded = false
+            print("[KokoroTTS] Initialization failed: \(errorMsg)")
             throw FluidAudioError.initializationFailed(errorMsg)
         }
         #else
@@ -179,18 +215,20 @@ final class FluidAudioTTSService: ObservableObject {
     }
 
     /// Synthesize text to WAV audio data
-    func synthesize(text: String, voice: String? = nil, temperature: Float = 0.5) async throws -> Data {
+    func synthesize(text: String, voice: String? = nil, voiceSpeed: Float = 1.0) async throws -> Data {
         #if canImport(FluidAudioTTS)
-        guard let manager = pocketTts, isModelReady else {
+        guard let manager = kokoroTts, isModelReady else {
             throw FluidAudioError.modelsNotDownloaded
         }
 
         do {
-            let audioData = try await manager.synthesize(text: text, voice: voice, temperature: temperature)
-            print("[FluidAudioTTS] Synthesized \(text.count) chars -> \(audioData.count) bytes WAV")
+            print("[KokoroTTS] Starting synthesis: \(text.count) chars, voice=\(voice ?? "default"), speed=\(voiceSpeed)")
+            let audioData = try await manager.synthesize(text: text, voice: voice, voiceSpeed: voiceSpeed)
+            print("[KokoroTTS] Synthesized \(text.count) chars -> \(audioData.count) bytes WAV")
             return audioData
         } catch {
-            throw FluidAudioError.synthesisFailed(error.localizedDescription)
+            print("[KokoroTTS] Synthesis failed: \(error)")
+            throw FluidAudioError.synthesisFailed("\(error)")
         }
         #else
         throw FluidAudioError.fluidAudioNotAvailable
@@ -198,23 +236,26 @@ final class FluidAudioTTSService: ObservableObject {
     }
 
     /// Synthesize text and save to a file, returns the file URL
-    func synthesizeToFile(text: String, voice: String? = nil) async throws -> URL {
+    func synthesizeToFile(text: String, voice: String? = nil, voiceSpeed: Float = 1.0) async throws -> URL {
+        // Incorporate voice + speed into the cache key so different speeds aren't conflated
+        let cacheVoice = "\(voice ?? FluidAudioVoice.defaultVoice.rawValue)-\(String(format: "%.1f", voiceSpeed))"
+
         // Check cache first
-        if let cachedURL = cacheManager.getCachedAudioURL(for: text, voice: voice ?? "pocket-tts") {
-            print("[FluidAudioTTS] Cache hit for text")
+        if let cachedURL = cacheManager.getCachedAudioURL(for: text, voice: cacheVoice) {
+            print("[KokoroTTS] Cache hit for text")
             return cachedURL
         }
 
-        let audioData = try await synthesize(text: text, voice: voice)
+        let audioData = try await synthesize(text: text, voice: voice, voiceSpeed: voiceSpeed)
 
         // Save to cache
-        let key = cacheManager.cacheKey(for: text, voice: voice ?? "pocket-tts")
+        let key = cacheManager.cacheKey(for: text, voice: cacheVoice)
         let fileURL = cacheManager.cacheDirectory
             .appendingPathComponent(key)
             .appendingPathExtension("wav")
 
         try audioData.write(to: fileURL)
-        print("[FluidAudioTTS] Saved audio to: \(fileURL.lastPathComponent)")
+        print("[KokoroTTS] Saved audio to: \(fileURL.lastPathComponent)")
 
         return fileURL
     }

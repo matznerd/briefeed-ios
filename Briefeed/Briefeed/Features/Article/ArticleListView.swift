@@ -55,39 +55,35 @@ struct ArticleListView: View {
     // MARK: - Views
     
     private var articleListView: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(filteredArticles) { article in
-                    ArticleRowView(article: article) {
-                        selectedArticle = article
-                    } onSave: {
-                        Task {
-                            await viewModel.toggleArticleSaved(article)
-                        }
-                    } onDelete: {
-                        Task {
-                            await viewModel.deleteArticle(article)
-                        }
+        List {
+            ForEach(filteredArticles) { article in
+                ArticleRowView(article: article) {
+                    selectedArticle = article
+                } onSave: {
+                    Task {
+                        await viewModel.toggleArticleSaved(article)
                     }
-                    .onAppear {
-                        Task {
-                            await viewModel.loadMoreIfNeeded(currentArticle: article)
-                        }
-                    }
-                    
-                    Divider()
-                        .padding(.horizontal, Constants.UI.padding)
                 }
-                
-                if viewModel.isLoadingMore {
-                    ProgressView()
-                        .padding()
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.visible)
+                .onAppear {
+                    Task {
+                        await viewModel.loadMoreIfNeeded(currentArticle: article)
+                    }
                 }
             }
+
+            if viewModel.isLoadingMore {
+                ProgressView()
+                    .padding()
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+            }
         }
+        .listStyle(.plain)
         .background(Color.briefeedBackground)
     }
-    
+
     private var loadingView: some View {
         VStack(spacing: 20) {
             ProgressView()

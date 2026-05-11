@@ -154,33 +154,42 @@ struct ExpandedAudioPlayerV2: View {
     private var progressSection: some View {
         VStack(spacing: 8) {
             // Progress Slider
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.gray.opacity(0.2))
-                    .frame(height: 6)
-                
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.accentColor)
-                    .frame(width: progressWidth, height: 6)
-                
-                Circle()
-                    .fill(Color.accentColor)
-                    .frame(width: 16, height: 16)
-                    .offset(x: progressWidth - 8)
+            GeometryReader { geometry in
+                let width = max(1, geometry.size.width)
+                let displayedProgress = CGFloat(isDraggingSlider ? dragProgress : viewModel.progress)
+                let knobOffset = max(0, min(width - 16, (width * displayedProgress) - 8))
+
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.gray.opacity(0.2))
+                        .frame(height: 6)
+
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.accentColor)
+                        .frame(width: width * displayedProgress, height: 6)
+
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 16, height: 16)
+                        .offset(x: knobOffset)
+                }
+                .frame(height: 16)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            isDraggingSlider = true
+                            dragProgress = progress(for: value.location.x, width: width)
+                        }
+                        .onEnded { value in
+                            let finalProgress = progress(for: value.location.x, width: width)
+                            viewModel.seek(to: finalProgress)
+                            dragProgress = finalProgress
+                            isDraggingSlider = false
+                        }
+                )
             }
             .frame(height: 16)
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        isDraggingSlider = true
-                        let progress = Float(value.location.x / UIScreen.main.bounds.width - 48)
-                        dragProgress = max(0, min(1, progress))
-                    }
-                    .onEnded { _ in
-                        viewModel.seek(to: dragProgress)
-                        isDraggingSlider = false
-                    }
-            )
             
             // Time Labels
             HStack {
@@ -358,12 +367,6 @@ struct ExpandedAudioPlayerV2: View {
     
     // MARK: - Computed Properties
     
-    private var progressWidth: CGFloat {
-        let totalWidth = UIScreen.main.bounds.width - 48
-        let progress = isDraggingSlider ? dragProgress : viewModel.progress
-        return totalWidth * CGFloat(progress)
-    }
-    
     private var itemIcon: String {
         switch viewModel.currentItemType {
         case .article:
@@ -394,6 +397,11 @@ struct ExpandedAudioPlayerV2: View {
         } else {
             return String(format: "%.1f×", speed)
         }
+    }
+
+    private func progress(for xPosition: CGFloat, width: CGFloat) -> Float {
+        guard width > 0 else { return 0 }
+        return Float(max(0, min(1, xPosition / width)))
     }
 }
 

@@ -100,48 +100,43 @@ struct CombinedFeedView: View {
     }
     
     private var articleListView: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(Array(filteredArticles.enumerated()), id: \.element.id) { index, article in
-                    ArticleRowView(article: article) {
-                        selectedArticle = article
-                    } onSave: {
-                        Task {
-                            await viewModel.toggleArticleSaved(article)
-                        }
-                    } onDelete: {
-                        Task {
-                            await viewModel.archiveArticle(article)
-                        }
+        List {
+            ForEach(Array(filteredArticles.enumerated()), id: \.element.id) { index, article in
+                ArticleRowView(article: article) {
+                    selectedArticle = article
+                } onSave: {
+                    Task {
+                        await viewModel.toggleArticleSaved(article)
                     }
-                    .id(article.id) // Force unique identity
-                    .onAppear {
-                        // Check if we need to load more when this article appears
-                        print("📱 Article appeared at index \(index) of \(filteredArticles.count)")
-                        if index >= filteredArticles.count - 3 {
-                            print("📱 Triggering loadMoreIfNeeded for article at index \(index)")
-                            Task {
-                                await viewModel.loadMoreIfNeeded(currentArticle: article)
-                            }
-                        }
-                    }
-                    
-                    Divider()
-                        .padding(.horizontal, Constants.UI.padding)
                 }
-                
-                if viewModel.isLoadingMore {
-                    HStack {
-                        ProgressView()
-                        Text("Loading more articles...")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                .id(article.id)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.visible)
+                .onAppear {
+                    print("📱 Article appeared at index \(index) of \(filteredArticles.count)")
+                    if index >= filteredArticles.count - 3 {
+                        print("📱 Triggering loadMoreIfNeeded for article at index \(index)")
+                        Task {
+                            await viewModel.loadMoreIfNeeded(currentArticle: article)
+                        }
                     }
-                    .padding()
-                    .frame(maxWidth: .infinity)
                 }
             }
+
+            if viewModel.isLoadingMore {
+                HStack {
+                    ProgressView()
+                    Text("Loading more articles...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding()
+                .frame(maxWidth: .infinity)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+            }
         }
+        .listStyle(.plain)
         .background(Color.briefeedBackground)
     }
     
@@ -199,11 +194,13 @@ struct CombinedFeedView: View {
     }
     
     private var filteredArticles: [Article] {
+        let base: [Article]
         if selectedFeedId == "all" {
-            return viewModel.articles
+            base = viewModel.articles
         } else {
-            return viewModel.articles.filter { $0.feed?.id?.uuidString == selectedFeedId }
+            base = viewModel.articles.filter { $0.feed?.id?.uuidString == selectedFeedId }
         }
+        return base.filter { !$0.isArchived }
     }
 }
 

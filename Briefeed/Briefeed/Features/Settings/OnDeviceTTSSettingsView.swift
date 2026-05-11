@@ -2,7 +2,7 @@
 //  OnDeviceTTSSettingsView.swift
 //  Briefeed
 //
-//  Settings for on-device TTS using FluidAudio Pocket TTS
+//  Settings for on-device TTS using FluidAudio Kokoro TTS
 //
 
 import SwiftUI
@@ -107,8 +107,15 @@ struct OnDeviceTTSSettingsView: View {
             if fluidAudioService.isModelReady {
                 Section {
                     Picker("Voice", selection: $userDefaults.fluidAudioVoice) {
-                        ForEach(FluidAudioVoice.allCases, id: \.self) { voice in
-                            Text(voice.displayName).tag(voice.rawValue)
+                        Section("Female") {
+                            ForEach(FluidAudioVoice.femaleVoices, id: \.self) { voice in
+                                Text(voice.displayName).tag(voice.rawValue)
+                            }
+                        }
+                        Section("Male") {
+                            ForEach(FluidAudioVoice.maleVoices, id: \.self) { voice in
+                                Text(voice.displayName).tag(voice.rawValue)
+                            }
                         }
                     }
 
@@ -117,7 +124,7 @@ struct OnDeviceTTSSettingsView: View {
                 } header: {
                     Label("Voice Settings", systemImage: "person.wave.2")
                 } footer: {
-                    Text("When enabled, on-device TTS is used as the primary engine. Cloud TTS is used as fallback.")
+                    Text("When enabled, on-device Kokoro TTS is used as the primary engine. Cloud TTS is used as fallback.")
                 }
             }
 
@@ -164,30 +171,30 @@ struct OnDeviceTTSSettingsView: View {
                     }
 
                     Slider(value: Binding(
-                        get: { Double(userDefaults.fluidAudioTemperature) },
-                        set: { userDefaults.fluidAudioTemperature = Float($0) }
-                    ), in: 0.1...1.5, step: 0.1) {
-                        Text("Temperature")
+                        get: { Double(userDefaults.fluidAudioVoiceSpeed) },
+                        set: { userDefaults.fluidAudioVoiceSpeed = Float($0) }
+                    ), in: 0.5...2.0, step: 0.1) {
+                        Text("Voice Speed")
                     }
                     HStack {
-                        Text("Temperature")
+                        Text("Voice Speed")
                         Spacer()
-                        Text(String(format: "%.1f", userDefaults.fluidAudioTemperature))
+                        Text(String(format: "%.1fx", userDefaults.fluidAudioVoiceSpeed))
                             .foregroundColor(.secondary)
                     }
                     .font(.subheadline)
                 } header: {
                     Label("Test", systemImage: "waveform")
                 } footer: {
-                    Text("Lower temperature = more consistent. Higher = more expressive.")
+                    Text("0.5x = slow, 1.0x = normal, 2.0x = fast.")
                 }
             }
 
             // MARK: - Comparison Section
             Section {
                 TTSComparisonRow(
-                    label: "On-Device (Pocket TTS)",
-                    latency: "~1-3s",
+                    label: "On-Device (Kokoro TTS)",
+                    latency: "~2-5s",
                     cost: "Free",
                     network: "Offline",
                     highlight: true
@@ -230,7 +237,7 @@ struct OnDeviceTTSSettingsView: View {
                 let audioData = try await fluidAudioService.synthesize(
                     text: testText,
                     voice: userDefaults.fluidAudioVoice,
-                    temperature: userDefaults.fluidAudioTemperature
+                    voiceSpeed: userDefaults.fluidAudioVoiceSpeed
                 )
                 testDuration = CFAbsoluteTimeGetCurrent() - start
                 print("[TTS Test] Synthesized \(testText.count) chars in \(String(format: "%.2f", testDuration!))s -> \(audioData.count) bytes")

@@ -10,6 +10,7 @@ import SwiftUI
 struct MiniAudioPlayerV4: View {
     @EnvironmentObject var viewModel: AudioPlayerViewModelV2
     @State private var showTranscript = false
+    @State private var showExpandedPlayer = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,6 +33,18 @@ struct MiniAudioPlayerV4: View {
                 }
                 
                 Spacer()
+
+                Button {
+                    showExpandedPlayer = true
+                } label: {
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .frame(width: 32, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open player")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
@@ -216,8 +229,16 @@ struct MiniAudioPlayerV4: View {
                             .fill(Color.accentColor)
                             .frame(width: geometry.size.width * CGFloat(viewModel.progress), height: 2)
                     }
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                viewModel.seek(to: progress(for: value.location.x, width: geometry.size.width))
+                            }
+                    )
                 }
-                .frame(height: 2)
+                .frame(height: 12)
             }
         }
         .accessibilityIdentifier(AccessibilityID.MiniPlayer.container)
@@ -226,6 +247,10 @@ struct MiniAudioPlayerV4: View {
                 .environmentObject(viewModel)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showExpandedPlayer) {
+            ExpandedAudioPlayerV2()
+                .environmentObject(viewModel)
         }
     }
     
@@ -306,6 +331,11 @@ struct MiniAudioPlayerV4: View {
         let minutes = Int(time) / 60
         let seconds = Int(time) % 60
         return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    private func progress(for xPosition: CGFloat, width: CGFloat) -> Float {
+        guard width > 0 else { return 0 }
+        return Float(max(0, min(1, xPosition / width)))
     }
 }
 

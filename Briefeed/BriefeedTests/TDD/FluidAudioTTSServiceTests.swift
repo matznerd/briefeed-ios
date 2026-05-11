@@ -23,7 +23,7 @@ class MockFluidAudioTTSService: ObservableObject {
 
     var isModelReady: Bool { modelState == .ready }
 
-    func downloadAndInitialize(voice: String = "alba") async throws {
+    func downloadAndInitialize(voice: String = "af_heart") async throws {
         initializeCallCount += 1
         if shouldFail {
             modelState = .failed("Mock initialization error")
@@ -34,7 +34,7 @@ class MockFluidAudioTTSService: ObservableObject {
         modelState = .ready
     }
 
-    func synthesize(text: String, voice: String? = nil, temperature: Float = 0.5) async throws -> Data {
+    func synthesize(text: String, voice: String? = nil, voiceSpeed: Float = 1.0) async throws -> Data {
         synthesizeCallCount += 1
         if delay > 0 {
             try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))

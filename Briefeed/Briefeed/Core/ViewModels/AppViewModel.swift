@@ -68,7 +68,11 @@ final class AppViewModel: ObservableObject {
             .assign(to: &$playbackSpeed)
         
         audioPlayerViewModel.$queueItems
-            .assign(to: &$queueItems)
+            .sink { [weak self] items in
+                self?.queueItems = items
+                self?.queuedArticleIDs = Set(items.compactMap { $0.article?.id })
+            }
+            .store(in: &cancellables)
         
         audioPlayerViewModel.$queueItems
             .map { $0.count }
@@ -76,18 +80,24 @@ final class AppViewModel: ObservableObject {
         
         audioPlayerViewModel.$isLoading
             .assign(to: &$isLoading)
-        
+
         audioPlayerViewModel.$lastError
             .assign(to: &$lastError)
+
+        // Derive currently playing article ID from queue index changes
+        audioPlayerViewModel.$currentQueueIndex
+            .combineLatest(audioPlayerViewModel.$queueItems)
+            .map { index, items -> UUID? in
+                guard index >= 0, index < items.count else { return nil }
+                return items[index].article?.id
+            }
+            .assign(to: &$currentlyPlayingArticleID)
     }
     
     // MARK: - Audio Playback
     
     func play(article: Article) async {
         await audioPlayerViewModel.play(article: article)
-        currentlyPlayingArticleID = article.objectID.uriRepresentation().absoluteString
-            .components(separatedBy: "/").last
-            .flatMap { UUID(uuidString: $0) }
     }
     
     func play(episode: RSSEpisode) async {
@@ -128,11 +138,9 @@ final class AppViewModel: ObservableObject {
     
     func queueArticle(_ article: Article) async {
         await audioPlayerViewModel.queueArticle(article)
-        
+
         // Update queued article IDs
-        if let articleID = article.objectID.uriRepresentation().absoluteString
-            .components(separatedBy: "/").last
-            .flatMap({ UUID(uuidString: $0) }) {
+        if let articleID = article.id {
             queuedArticleIDs.insert(articleID)
         }
     }
@@ -171,49 +179,40 @@ final class AppViewModel: ObservableObject {
     // MARK: - Article State Management
     
     func isArticleQueued(_ article: Article) -> Bool {
-        guard let articleID = article.objectID.uriRepresentation().absoluteString
-            .components(separatedBy: "/").last
-            .flatMap({ UUID(uuidString: $0) }) else { return false }
-        return queuedArticleIDs.contains(articleID)
+        guard let articleID = article.id else { return false }
+        return queuedArticleIDs.contains(articleID) || queueItems.contains { $0.article?.id == articleID }
     }
-    
+
     func isArticleArchived(_ article: Article) -> Bool {
-        guard let articleID = article.objectID.uriRepresentation().absoluteString
-            .components(separatedBy: "/").last
-            .flatMap({ UUID(uuidString: $0) }) else { return false }
+        guard let articleID = article.id else { return false }
         return archivedArticleIDs.contains(articleID)
     }
-    
+
     func isArticlePlaying(_ article: Article) -> Bool {
-        guard let articleID = article.objectID.uriRepresentation().absoluteString
-            .components(separatedBy: "/").last
-            .flatMap({ UUID(uuidString: $0) }) else { return false }
+        guard let articleID = article.id else { return false }
         return currentlyPlayingArticleID == articleID
     }
-    
+
     func archiveArticle(_ article: Article) {
-        guard let articleID = article.objectID.uriRepresentation().absoluteString
-            .components(separatedBy: "/").last
-            .flatMap({ UUID(uuidString: $0) }) else { return }
+        guard let articleID = article.id else { return }
         archivedArticleIDs.insert(articleID)
+        article.isArchived = true
+        try? article.managedObjectContext?.save()
         ArticleStateManagerV2.shared.addToArchived(articleID: articleID)
     }
-    
+
     func unarchiveArticle(_ article: Article) {
-        guard let articleID = article.objectID.uriRepresentation().absoluteString
-            .components(separatedBy: "/").last
-            .flatMap({ UUID(uuidString: $0) }) else { return }
+        guard let articleID = article.id else { return }
         archivedArticleIDs.remove(articleID)
+        article.isArchived = false
+        try? article.managedObjectContext?.save()
         ArticleStateManagerV2.shared.removeFromArchived(articleID: articleID)
     }
     
     // MARK: - Queue Position
     
     func queuePosition(for article: Article) -> Int? {
-        guard let articleID = article.objectID.uriRepresentation().absoluteString
-            .components(separatedBy: "/").last
-            .flatMap({ UUID(uuidString: $0) }) else { return nil }
-        
+        guard let articleID = article.id else { return nil }
         return queueItems.firstIndex { $0.articleID == articleID }
     }
     

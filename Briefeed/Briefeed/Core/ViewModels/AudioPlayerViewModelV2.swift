@@ -182,7 +182,23 @@ final class AudioPlayerViewModelV2: ObservableObject {
     }
     
     func play() async {
-        unifiedPlayer.resume()
+        if currentTitle != nil || isStreamingLiveNews {
+            unifiedPlayer.resume()
+            return
+        }
+
+        let indexToPlay = currentQueueIndex >= 0 ? currentQueueIndex : 0
+        guard indexToPlay >= 0, indexToPlay < queueItems.count else {
+            unifiedPlayer.resume()
+            return
+        }
+
+        isLoading = true
+        lastError = nil
+        await Task.yield()
+        defer { isLoading = false }
+
+        await unifiedPlayer.play(at: indexToPlay)
     }
     
     func pause() {

@@ -73,14 +73,6 @@ struct ContentView: View {
             // Apply theme settings when view appears
             applyThemePreference()
         }
-        .onChange(of: audioPlayerViewModel.isPlaying) { _, isPlaying in
-            // Auto-switch to Brief tab when playback starts from another tab
-            if isPlaying && selectedTab != 1 {
-                withAnimation {
-                    selectedTab = 1
-                }
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ThemeChanged"))) { _ in
             // Update theme when notification is received
             applyThemePreference()

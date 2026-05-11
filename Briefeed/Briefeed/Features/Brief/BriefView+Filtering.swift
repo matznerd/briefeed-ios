@@ -52,12 +52,7 @@ struct FilteredBriefView: View {
                 // Play All Button when queue has items
                 if !filteredQueue.isEmpty && !audioPlayerViewModel.isPlaying {
                     Button {
-                        Task {
-                            let articles = viewModel.queuedArticles
-                            if !articles.isEmpty {
-                                await audioPlayerViewModel.playQueue(articles: articles)
-                            }
-                        }
+                        playFilteredQueue()
                     } label: {
                         HStack {
                             Image(systemName: "play.fill")
@@ -140,15 +135,12 @@ struct FilteredBriefView: View {
                     swipeActions(for: item)
                 }
                 .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                    Button {
-                        toggleBookmark(item)
-                    } label: {
-                        Label(
-                            item.isBookmarked ? "Unbookmark" : "Bookmark",
-                            systemImage: item.isBookmarked ? "bookmark.slash" : "bookmark.fill"
-                        )
-                    }
-                    .tint(.blue)
+                    Button { playItemNow(item) } label: {
+                        Label("Play Now", systemImage: "play.fill")
+                    }.tint(.blue)
+                    Button { playItemNext(item) } label: {
+                        Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
+                    }.tint(.orange)
                 }
             }
             .onDelete { indexSet in
@@ -236,13 +228,7 @@ struct FilteredBriefView: View {
             if !filteredQueue.isEmpty {
                 Menu {
                     Button {
-                        Task {
-                            // Play all items in the brief
-                            let articles = viewModel.queuedArticles
-                            if !articles.isEmpty {
-                                await audioPlayerViewModel.playQueue(articles: articles)
-                            }
-                        }
+                        playFilteredQueue()
                     } label: {
                         Label("Play All", systemImage: "play.fill")
                     }
@@ -318,36 +304,57 @@ struct FilteredBriefView: View {
         // TODO: Implement reordering in enhanced queue
     }
     
-    private func removeItem(_ item: EnhancedQueueItem) {
-        // Find the index of the item in the queue by matching IDs
-        if let index = audioPlayerViewModel.queueItems.firstIndex(where: { 
+    private func queueIndex(for item: EnhancedQueueItem) -> Int? {
+        audioPlayerViewModel.queueItems.firstIndex(where: {
             UUID(uuidString: $0.id) == item.id ||
             $0.article?.id == item.articleID ||
             $0.audioURL?.absoluteString == item.audioUrl?.absoluteString
-        }) {
+        })
+    }
+
+    private func removeItem(_ item: EnhancedQueueItem) {
+        if let index = queueIndex(for: item) {
             Task {
                 await audioPlayerViewModel.removeFromQueue(at: index)
             }
         }
-        
+
         // Update view model if needed
         if let articleID = item.articleID,
            let article = viewModel.queuedArticles.first(where: { $0.id == articleID }) {
             viewModel.removeFromQueue(article)
         }
     }
-    
-    private func toggleBookmark(_ item: EnhancedQueueItem) {
-        QueueCoordinator.shared.toggleBookmark(for: item.id)
+
+    private func playItemNow(_ item: EnhancedQueueItem) {
+        guard let index = queueIndex(for: item) else { return }
+        Task {
+            await audioPlayerViewModel.playItemAt(index: index)
+        }
+    }
+
+    private func playFilteredQueue() {
+        guard let firstItem = filteredQueue.first,
+              let index = queueIndex(for: firstItem) else { return }
+
+        Task {
+            await audioPlayerViewModel.playItemAt(index: index)
+        }
+    }
+
+    private func playItemNext(_ item: EnhancedQueueItem) {
+        guard let index = queueIndex(for: item) else { return }
+        let destination = min(audioPlayerViewModel.currentQueueIndex + 1, audioPlayerViewModel.queueItems.count)
+        if index != destination {
+            Task {
+                await audioPlayerViewModel.reorderQueue(from: IndexSet(integer: index), to: destination)
+            }
+        }
     }
 
     private func saveItem(_ item: EnhancedQueueItem) {
         // Remove expiration for saved items
-        if let index = audioPlayerViewModel.queueItems.firstIndex(where: { 
-            UUID(uuidString: $0.id) == item.id ||
-            $0.article?.id == item.articleID ||
-            $0.audioURL?.absoluteString == item.audioUrl?.absoluteString
-        }) {
+        if let index = queueIndex(for: item) {
             // TODO: Add method to update expiration in AudioPlayerViewModelV2
             // For now, items don't expire in the new system
             print("Saving item at index \(index)")
@@ -471,12 +478,16 @@ struct EnhancedQueueRow: View {
 
                 // Trailing: bookmark + readiness + playing indicator
                 HStack(spacing: 6) {
-                    // Bookmark indicator
-                    if item.isBookmarked {
-                        Image(systemName: "bookmark.fill")
+                    // Bookmark toggle
+                    Button {
+                        QueueCoordinator.shared.toggleBookmark(for: item.id)
+                    } label: {
+                        Image(systemName: item.isBookmarked ? "bookmark.fill" : "bookmark")
                             .font(.system(size: 14))
-                            .foregroundColor(.blue)
+                            .foregroundColor(item.isBookmarked ? .blue : .secondary)
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(item.isBookmarked ? "Unbookmark" : "Bookmark")
 
                     // Readiness badge
                     if item.hasFailed {
