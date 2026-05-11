@@ -11,7 +11,7 @@ import SwiftUI
 enum Constants {
     enum API {
         static let redditBaseURL = "https://www.reddit.com"
-        static let firecrawlBaseURL = "https://api.firecrawl.dev/v0"
+        static let firecrawlBaseURL = "https://api.firecrawl.dev/v2"
         static let geminiBaseURL = "https://generativelanguage.googleapis.com/v1beta"
         
         // API Keys are now managed through UserDefaultsManager

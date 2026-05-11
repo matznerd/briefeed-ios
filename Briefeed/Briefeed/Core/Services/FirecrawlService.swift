@@ -20,6 +20,32 @@ struct FirecrawlData: Codable {
     let html: String?
     let metadata: FirecrawlMetadata?
     let screenshot: String?
+
+    init(content: String = "", markdown: String? = nil, html: String? = nil, metadata: FirecrawlMetadata? = nil, screenshot: String? = nil) {
+        self.content = content
+        self.markdown = markdown
+        self.html = html
+        self.metadata = metadata
+        self.screenshot = screenshot
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case content
+        case markdown
+        case html
+        case metadata
+        case screenshot
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
+        markdown = try container.decodeIfPresent(String.self, forKey: .markdown)
+        html = try container.decodeIfPresent(String.self, forKey: .html)
+        metadata = try container.decodeIfPresent(FirecrawlMetadata.self, forKey: .metadata)
+        screenshot = try container.decodeIfPresent(String.self, forKey: .screenshot)
+    }
 }
 
 struct FirecrawlMetadata: Codable {
@@ -86,10 +112,7 @@ class FirecrawlService: FirecrawlServiceProtocol {
             "url": url,
             "formats": ["markdown", "html"],
             "onlyMainContent": true,
-            "includeHtml": true,
-            "includeMarkdown": true,
-            "waitFor": 5000, // Wait up to 5 seconds for content to load
-            "screenshot": false
+            "waitFor": 5000 // Wait up to 5 seconds for content to load
         ]
         
         let headers = [
