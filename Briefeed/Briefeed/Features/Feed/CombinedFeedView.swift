@@ -62,6 +62,11 @@ struct CombinedFeedView: View {
                 Text(viewModel.errorMessage ?? "")
             }
             .onAppear {
+                guard !AppRuntime.shouldSkipAutomaticStartupWork else {
+                    print("🧪 Skipping automatic feed load for hosted XCTest")
+                    return
+                }
+
                 Task {
                     await viewModel.loadFeeds()
                 }

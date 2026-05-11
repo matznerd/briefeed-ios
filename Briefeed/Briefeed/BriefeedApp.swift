@@ -31,28 +31,32 @@ struct BriefeedApp: App {
         
         // Apply dark mode preference early
         applyThemeSettings()
-        
-        // Initialize RSS features (using V2 version)
-        initializeRSSFeatures()
-        
-        // Initialize V2 services asynchronously (no UI freeze!)
-        Task {
-            // Initialize services in background
-            await AudioServiceV2.shared.initialize()
-            // QueueCoordinator initializes automatically with persistence on access
-            _ = await MainActor.run { QueueCoordinator.shared }
-            await ArticleStateManagerV2.shared.initialize()
 
-            // Create default feeds
-            do {
-                try await DefaultDataService.shared.createDefaultFeedsIfNeeded()
-            } catch {
-                print("Failed to create default feeds: \(error)")
+        if AppRuntime.shouldSkipAutomaticStartupWork {
+            print("🧪 Skipping automatic startup services for hosted XCTest")
+        } else {
+            // Initialize RSS features (using V2 version)
+            initializeRSSFeatures()
+
+            // Initialize V2 services asynchronously (no UI freeze!)
+            Task {
+                // Initialize services in background
+                await AudioServiceV2.shared.initialize()
+                // QueueCoordinator initializes automatically with persistence on access
+                _ = await MainActor.run { QueueCoordinator.shared }
+                await ArticleStateManagerV2.shared.initialize()
+
+                // Create default feeds
+                do {
+                    try await DefaultDataService.shared.createDefaultFeedsIfNeeded()
+                } catch {
+                    print("Failed to create default feeds: \(error)")
+                }
+
+                #if DEBUG
+                await SimulatorAudioQueueProbe.runIfRequested(audioPlayerViewModel: audioVM)
+                #endif
             }
-
-            #if DEBUG
-            await SimulatorAudioQueueProbe.runIfRequested(audioPlayerViewModel: audioVM)
-            #endif
         }
         
         print("✅ BriefeedApp initialization complete")
