@@ -6,6 +6,9 @@
 //
 
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 struct ArticleRowView: View {
     let article: Article
@@ -15,61 +18,78 @@ struct ArticleRowView: View {
     @EnvironmentObject var appViewModel: AppViewModel
     @EnvironmentObject var audioPlayerViewModel: AudioPlayerViewModelV2
     @State private var waveformPhase: CGFloat = 0
+    @State private var swipeOffset: CGFloat = 0
+    @State private var activeSwipeTier: SwipeActionTier?
+    @State private var hapticSwipeTier: SwipeActionTier?
 
     private var isArticlePlaying: Bool { appViewModel.isArticlePlaying(article) }
     private var isArticleQueued: Bool { appViewModel.isArticleQueued(article) }
     private var queuePosition: Int? { appViewModel.queuePosition(for: article) }
 
     var body: some View {
-        articleContent
-            .opacity(appViewModel.isArticleArchived(article) ? 0.5 : 1.0)
-            .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                Button {
-                    Task { @MainActor in
-                        await audioPlayerViewModel.play(article: article)
-                    }
-                } label: {
-                    Label("Play Now", systemImage: "play.fill")
-                }
-                .accessibilityIdentifier(AccessibilityID.ArticleRow.playNow)
-                .tint(.blue)
+        ZStack(alignment: .leading) {
+            progressiveSwipeBackground
 
-                Button {
-                    Task { @MainActor in
-                        await audioPlayerViewModel.addToQueue(article, playNext: true)
-                    }
-                } label: {
-                    Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
-                }
-                .accessibilityLabel("Play Next")
-                .accessibilityIdentifier(AccessibilityID.ArticleRow.playNext)
-                .tint(.orange)
-
-                Button {
-                    Task { @MainActor in
-                        await audioPlayerViewModel.addToQueue(article)
-                    }
-                } label: {
-                    Label("Queue", systemImage: "plus")
-                }
-                .accessibilityIdentifier(AccessibilityID.ArticleRow.queue)
-                .tint(.green)
+            articleContent
+                .offset(x: swipeOffset)
+        }
+        .contentShape(Rectangle())
+        .simultaneousGesture(progressiveSwipeGesture)
+        .accessibilityAction(named: "Save") {
+            Task { @MainActor in
+                await performSwipeAction(.save)
             }
-            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                Button(role: .destructive) {
-                    if appViewModel.isArticleArchived(article) {
-                        appViewModel.unarchiveArticle(article)
-                    } else {
-                        appViewModel.archiveArticle(article)
-                    }
-                } label: {
-                    Label("Archive", systemImage: "archivebox")
-                }
+        }
+        .accessibilityAction(named: "Play Next") {
+            Task { @MainActor in
+                await performSwipeAction(.playNext)
             }
-            .animation(.easeInOut(duration: 0.2), value: appViewModel.isArticleArchived(article))
+        }
+        .accessibilityAction(named: "Play Now") {
+            Task { @MainActor in
+                await performSwipeAction(.playNow)
+            }
+        }
+        .accessibilityAction(named: "Queue") {
+            Task { @MainActor in
+                await audioPlayerViewModel.addToQueue(article)
+            }
+        }
+        .opacity(appViewModel.isArticleArchived(article) ? 0.5 : 1.0)
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive) {
+                if appViewModel.isArticleArchived(article) {
+                    appViewModel.unarchiveArticle(article)
+                } else {
+                    appViewModel.archiveArticle(article)
+                }
+            } label: {
+                Label("Archive", systemImage: "archivebox")
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: appViewModel.isArticleArchived(article))
     }
 
     // MARK: - Views
+
+    private var progressiveSwipeBackground: some View {
+        let previewTier = activeSwipeTier ?? (swipeOffset > SwipeMetrics.previewThreshold ? SwipeActionTier.save : nil)
+        let tier = previewTier ?? .save
+        let progress = min(1, max(0, swipeOffset / SwipeMetrics.saveThreshold))
+
+        return HStack(spacing: 10) {
+            Image(systemName: tier.systemImage)
+                .font(.system(size: 18, weight: .bold))
+
+            Text(tier.title)
+                .font(.subheadline.weight(.semibold))
+        }
+        .foregroundStyle(.white)
+        .padding(.leading, Constants.UI.padding)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(tier.color.opacity(swipeOffset > 0 ? 0.92 : 0))
+        .opacity(previewTier == nil ? 0 : progress)
+    }
 
     private var articleContent: some View {
         Button(action: {
@@ -218,11 +238,172 @@ struct ArticleRowView: View {
         .accessibilityIdentifier(AccessibilityID.ArticleRow.row(article.id?.uuidString ?? "unknown"))
     }
 
+    private var progressiveSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 18, coordinateSpace: .local)
+            .onChanged { value in
+                let horizontalDrag = value.translation.width
+                let verticalDrag = abs(value.translation.height)
+
+                guard horizontalDrag > 0, horizontalDrag > verticalDrag else {
+                    return
+                }
+
+                swipeOffset = resistedOffset(for: horizontalDrag)
+                let tier = swipeTier(for: horizontalDrag)
+
+                if tier != activeSwipeTier {
+                    activeSwipeTier = tier
+                    if tier == nil {
+                        hapticSwipeTier = nil
+                    }
+                    if let tier, hapticSwipeTier != tier {
+                        fireThresholdHaptic(for: tier)
+                        hapticSwipeTier = tier
+                    }
+                }
+            }
+            .onEnded { value in
+                let horizontalDrag = max(0, value.translation.width)
+                let tier = swipeTier(for: horizontalDrag)
+
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                    swipeOffset = 0
+                    activeSwipeTier = nil
+                    hapticSwipeTier = nil
+                }
+
+                if let tier {
+                    Task { @MainActor in
+                        await performSwipeAction(tier)
+                    }
+                }
+            }
+    }
+
+    private func resistedOffset(for drag: CGFloat) -> CGFloat {
+        guard drag > SwipeMetrics.playNowThreshold else {
+            return drag
+        }
+
+        let overflow = drag - SwipeMetrics.playNowThreshold
+        return SwipeMetrics.playNowThreshold + min(overflow * 0.28, SwipeMetrics.elasticOverflow)
+    }
+
+    private func swipeTier(for drag: CGFloat) -> SwipeActionTier? {
+        if drag >= SwipeMetrics.playNowThreshold {
+            return .playNow
+        } else if drag >= SwipeMetrics.playNextThreshold {
+            return .playNext
+        } else if drag >= SwipeMetrics.saveThreshold {
+            return .save
+        } else {
+            return nil
+        }
+    }
+
+    @MainActor
+    private func performSwipeAction(_ tier: SwipeActionTier) async {
+        saveArticleIfNeeded()
+
+        switch tier {
+        case .save:
+            break
+        case .playNext:
+            await audioPlayerViewModel.addToQueue(article, playNext: true)
+        case .playNow:
+            await audioPlayerViewModel.play(article: article)
+        }
+    }
+
+    @MainActor
+    private func saveArticleIfNeeded() {
+        guard !article.isSaved else {
+            return
+        }
+
+        article.isSaved = true
+        article.savedAt = Date()
+
+        guard let context = article.managedObjectContext, context.hasChanges else {
+            return
+        }
+
+        do {
+            try context.save()
+        } catch {
+            print("[ArticleRowView] Failed to save article from swipe action: \(error)")
+        }
+    }
+
+    private func fireThresholdHaptic(for tier: SwipeActionTier) {
+        #if os(iOS)
+        let style: UIImpactFeedbackGenerator.FeedbackStyle
+
+        switch tier {
+        case .save:
+            style = .light
+        case .playNext:
+            style = .medium
+        case .playNow:
+            style = .heavy
+        }
+
+        UIImpactFeedbackGenerator(style: style).impactOccurred()
+        #endif
+    }
+
     private func startWaveformAnimation() {
         guard isArticlePlaying && audioPlayerViewModel.isPlaying else { return }
 
         withAnimation(.linear(duration: 0.5).repeatForever(autoreverses: false)) {
             waveformPhase = 1.0
+        }
+    }
+
+    private enum SwipeMetrics {
+        static let previewThreshold: CGFloat = 24
+        static let saveThreshold: CGFloat = 80
+        static let playNextThreshold: CGFloat = 150
+        static let playNowThreshold: CGFloat = 220
+        static let elasticOverflow: CGFloat = 44
+    }
+
+    private enum SwipeActionTier {
+        case save
+        case playNext
+        case playNow
+
+        var title: String {
+            switch self {
+            case .save:
+                return "Save"
+            case .playNext:
+                return "Play Next"
+            case .playNow:
+                return "Play Now"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .save:
+                return "bookmark.fill"
+            case .playNext:
+                return "list.number"
+            case .playNow:
+                return "play.fill"
+            }
+        }
+
+        var color: Color {
+            switch self {
+            case .save:
+                return Color.green.opacity(0.55)
+            case .playNext:
+                return Color.green.opacity(0.72)
+            case .playNow:
+                return Color.green
+            }
         }
     }
 }
