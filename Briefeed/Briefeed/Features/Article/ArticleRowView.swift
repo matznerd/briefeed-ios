@@ -41,6 +41,7 @@ struct ArticleRowView: View {
                 } label: {
                     Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
                 }
+                .accessibilityLabel("Play Next")
                 .accessibilityIdentifier(AccessibilityID.ArticleRow.playNext)
                 .tint(.orange)
 

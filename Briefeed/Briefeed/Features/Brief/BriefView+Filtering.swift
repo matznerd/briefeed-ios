@@ -140,7 +140,9 @@ struct FilteredBriefView: View {
                     }.tint(.blue)
                     Button { playItemNext(item) } label: {
                         Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
-                    }.tint(.orange)
+                    }
+                    .accessibilityLabel("Play Next")
+                    .tint(.orange)
                 }
             }
             .onDelete { indexSet in
