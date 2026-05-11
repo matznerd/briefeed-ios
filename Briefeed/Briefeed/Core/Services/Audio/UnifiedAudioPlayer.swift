@@ -715,10 +715,19 @@ final class UnifiedAudioPlayer: ObservableObject {
             // Auto-remove the listened item
             let _ = queueCoordinator.autoRemoveIfListened(at: finishedIndex)
 
-            // After removal, currentIndex is adjusted by removeItem().
-            // Play whatever is now at the adjusted currentIndex.
-            if currentIndex >= 0 && currentIndex < queue.count {
+            // After removal, sync from QueueCoordinator before deciding what
+            // to play next. The published local queue can still contain the
+            // removed item until the Combine subscription catches up.
+            rebuildQueueFromCoordinator(queueCoordinator.queue)
+            currentIndex = queueCoordinator.currentIndex
+
+            if currentIndex >= 0 && currentIndex < queueCoordinator.queue.count {
                 await play(at: currentIndex)
+            } else {
+                isPlaying = false
+                currentTime = 0
+                duration = 0
+                pendingSeekTime = nil
             }
         }
     }

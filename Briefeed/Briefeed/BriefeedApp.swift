@@ -49,6 +49,10 @@ struct BriefeedApp: App {
             } catch {
                 print("Failed to create default feeds: \(error)")
             }
+
+            #if DEBUG
+            await SimulatorAudioQueueProbe.runIfRequested(audioPlayerViewModel: audioVM)
+            #endif
         }
         
         print("✅ BriefeedApp initialization complete")
