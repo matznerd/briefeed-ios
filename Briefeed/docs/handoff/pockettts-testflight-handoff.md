@@ -168,7 +168,13 @@ Once the App Store Connect app record exists, find the app ID:
 asc apps list --bundle-id Matznerd.Briefeed --output table
 ```
 
-Then upload the clean IPA:
+Then run the guarded upload helper:
+
+```bash
+Briefeed/Scripts/upload-testflight.sh
+```
+
+Or upload the clean IPA directly:
 
 ```bash
 asc builds upload \
