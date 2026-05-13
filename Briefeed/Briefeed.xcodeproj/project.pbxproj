@@ -45,6 +45,9 @@
 		8CC555A32E4A619600D7B3CB /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				Core/Services/Audio/AudioStreamingService.swift.disabled,
+				Core/Services/Audio/OpenAITTSService.swift.backup,
+				Core/Services/Audio/OpenAITTSStreamingService.swift.backup2,
 				Info.plist,
 			);
 			target = 8CA65EE42E075E5C005E6FC0 /* Briefeed */;
