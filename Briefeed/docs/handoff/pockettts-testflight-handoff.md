@@ -2,7 +2,7 @@
 
 Date: 2026-05-13
 Branch: `feature/processing-chamber`
-Latest pushed commit: `377a946`
+Latest pushed commit: `4ade618`
 
 ## What Is Done
 
@@ -145,6 +145,19 @@ Tracking issue:
 
 ```text
 https://github.com/matznerd/briefeed-ios/issues/7
+```
+
+## App Record Fields
+
+Use these fields when creating the missing app record in the official App Store Connect web UI:
+
+```text
+Platform: iOS
+Name: Briefeed
+Primary language / locale: English (U.S.) / en-US
+Bundle ID: Matznerd.Briefeed
+SKU: Matznerd.Briefeed
+Initial version: 0.1.1.1
 ```
 
 ## Upload Command After App Record Exists
