@@ -23,7 +23,7 @@ class MockFluidAudioTTSService: ObservableObject {
 
     var isModelReady: Bool { modelState == .ready }
 
-    func downloadAndInitialize(voice: String = "af_heart") async throws {
+    func downloadAndInitialize(voice: String = "alba") async throws {
         initializeCallCount += 1
         if shouldFail {
             modelState = .failed("Mock initialization error")

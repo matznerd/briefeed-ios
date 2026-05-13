@@ -8,9 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		8C0090FE2F383EE600405E04 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 8C0090FD2F383EE600405E04 /* FluidAudio */; };
-		8C0091002F383EE600405E04 /* FluidAudioTTS in Frameworks */ = {isa = PBXBuildFile; productRef = 8C0090FF2F383EE600405E04 /* FluidAudioTTS */; };
 		8C3D090E2E48490400819F12 /* SwiftAudioEx in Frameworks */ = {isa = PBXBuildFile; productRef = 8C3D090D2E48490400819F12 /* SwiftAudioEx */; };
-		8CC555A82E4AAA1900D7B3CB /* OpenAI in Frameworks */ = {isa = PBXBuildFile; productRef = 8CC555A72E4AAA1900D7B3CB /* OpenAI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -79,9 +77,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				8CC555A82E4AAA1900D7B3CB /* OpenAI in Frameworks */,
 				8C0090FE2F383EE600405E04 /* FluidAudio in Frameworks */,
-				8C0091002F383EE600405E04 /* FluidAudioTTS in Frameworks */,
 				8C3D090E2E48490400819F12 /* SwiftAudioEx in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -217,9 +213,7 @@
 			name = Briefeed;
 			packageProductDependencies = (
 				8C3D090D2E48490400819F12 /* SwiftAudioEx */,
-				8CC555A72E4AAA1900D7B3CB /* OpenAI */,
 				8C0090FD2F383EE600405E04 /* FluidAudio */,
-				8C0090FF2F383EE600405E04 /* FluidAudioTTS */,
 			);
 			productName = Briefeed;
 			productReference = 8CA65EE52E075E5C005E6FC0 /* Briefeed.app */;
@@ -305,7 +299,6 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				8C3D090C2E48490400819F12 /* XCRemoteSwiftPackageReference "SwiftAudioEx" */,
-				8CC555A62E4AAA1900D7B3CB /* XCRemoteSwiftPackageReference "OpenAI#mcp-model-context-protocol" */,
 				8C0090FC2F383EE600405E04 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -699,8 +692,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
 			requirement = {
-				branch = main;
-				kind = branch;
+				kind = exactVersion;
+				version = 0.14.5;
 			};
 		};
 		8C3D090C2E48490400819F12 /* XCRemoteSwiftPackageReference "SwiftAudioEx" */ = {
@@ -711,14 +704,6 @@
 				version = 1.0.0;
 			};
 		};
-		8CC555A62E4AAA1900D7B3CB /* XCRemoteSwiftPackageReference "OpenAI#mcp-model-context-protocol" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/MacPaw/OpenAI#mcp-model-context-protocol";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.4.6;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -727,20 +712,10 @@
 			package = 8C0090FC2F383EE600405E04 /* XCRemoteSwiftPackageReference "FluidAudio" */;
 			productName = FluidAudio;
 		};
-		8C0090FF2F383EE600405E04 /* FluidAudioTTS */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 8C0090FC2F383EE600405E04 /* XCRemoteSwiftPackageReference "FluidAudio" */;
-			productName = FluidAudioTTS;
-		};
 		8C3D090D2E48490400819F12 /* SwiftAudioEx */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 8C3D090C2E48490400819F12 /* XCRemoteSwiftPackageReference "SwiftAudioEx" */;
 			productName = SwiftAudioEx;
-		};
-		8CC555A72E4AAA1900D7B3CB /* OpenAI */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 8CC555A62E4AAA1900D7B3CB /* XCRemoteSwiftPackageReference "OpenAI#mcp-model-context-protocol" */;
-			productName = OpenAI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

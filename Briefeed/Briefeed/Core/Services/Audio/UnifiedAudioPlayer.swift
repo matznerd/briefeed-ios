@@ -976,23 +976,30 @@ final class UnifiedAudioPlayer: ObservableObject {
                 // Yield before heavy TTS generation work
                 await Task.yield()
 
-                // Generate audio file - 4-tier TTS provider chain
+                // Generate audio file - local-first TTS provider chain
                 let ttsStepIdx = pipelineTimer.startStep("tts_generate")
                 var audioURL: URL
 
-                // Tier 1: On-device Kokoro TTS (non-autoregressive, handles any text length)
-                if UserDefaultsManager.shared.preferOnDeviceTTS,
-                   await fluidAudioService.awaitReadyIfCompiling(timeout: 5.0) {
-                    generationPhase = .generatingAudio(provider: "Kokoro (On-Device)")
-                    print("[UnifiedPlayer] Using Kokoro TTS (on-device, \(text.count) chars)")
-                    do {
-                        audioURL = try await fluidAudioService.synthesizeToFile(
-                            text: text,
-                            voice: UserDefaultsManager.shared.fluidAudioVoice,
-                            voiceSpeed: UserDefaultsManager.shared.fluidAudioVoiceSpeed
-                        )
-                    } catch {
-                        print("[UnifiedPlayer] On-device TTS failed: \(error), falling back to cloud TTS")
+                // Tier 1: On-device PocketTTS. First Play Now may download/compile models.
+                if UserDefaultsManager.shared.preferOnDeviceTTS {
+                    generationPhase = .initializingOnDevice
+                    if await fluidAudioService.ensureReadyForPlayback(
+                        voice: UserDefaultsManager.shared.fluidAudioVoice
+                    ) {
+                        generationPhase = .generatingAudio(provider: "PocketTTS (On-Device)")
+                        print("[UnifiedPlayer] Using PocketTTS (on-device, \(text.count) chars)")
+                        do {
+                            audioURL = try await fluidAudioService.synthesizeToFile(
+                                text: text,
+                                voice: UserDefaultsManager.shared.fluidAudioVoice,
+                                voiceSpeed: UserDefaultsManager.shared.fluidAudioVoiceSpeed
+                            )
+                        } catch {
+                            print("[UnifiedPlayer] On-device TTS failed: \(error), falling back to cloud TTS")
+                            audioURL = try await fallbackToCloudTTS(text: text, article: article)
+                        }
+                    } else {
+                        print("[UnifiedPlayer] On-device TTS unavailable, falling back to cloud TTS")
                         audioURL = try await fallbackToCloudTTS(text: text, article: article)
                     }
                 }
@@ -1041,6 +1048,9 @@ final class UnifiedAudioPlayer: ObservableObject {
                 let audioLoadStepIdx = pipelineTimer.startStep("audio_load")
                 item.cachedAudioURL = audioURL
                 item.generationState = .ready
+                if let uuid = UUID(uuidString: item.id) {
+                    queueCoordinator.updateCachedAudioURL(for: uuid, url: audioURL)
+                }
 
                 // Get duration if possible
                 if let player = try? AVAudioPlayer(contentsOf: audioURL) {
@@ -1239,12 +1249,36 @@ final class UnifiedAudioPlayer: ObservableObject {
             text += "Article content not available for text-to-speech."
         }
         
+        let finalText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
         // Ensure we have something meaningful to speak
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).count < 50 {
+        if finalText.count < 50 {
             print("[UnifiedPlayer] Warning: Article text too short (\(text.count) chars)")
         }
-        
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return truncateForBriefing(finalText, maxCharacters: 1_200)
+    }
+
+    private func truncateForBriefing(_ text: String, maxCharacters: Int) -> String {
+        guard text.count > maxCharacters else {
+            return text
+        }
+
+        let truncated = String(text.prefix(maxCharacters))
+        let sentenceEndings = CharacterSet(charactersIn: ".!?")
+
+        if let sentenceBoundary = truncated.rangeOfCharacter(from: sentenceEndings, options: .backwards) {
+            let end = truncated.index(after: sentenceBoundary.lowerBound)
+            let briefing = String(truncated[..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if briefing.count >= 300 {
+                print("[UnifiedPlayer] Truncated TTS briefing from \(text.count) to \(briefing.count) characters")
+                return briefing
+            }
+        }
+
+        let briefing = truncated.trimmingCharacters(in: .whitespacesAndNewlines) + "..."
+        print("[UnifiedPlayer] Truncated TTS briefing from \(text.count) to \(briefing.count) characters")
+        return briefing
     }
     
     // MARK: - Core Data Updates

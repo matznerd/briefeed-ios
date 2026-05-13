@@ -14,12 +14,25 @@ enum Constants {
         static let firecrawlBaseURL = "https://api.firecrawl.dev/v2"
         static let geminiBaseURL = "https://generativelanguage.googleapis.com/v1beta"
         
-        // API Keys are now managed through UserDefaultsManager
+        // API keys are user-overridable via Keychain and may be injected at
+        // archive time for TestFlight builds through Info.plist build settings.
         static var firecrawlAPIKey: String? {
-            UserDefaultsManager.shared.firecrawlAPIKey
+            UserDefaultsManager.shared.firecrawlAPIKey ?? bundledSecret(named: "FirecrawlAPIKey")
         }
         static var geminiAPIKey: String? {
-            UserDefaultsManager.shared.geminiAPIKey
+            UserDefaultsManager.shared.geminiAPIKey ?? bundledSecret(named: "GeminiAPIKey")
+        }
+
+        private static func bundledSecret(named key: String) -> String? {
+            guard let rawValue = Bundle.main.object(forInfoDictionaryKey: key) as? String else {
+                return nil
+            }
+
+            let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty, !value.contains("$(") else {
+                return nil
+            }
+            return value
         }
         
         static let defaultTimeout: TimeInterval = 30

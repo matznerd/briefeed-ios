@@ -235,7 +235,7 @@ class UserDefaultsManager: ObservableObject {
 
     @Published var fluidAudioVoice: String = FluidAudioVoice.defaultVoice.rawValue {
         didSet {
-            // Map unrecognized legacy voices (e.g. "alba") to Kokoro default
+            // Map unrecognized legacy voices (for example Kokoro af_* voices) to PocketTTS default.
             let resolved = FluidAudioVoice(rawValue: fluidAudioVoice) != nil
                 ? fluidAudioVoice
                 : FluidAudioVoice.defaultVoice.rawValue

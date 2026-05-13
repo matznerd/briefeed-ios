@@ -2,7 +2,7 @@
 //  OnDeviceTTSSettingsView.swift
 //  Briefeed
 //
-//  Settings for on-device TTS using FluidAudio Kokoro TTS
+//  Settings for on-device TTS using FluidAudio PocketTTS
 //
 
 import SwiftUI
@@ -44,7 +44,7 @@ struct OnDeviceTTSSettingsView: View {
                     }
                     .accessibilityIdentifier(AccessibilityID.Settings.downloadOnDeviceModels)
 
-                    Text("~601 MB download. Models run entirely on-device after download.")
+                    Text("~550 MB download. Models run entirely on-device after download.")
                         .font(.caption)
                         .foregroundColor(.secondary)
 
@@ -124,7 +124,7 @@ struct OnDeviceTTSSettingsView: View {
                 } header: {
                     Label("Voice Settings", systemImage: "person.wave.2")
                 } footer: {
-                    Text("When enabled, on-device Kokoro TTS is used as the primary engine. Cloud TTS is used as fallback.")
+                    Text("When enabled, on-device PocketTTS is used as the primary engine. Cloud TTS is used as fallback.")
                 }
             }
 
@@ -193,8 +193,8 @@ struct OnDeviceTTSSettingsView: View {
             // MARK: - Comparison Section
             Section {
                 TTSComparisonRow(
-                    label: "On-Device (Kokoro TTS)",
-                    latency: "~2-5s",
+                    label: "On-Device (PocketTTS)",
+                    latency: "Local",
                     cost: "Free",
                     network: "Offline",
                     highlight: true

@@ -263,7 +263,6 @@ class GeminiService: GeminiServiceProtocol {
             
             print("[GeminiService] Successfully generated summary: \(text.count) characters")
             print("[GeminiService] Summary preview: \(text.prefix(500))...")
-            print("[GeminiService] Full summary for quality check:\n\(text)")
             
             return text.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
@@ -547,8 +546,19 @@ class GeminiService: GeminiServiceProtocol {
     }
     
     private func createSummarizationPrompt(text: String, length: Constants.Summary.Length) -> String {
-        // Simplified prompt to reduce token usage
-        let wordCount = length == .brief ? "100-150" : length == .standard ? "200-300" : "400-500"
+        let wordCount: String
+        let maxSentences: String
+        switch length {
+        case .brief:
+            wordCount = "70-100"
+            maxSentences = "5"
+        case .standard:
+            wordCount = "120-180"
+            maxSentences = "8"
+        case .detailed:
+            wordCount = "220-300"
+            maxSentences = "12"
+        }
 
         print("[GeminiService] Creating summary prompt for \(text.count) characters of content")
 
@@ -556,12 +566,14 @@ class GeminiService: GeminiServiceProtocol {
         // No additional truncation here to avoid double truncation
 
         return """
-        Summarize this article in \(wordCount) words. Focus on the key facts: who, what, when, where, why, and any important numbers. Write in simple, clear sentences suitable for audio playback. Do NOT include the article title in your summary - start directly with the main content.
+        Create a concise spoken news briefing from this article in \(wordCount) words, with no more than \(maxSentences) sentences.
+
+        Focus on the key facts: who, what, when, where, why, and any important numbers. Use plain radio-host language that can be read aloud immediately. Do not add external facts, intro phrases, bullets, markdown, or the article title. Start directly with the main content.
 
         Article:
         \(text)
 
-        Summary:
+        Spoken briefing:
         """
     }
     
