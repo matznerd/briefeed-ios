@@ -4,6 +4,10 @@ import Testing
 
 @Suite("Radio runtime")
 struct RadioRuntimeTests {
+    private enum StoreRemovalError: Error {
+        case denied
+    }
+
     @Test func fixtureArgumentsSelectScenarioAndIsolatedStore() {
         let runtime = AppRuntime.Configuration(
             arguments: ["Briefeed", "-briefeed-radio-fixture", "partial"],
@@ -54,5 +58,31 @@ struct RadioRuntimeTests {
         let reset = PersistenceController(storeURL: storeURL, resetStore: true)
         let request = Feed.fetchRequest()
         #expect(try reset.container.viewContext.count(for: request) == 0)
+    }
+
+    @Test func resetStoreIgnoresMissingStoreAndSidecars() throws {
+        var removedURLs: [URL] = []
+        let storeURL = URL(fileURLWithPath: "/tmp/Briefeed-RadioRuntime.sqlite")
+
+        try PersistenceController.removeStoreFiles(at: storeURL) { url in
+            removedURLs.append(url)
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileNoSuchFileError)
+        }
+
+        #expect(removedURLs == [
+            storeURL,
+            URL(fileURLWithPath: storeURL.path + "-wal"),
+            URL(fileURLWithPath: storeURL.path + "-shm")
+        ])
+    }
+
+    @Test func resetStorePropagatesNonMissingRemovalErrors() {
+        let storeURL = URL(fileURLWithPath: "/tmp/Briefeed-RadioRuntime.sqlite")
+
+        #expect(throws: StoreRemovalError.self) {
+            try PersistenceController.removeStoreFiles(at: storeURL) { _ in
+                throw StoreRemovalError.denied
+            }
+        }
     }
 }

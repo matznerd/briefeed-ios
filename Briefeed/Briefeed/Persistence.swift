@@ -88,7 +88,11 @@ struct PersistenceController {
         } else if let storeURL {
             container.persistentStoreDescriptions.first!.url = storeURL
             if resetStore {
-                Self.removeStoreFiles(at: storeURL)
+                do {
+                    try Self.removeStoreFiles(at: storeURL)
+                } catch {
+                    fatalError("Could not reset Core Data store: \(error)")
+                }
             }
         }
 
@@ -112,7 +116,7 @@ struct PersistenceController {
                 if let storeURL = container.persistentStoreDescriptions.first?.url {
                     do {
                         // Remove the existing store
-                        Self.removeStoreFiles(at: storeURL)
+                        try Self.removeStoreFiles(at: storeURL)
                         
                         print("✅ Removed old store, recreating...")
                         
@@ -164,13 +168,24 @@ struct PersistenceController {
         description.setOption(true as NSNumber, forKey: NSInferMappingModelAutomaticallyOption)
     }
 
-    private static func removeStoreFiles(at storeURL: URL) {
+    static func removeStoreFiles(
+        at storeURL: URL,
+        removing: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }
+    ) throws {
         for url in [
             storeURL,
             URL(fileURLWithPath: storeURL.path + "-wal"),
             URL(fileURLWithPath: storeURL.path + "-shm")
         ] {
-            try? FileManager.default.removeItem(at: url)
+            do {
+                try removing(url)
+            } catch {
+                let nsError = error as NSError
+                guard nsError.domain == NSCocoaErrorDomain,
+                      nsError.code == NSFileNoSuchFileError else {
+                    throw error
+                }
+            }
         }
     }
 }
