@@ -32,6 +32,16 @@ enum AccessibilityID {
         static let sourceDetail = "radio.sourceDetail"
         static let sourceDetails = "radio.sourceDetails"
         static let sourceFailures = "radio.sourceFailures"
+        static let playlist = "radio.playlist"
+        static func episode(_ key: RadioEpisodeKey) -> String {
+            "radio.episode.\(key.feedID).\(key.episodeID)"
+        }
+        static func episodeTitle(_ key: RadioEpisodeKey) -> String {
+            "radio.episodeTitle.\(key.feedID).\(key.episodeID)"
+        }
+        static func episodeState(_ key: RadioEpisodeKey) -> String {
+            "radio.episodeState.\(key.feedID).\(key.episodeID)"
+        }
         static let fixtureDiagnostics = "radio.fixtureDiagnostics"
     }
 

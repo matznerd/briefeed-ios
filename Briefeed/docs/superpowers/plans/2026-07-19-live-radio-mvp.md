@@ -12,6 +12,20 @@
 > CoreSimulator audio limitation are recorded in
 > [`docs/release/LIVE-RADIO-DISTRIBUTION-RECEIPT.md`](../../release/LIVE-RADIO-DISTRIBUTION-RECEIPT.md).
 
+> **Post-phone verification work:** Physical inspection added a bounded
+> hardening pass: persisted-order Radio rows followed by source-ordered latest
+> supplemental episodes, visible
+> partial/listened state, source management removed from the normal home list,
+> a shorter mini-player whose material reaches the phone bottom, removal of the
+> duplicate iOS 26 Settings boundary, and an active-scene gate for production
+> cold-launch autoplay. Its focused lifecycle and presentation suites, expanded
+> 16-test Radio UI suite, final headless smoke, and direct screenshot inspection
+> pass. The exact amended build is installed and launched on the approved
+> iPhone; audible autoplay/resume, remote controls, and sleep-under-lock remain
+> owner-observed gates. The broader visual matrix remains GitHub #15. Podcast
+> ad detection is tracked independently in
+> [`docs/research/2026-07-20-podcast-ad-skip-spike.md`](../../research/2026-07-20-podcast-ad-skip-spike.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship a distribution-candidate iOS build whose default Radio tab restores and deterministically advances a persisted source-ordered podcast session, supports opt-in cold-launch autoplay, 10-second transport controls, persisted speed, sleep timing, accessible compact navigation, and reliable background and remote playback without depending on Reddit or article generation.

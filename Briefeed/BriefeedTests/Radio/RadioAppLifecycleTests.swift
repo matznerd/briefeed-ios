@@ -11,6 +11,7 @@ struct RadioAppLifecycleTests {
     @Test func coldLaunchRestoresBeforeItsSingleInitialRefresh() async {
         let monitor = LifecycleConnectivityMonitor(.online)
         var events: [String] = []
+        var prepareCount = 0
         var sleepCalls: [TimeInterval] = []
         let driver = makeDriver(monitor: monitor, sleep: { seconds in
             sleepCalls.append(seconds)
@@ -29,11 +30,13 @@ struct RadioAppLifecycleTests {
         )
 
         await driver.startColdLaunch(
+            prepare: { prepareCount += 1 },
             restore: { _ in events.append("restored"); return nil },
             initialRefresh: initial,
             foregroundRefresh: foreground
         )
         await driver.startColdLaunch(
+            prepare: { prepareCount += 1 },
             restore: { _ in events.append("restored-again"); return nil },
             initialRefresh: initial,
             foregroundRefresh: foreground
@@ -41,6 +44,7 @@ struct RadioAppLifecycleTests {
         await settle()
 
         #expect(events == ["restored", "initial-began", "initial-loaded", "initial-applied"])
+        #expect(prepareCount == 1)
         #expect(sleepCalls == [900])
     }
 
@@ -229,6 +233,35 @@ struct RadioAppLifecycleTests {
         #expect(restoreAutoplayValues == [false])
         #expect(initialCount == 0)
         #expect(foregroundCount == 1)
+    }
+
+    @Test func transientInactiveBeforeFirstActivePreservesColdLaunchAutoplay() async {
+        let monitor = LifecycleConnectivityMonitor(.online)
+        var restoreAutoplayValues: [Bool] = []
+        let driver = makeDriver(monitor: monitor)
+
+        // iOS may report inactive while a cold launch is still transitioning
+        // to its first active scene. That is not a backgrounding event.
+        driver.handleScenePhase(.inactive)
+        driver.handleScenePhase(.active)
+
+        await driver.startColdLaunch(
+            restore: { autoplayAllowed in
+                restoreAutoplayValues.append(autoplayAllowed)
+                return nil
+            },
+            initialRefresh: refreshWork(load: { self.emptyRefresh }),
+            foregroundRefresh: refreshWork(load: { self.emptyRefresh })
+        )
+        await settle()
+
+        #expect(restoreAutoplayValues == [true])
+    }
+
+    @Test func coldLaunchServicesStartOnlyForAnActiveScene() {
+        #expect(!RadioStartupPolicy.shouldStartServices(for: .inactive))
+        #expect(!RadioStartupPolicy.shouldStartServices(for: .background))
+        #expect(RadioStartupPolicy.shouldStartServices(for: .active))
     }
 
     @Test func activeReturnBeforeStaleRestoreCompletesUsesOnlyForegroundRefreshAndOnePoll() async {

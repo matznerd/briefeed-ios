@@ -97,7 +97,9 @@ struct BriefeedApp: App {
                     await appViewModel.connect()
 
                     handleScenePhase(scenePhase)
-                    await startRadioServices()
+                    if RadioStartupPolicy.shouldStartServices(for: scenePhase) {
+                        await startRadioServices()
+                    }
                     await AudioServiceV2.shared.initialize()
                     _ = QueueCoordinator.shared
                     await ArticleStateManagerV2.shared.initialize()
@@ -128,6 +130,7 @@ struct BriefeedApp: App {
                     handleScenePhase(newPhase)
                     if newPhase == .active {
                         UnifiedAudioPlayer.shared.handleAppForeground()
+                        Task { await startRadioServices() }
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in

@@ -221,6 +221,8 @@ enum PlayerPresentationFormat {
 }
 
 struct MiniAudioPlayerV4: View {
+    var bottomDocked = false
+
     @EnvironmentObject private var viewModel: AudioPlayerViewModelV2
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -241,7 +243,16 @@ struct MiniAudioPlayerV4: View {
         }
         .background(playerBackground)
         .overlay(playerBoundary)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(playerShape)
+        .background(alignment: .bottom) {
+            if bottomDocked {
+                Rectangle()
+                    .fill(playerBackground)
+                    .frame(height: 64)
+                    .offset(y: 64)
+                    .ignoresSafeArea(edges: .bottom)
+            }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(AccessibilityID.MiniPlayer.container)
         .sheet(isPresented: $showTranscript) {
@@ -262,29 +273,42 @@ struct MiniAudioPlayerV4: View {
             VStack(alignment: .trailing, spacing: 4) {
                 metadata
                 transportCluster
+                PlayerScrubber(
+                    position: viewModel.playerPresentation.position,
+                    duration: viewModel.playerPresentation.duration,
+                    identifier: AccessibilityID.MiniPlayer.scrubber,
+                    onSeek: viewModel.seek(to:)
+                )
+                compactMenus
             }
             .padding(.horizontal, 10)
-            .padding(.top, 6)
+            .padding(.top, 4)
         } else {
-            HStack(spacing: 8) {
-                metadata
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .layoutPriority(0)
-                transportCluster
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(2)
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    metadata
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .layoutPriority(0)
+                    transportCluster
+                        .fixedSize(horizontal: true, vertical: false)
+                        .layoutPriority(2)
+                }
+
+                HStack(spacing: 4) {
+                    compactMenus
+                        .fixedSize(horizontal: true, vertical: false)
+                    PlayerScrubber(
+                        position: viewModel.playerPresentation.position,
+                        duration: viewModel.playerPresentation.duration,
+                        identifier: AccessibilityID.MiniPlayer.scrubber,
+                        onSeek: viewModel.seek(to:)
+                    )
+                    .frame(minWidth: 0, maxWidth: .infinity)
+                }
             }
             .padding(.horizontal, 10)
-            .padding(.top, 6)
+            .padding(.top, 4)
         }
-
-        PlayerScrubber(
-            position: viewModel.playerPresentation.position,
-            duration: viewModel.playerPresentation.duration,
-            identifier: AccessibilityID.MiniPlayer.scrubber,
-            onSeek: viewModel.seek(to:)
-        )
-        .padding(.horizontal, 10)
     }
 
     private var caughtUpContent: some View {
@@ -375,35 +399,39 @@ struct MiniAudioPlayerV4: View {
                         showExpandedPlayer = true
                     }
                 } label: {
-                    Text(viewModel.playerPresentation.title)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .frame(minHeight: 44)
-                        .contentShape(Rectangle())
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(viewModel.playerPresentation.title)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+
+                        Text(metadataSubtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .accessibilityIdentifier(AccessibilityID.MiniPlayer.source)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier(AccessibilityID.MiniPlayer.title)
-
-                Text(metadataSubtitle)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .accessibilityIdentifier(AccessibilityID.MiniPlayer.source)
-
-                HStack(spacing: 2) {
-                    PlayerSpeedMenu(viewModel: viewModel, compact: true)
-                    if viewModel.playerPresentation.showsSleep {
-                        RadioSleepMenu(viewModel: viewModel, compact: true)
-                    }
-                }
             }
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         }
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var compactMenus: some View {
+        HStack(spacing: 2) {
+            PlayerSpeedMenu(viewModel: viewModel, compact: true)
+            if viewModel.playerPresentation.showsSleep {
+                RadioSleepMenu(viewModel: viewModel, compact: true)
+            }
+        }
     }
 
     private var transportCluster: some View {
@@ -526,12 +554,26 @@ struct MiniAudioPlayerV4: View {
             : AnyShapeStyle(.regularMaterial)
     }
 
+    private var playerShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: 8,
+            bottomLeadingRadius: bottomDocked ? 0 : 8,
+            bottomTrailingRadius: bottomDocked ? 0 : 8,
+            topTrailingRadius: 8,
+            style: .continuous
+        )
+    }
+
     private var playerBoundary: some View {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .stroke(
-                Color.primary.opacity(colorSchemeContrast == .increased ? 0.4 : 0.12),
-                lineWidth: colorSchemeContrast == .increased ? 1.5 : 0.5
-            )
+        Group {
+            if !bottomDocked {
+                playerShape
+                    .stroke(
+                        Color.primary.opacity(colorSchemeContrast == .increased ? 0.4 : 0.12),
+                        lineWidth: colorSchemeContrast == .increased ? 1.5 : 0.5
+                    )
+            }
+        }
     }
 }
 

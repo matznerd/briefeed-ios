@@ -5,15 +5,19 @@ struct AppBottomChrome: View {
     let showsMiniPlayer: Bool
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 2) {
             RadioTabRail(selection: $selection)
 
             if showsMiniPlayer {
-                MiniAudioPlayerV4()
+                MiniAudioPlayerV4(bottomDocked: true)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .padding(.top, 6)
+        .padding(.top, 2)
+        .background {
+            Color(uiColor: .systemBackground)
+                .ignoresSafeArea(edges: .bottom)
+        }
         .animation(.easeInOut(duration: 0.2), value: showsMiniPlayer)
     }
 }

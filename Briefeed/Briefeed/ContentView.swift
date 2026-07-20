@@ -101,7 +101,6 @@ private struct AppSettingsButton: View {
         if #available(iOS 26.0, *), !reduceTransparency {
             settingsButton
                 .buttonStyle(.glass)
-                .overlay(settingsBoundary)
         } else {
             settingsButton
                 .buttonStyle(.plain)

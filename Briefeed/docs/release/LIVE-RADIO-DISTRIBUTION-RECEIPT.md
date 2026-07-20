@@ -7,22 +7,63 @@ Verified implementation commit: `12ec494`
 Verification tooling commit: `fa3a890`
 Status: **focused simulator verification complete; development build installed on the approved local phone; physical functional gate open; public distribution blocked**
 
+## Post-Install Physical Findings
+
+The first phone screenshot from the installed `9621d1f` development build
+confirmed that NPR playback works, but exposed presentation and launch issues:
+
+- Radio Home showed current/status/source-administration cards rather than the
+  expected descending persisted-order episode playlist with latest-source
+  supplemental rows.
+- The mini-player stopped above the home-indicator region, stacked speed/sleep
+  well above its scrubber, and consumed too much vertical space.
+- The glass Settings control also drew an explicit second circle.
+- The phone's persisted `autoPlayLiveNewsOnOpen` value was confirmed `true`, so
+  failure to autoplay was not user configuration. Production startup could
+  consume its cold-launch opportunity during the transient initial inactive
+  scene, while the fixture test bypassed the production lifecycle driver.
+
+The bounded hardening amendment is implemented and simulator-verified on this
+branch. The shared simulator fleet correctly refused work while host pressure
+was critical; no override or foreign simulator use was attempted. After the
+fleet admitted the owned lane, the focused lifecycle suite passed 13/13, the
+Radio Home presentation suite passed 10/10, and the expanded Radio UI suite
+passed 16/16. The final headless smoke also passed after the exact safe-area
+drawing change.
+
+Visual inspection was not inferred from geometry assertions alone. The first
+post-fix screenshot showed that the player frame reached the app bottom while
+its material still left the home-indicator region unpainted. The background was
+then extended through the bottom safe area and the final screenshot at
+`/tmp/briefeed-radio-live-radio-mvp-final-derived-data/RadioSmokeEvidence/20260720T202539Z/radio-partial.png`
+was inspected directly. It shows the playlist, compact player, single Settings
+boundary, unobscured rail, and material continuing through the home indicator.
+Visual size/appearance matrix follow-up remains GitHub #15.
+
+The exact amended app also built successfully for the approved iPhone 13 Pro,
+was installed over the prior development build, and launched. This proves the
+new build, signing, installation, and launch; the owner is now running the
+functional checks. Audible cold-launch autoplay, persisted physical resume,
+Lock Screen/Control Center commands, and sleep-under-lock remain human-observed
+gates rather than simulator claims.
+
 ## Gate Summary
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| Build for testing | PASS | `make radio-compile`; `/tmp/briefeed-live-radio-12ec494-compile.log`; `** TEST BUILD SUCCEEDED **` |
+| Build for testing | PASS | Hardening compile: `/tmp/briefeed-radio-phone-hardening-compile-2.log`; `** TEST BUILD SUCCEEDED **` |
 | Adapter safety regression | PASS | `bash skills/app-testing/scripts/run-radio-selftest.sh`; `/tmp/briefeed-live-radio-adapter-lock-selftest.log`; covers fresh claims, stale-ownerless recovery, delayed fresh-ownerless preservation, and critical-pressure refusal |
 | Deterministic Radio unit suites | PASS | Exact-commit suites: restore 17/17, lifecycle 11/11, empty state 4/4, RSS refresh 8/8, Unified playback 11/11, playback state 30/30 |
-| Radio UI suite | PASS | `/tmp/briefeed-live-radio-12ec494-ui.log`; 15/15 tests in 226.6 seconds |
-| Headless Radio smoke behavior | PASS | `RadioUITests.testHeadlessRadioSmoke` passed inside the complete UI suite |
-| Standalone smoke evidence bundle | NOT RUN | An earlier attempt was refused at critical pressure; pressure later recovered for focused/UI suites, but the separate script was not retried and no screenshot receipt was created |
+| Post-phone hardening units | PASS | `/tmp/briefeed-radio-phone-hardening-lifecycle.log`, 13/13; `/tmp/briefeed-radio-phone-hardening-presentation.log`, 10/10 |
+| Radio UI suite | PASS | `/tmp/briefeed-radio-phone-hardening-ui-2.log`; expanded suite 16/16 in 266.2 seconds |
+| Headless Radio smoke behavior | PASS | `/tmp/briefeed-radio-phone-hardening-smoke-2.log`; final exact-code smoke 1/1 |
+| Standalone smoke evidence bundle | PASS | Receipt and screenshot under `/tmp/briefeed-radio-live-radio-mvp-final-derived-data/RadioSmokeEvidence/20260720T202539Z/`; final screenshot visually inspected |
 | Focused Brief regression | PASS ON PRIOR BASELINE | `/tmp/briefeed-live-radio-final-brief-selectors.log`; MiniPlayer navigation 13/13 plus focused isolation/state selectors passed at `b3950b9`; not rerun after the scoped Radio/RSS repairs in `12ec494` |
 | Analyze | PASS | `/tmp/briefeed-live-radio-12ec494-analyze.log`; `** ANALYZE SUCCEEDED **` |
-| Physical-device checklist | STARTED - INSTALL ONLY | Owner-approved iPhone 13 Pro on iOS 26.5.2 received and launched the development build; no functional rows were run |
+| Physical-device checklist | IN PROGRESS | Exact hardening build succeeded, installed, and launched on owner-approved iPhone 13 Pro / iOS 26.5.2; owner is running audible/lifecycle/remote-control checks |
 | Signed archive/export | PASS | `/tmp/Briefeed-Live-Radio-12ec494.xcarchive`; `/tmp/Briefeed-Live-Radio-12ec494-export/Briefeed.ipa`; code-sign verification passed |
 | Packaged credential audit | BLOCKED | Exported IPA contains nonempty Firecrawl and Gemini values. Do not upload or share it. Remediation is tracked in GitHub #16 |
-| Visual size/appearance matrix | NOT RUN | One iPhone 15 Pro / iOS 18.6 runtime verified; follow-up GitHub #15 |
+| Visual size/appearance matrix | PARTIAL | Final iPhone 15 Pro / iOS 18.6 screenshot inspected; small/large phone, iPad, Dynamic Type, dark-mode, and physical iOS 26 matrix remain GitHub #15 |
 | App Store Connect upload | BLOCKED / NOT ATTEMPTED | No app record for `Matznerd.Briefeed`; GitHub #7 |
 
 ## Simulator Identity and Safety
@@ -32,7 +73,8 @@ Status: **focused simulator verification complete; development build installed o
 - Device/runtime: iPhone 15 Pro, iOS 18.6
 - Mode: headless; `Simulator.app` was not opened
 - No foreign simulator was borrowed, shut down, erased, or modified.
-- The owned simulator remains warm as required by the shared fleet contract.
+- The owned simulator was shut down under its use lock after verification when
+  the fleet again reported critical pressure; no foreign simulator was touched.
 
 The first fresh-lane attempt exposed an adapter defect: `run-radio.sh` exited
 under `set -e` when its state file did not exist. The original trace is
@@ -185,12 +227,16 @@ correct Gemini TTS model remains
 
 The owner explicitly selected `Eric's iPhone (2)`, an available paired iPhone
 13 Pro on iOS 26.5.2 with identifier
-`2E288699-F8E0-5B18-A2D9-DE8B1384C33A`. A Debug device build from repository
-HEAD `9621d1f` was signed with Apple Development, installed, and launched
-successfully. Its process remained alive after a follow-up check. This proves
-only build, signing, installation, and launch. See
-`LIVE-RADIO-DEVICE-CHECKLIST.md`; every functional, audio, lifecycle, route,
-and isolation row remains open.
+`2E288699-F8E0-5B18-A2D9-DE8B1384C33A`. The first Debug install came from
+repository HEAD `9621d1f`. After its screenshot exposed the hardening findings,
+the exact amended worktree built successfully for the same device, was signed
+with Apple Development, installed over the prior build, and launched. Evidence:
+`/tmp/briefeed-radio-phone-hardening-device-build.log`,
+`/tmp/briefeed-radio-phone-hardening-device-install.log`, and
+`/tmp/briefeed-radio-phone-hardening-device-launch.log`. This proves build,
+signing, installation, and launch. See `LIVE-RADIO-DEVICE-CHECKLIST.md`; the
+owner is now running the functional, audio, lifecycle, route, and isolation
+rows.
 
 ## Distribution Decision
 

@@ -13,6 +13,55 @@ struct RadioEpisodeCandidate: Equatable, Sendable {
     let isCompleted: Bool
     let sourcePriority: Int
     let sourceFrequency: RSSUpdateFrequencyValue
+
+    @MainActor
+    init?(episode: RSSEpisode) {
+        guard let feed = episode.feed, feed.isEnabled,
+              let originalURL = URL(string: episode.audioUrl),
+              let canonicalURL = try? RSSEpisodeIdentity.canonicalEnclosureURL(episode.audioUrl) else {
+            return nil
+        }
+        let duration = episode.duration > 0 ? TimeInterval(episode.duration) : nil
+        self.init(
+            key: RadioEpisodeKey(feedID: episode.feedId, episodeID: episode.id),
+            originalPlaybackURL: originalURL,
+            canonicalEnclosureURL: canonicalURL,
+            title: episode.title,
+            sourceName: feed.displayName,
+            publicationDate: episode.pubDate,
+            durationSeconds: duration,
+            normalizedCoreDataProgress: episode.lastPosition,
+            isCompleted: episode.isListened,
+            sourcePriority: Int(feed.priority),
+            sourceFrequency: feed.updateFrequencyEnum == .hourly ? .hourly : .daily
+        )
+    }
+
+    init(
+        key: RadioEpisodeKey,
+        originalPlaybackURL: URL,
+        canonicalEnclosureURL: String,
+        title: String,
+        sourceName: String,
+        publicationDate: Date,
+        durationSeconds: TimeInterval?,
+        normalizedCoreDataProgress: Double,
+        isCompleted: Bool,
+        sourcePriority: Int,
+        sourceFrequency: RSSUpdateFrequencyValue
+    ) {
+        self.key = key
+        self.originalPlaybackURL = originalPlaybackURL
+        self.canonicalEnclosureURL = canonicalEnclosureURL
+        self.title = title
+        self.sourceName = sourceName
+        self.publicationDate = publicationDate
+        self.durationSeconds = durationSeconds
+        self.normalizedCoreDataProgress = normalizedCoreDataProgress
+        self.isCompleted = isCompleted
+        self.sourcePriority = sourcePriority
+        self.sourceFrequency = sourceFrequency
+    }
 }
 
 @MainActor
@@ -36,11 +85,11 @@ final class CoreDataRadioEpisodeRepository: RadioEpisodeRepository {
     func candidates() throws -> [RadioEpisodeCandidate] {
         let request: NSFetchRequest<RSSEpisode> = RSSEpisode.fetchRequest()
         request.predicate = NSPredicate(format: "feed.isEnabled == YES")
-        return try context.fetch(request).compactMap(makeCandidate)
+        return try context.fetch(request).compactMap(RadioEpisodeCandidate.init(episode:))
     }
 
     func candidate(for key: RadioEpisodeKey) throws -> RadioEpisodeCandidate? {
-        try episode(for: key).flatMap(makeCandidate)
+        try episode(for: key).flatMap { RadioEpisodeCandidate(episode: $0) }
     }
 
     func saveProgress(key: RadioEpisodeKey, seconds: TimeInterval, duration: TimeInterval?) throws {
@@ -76,23 +125,4 @@ final class CoreDataRadioEpisodeRepository: RadioEpisodeRepository {
         return try context.fetch(request).first
     }
 
-    private func makeCandidate(_ episode: RSSEpisode) -> RadioEpisodeCandidate? {
-        guard let feed = episode.feed, feed.isEnabled,
-              let originalURL = URL(string: episode.audioUrl),
-              let canonicalURL = try? RSSEpisodeIdentity.canonicalEnclosureURL(episode.audioUrl) else { return nil }
-        let duration = episode.duration > 0 ? TimeInterval(episode.duration) : nil
-        return RadioEpisodeCandidate(
-            key: RadioEpisodeKey(feedID: episode.feedId, episodeID: episode.id),
-            originalPlaybackURL: originalURL,
-            canonicalEnclosureURL: canonicalURL,
-            title: episode.title,
-            sourceName: feed.displayName,
-            publicationDate: episode.pubDate,
-            durationSeconds: duration,
-            normalizedCoreDataProgress: episode.lastPosition,
-            isCompleted: episode.isListened,
-            sourcePriority: Int(feed.priority),
-            sourceFrequency: feed.updateFrequencyEnum == .hourly ? .hourly : .daily
-        )
-    }
 }

@@ -96,7 +96,12 @@ final class RadioUITests: XCTestCase {
     @MainActor
     func testRadioSourceManagementPreservesDetailsAndDeleteAffordances() throws {
         app.launch()
-        app.buttons["radio.manageSources"].tap()
+        app.buttons["navigation.settings"].tap()
+        let sourceSettings = app.buttons["settings.feedOrder"]
+        for _ in 0..<4 where !sourceSettings.exists {
+            app.swipeUp()
+        }
+        sourceSettings.tap()
         XCTAssertTrue(app.navigationBars["Radio Sources"].waitForExistence(timeout: 3))
 
         let source = app.buttons["radio.sourceDetail"].firstMatch
@@ -138,6 +143,38 @@ final class RadioUITests: XCTestCase {
         XCTAssertTrue(scrubber.waitForExistence(timeout: 3))
         XCTAssertGreaterThanOrEqual(scrubber.frame.height, 44)
         XCTAssertFalse(scrubber.value as? String == nil)
+        XCTAssertLessThanOrEqual(
+            abs(app.buttons["miniPlayer.speed"].frame.midY - scrubber.frame.midY),
+            8,
+            "Speed, sleep, and scrubbing should share the compact lower control row"
+        )
+        XCTAssertLessThanOrEqual(
+            player.frame.height,
+            130,
+            "The compact controls plus the home-indicator safe area should remain short"
+        )
+        XCTAssertGreaterThanOrEqual(
+            player.frame.maxY,
+            app.frame.maxY - 1,
+            "The player material should continue through the bottom safe area"
+        )
+
+        let rail = app.otherElements["navigation.rail"]
+        XCTAssertTrue(rail.waitForExistence(timeout: 3))
+        XCTAssertLessThanOrEqual(rail.frame.maxY, player.frame.minY + 1)
+    }
+
+    @MainActor
+    func testRadioHomeIsAVisiblePersistedOrderPlaylist() throws {
+        app.launch()
+
+        let npr = app.staticTexts["radio.episodeTitle.fixture-npr.fixture-partial"]
+        let bbc = app.staticTexts["radio.episodeTitle.fixture-bbc.fixture-fresh"]
+        XCTAssertTrue(npr.waitForExistence(timeout: 5))
+        XCTAssertTrue(bbc.waitForExistence(timeout: 5))
+        XCTAssertLessThan(npr.frame.minY, bbc.frame.minY)
+        XCTAssertTrue(app.staticTexts["20% listened"].exists)
+        XCTAssertFalse(app.buttons["radio.manageSources"].exists)
     }
 
     @MainActor
@@ -203,13 +240,15 @@ final class RadioUITests: XCTestCase {
     @MainActor
     func testCompletedEpisodeDoesNotReplayAfterSameHourRelaunch() throws {
         app = launchFixture("partial", reset: true, completeCurrent: true)
-        XCTAssertTrue(app.staticTexts["World Service Brief"].waitForExistence(timeout: 15))
-        XCTAssertFalse(app.staticTexts["Morning Update"].exists)
+        XCTAssertTrue(waitForMiniPlayerTitle("World Service Brief", timeout: 15))
+        XCTAssertTrue(app.staticTexts["Morning Update"].exists)
+        XCTAssertTrue(app.staticTexts["Listened"].exists)
 
         app.terminate()
         app = launchFixture("partial", reset: false)
-        XCTAssertTrue(app.staticTexts["World Service Brief"].waitForExistence(timeout: 15))
-        XCTAssertFalse(app.staticTexts["Morning Update"].exists)
+        XCTAssertTrue(waitForMiniPlayerTitle("World Service Brief", timeout: 15))
+        XCTAssertTrue(app.staticTexts["Morning Update"].exists)
+        XCTAssertTrue(app.staticTexts["Listened"].exists)
     }
 
     @MainActor
@@ -244,8 +283,9 @@ final class RadioUITests: XCTestCase {
         app.terminate()
 
         app = launchFixture("completed", reset: true)
-        XCTAssertTrue(app.staticTexts["World Service Brief"].waitForExistence(timeout: 15))
-        XCTAssertFalse(app.staticTexts["Morning Update"].exists)
+        XCTAssertTrue(waitForMiniPlayerTitle("World Service Brief", timeout: 15))
+        XCTAssertTrue(app.staticTexts["Morning Update"].exists)
+        XCTAssertTrue(app.staticTexts["Listened"].exists)
         app.terminate()
 
         app = launchFixture("partial", reset: true)
@@ -344,12 +384,12 @@ final class RadioUITests: XCTestCase {
         XCTAssertGreaterThan(try elapsedSeconds(in: scrubber), initial + 8)
         app.buttons["miniPlayer.rewind"].tap()
         app.buttons["miniPlayer.next"].tap()
-        XCTAssertTrue(app.staticTexts["World Service Brief"].waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForMiniPlayerTitle("World Service Brief", timeout: 5))
         app.buttons["miniPlayer.playPause"].tap()
 
         app.terminate()
         app = launchFixture("partial", reset: false)
-        XCTAssertTrue(app.staticTexts["World Service Brief"].waitForExistence(timeout: 15))
+        XCTAssertTrue(waitForMiniPlayerTitle("World Service Brief", timeout: 15))
     }
 
     @MainActor
@@ -411,6 +451,14 @@ final class RadioUITests: XCTestCase {
     ) -> Bool {
         let predicate = NSPredicate(format: "label == %@", label)
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func waitForMiniPlayerTitle(_ title: String, timeout: TimeInterval) -> Bool {
+        let titleButton = app.buttons["miniPlayer.title"]
+        guard titleButton.waitForExistence(timeout: timeout) else { return false }
+        let predicate = NSPredicate(format: "label CONTAINS[c] %@", title)
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: titleButton)
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 }

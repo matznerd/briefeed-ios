@@ -8,6 +8,19 @@
 import Combine
 import SwiftUI
 
+enum RadioStartupPolicy {
+    static func shouldStartServices(for phase: ScenePhase) -> Bool {
+        switch phase {
+        case .active:
+            true
+        case .inactive, .background:
+            false
+        @unknown default:
+            false
+        }
+    }
+}
+
 @MainActor
 final class RadioAppLifecycleDriver {
     typealias Sleep = @MainActor (TimeInterval) async throws -> Void
@@ -89,6 +102,7 @@ final class RadioAppLifecycleDriver {
     }
 
     func startColdLaunch(
+        prepare: @escaping @MainActor () async -> Void = {},
         restore: @escaping @MainActor (Bool) async -> RadioPlaybackIntent?,
         applyRestoreIntent: @escaping @MainActor (RadioPlaybackIntent?) async -> Void = { _ in },
         initialRefresh: RefreshWork,
@@ -96,6 +110,10 @@ final class RadioAppLifecycleDriver {
     ) async {
         guard !didStartColdLaunch, !didTerminate else { return }
         didStartColdLaunch = true
+
+        await prepare()
+        guard !didTerminate else { return }
+
         initialRefreshWork = initialRefresh
         foregroundRefreshWork = foregroundRefresh
 
@@ -145,7 +163,20 @@ final class RadioAppLifecycleDriver {
             }
             armPollIfNeeded()
 
-        case .inactive, .background:
+        case .inactive:
+            // A cold launch commonly passes through inactive before its first
+            // active frame. Treat only a later inactive transition as leaving
+            // an established foreground session.
+            guard hasObservedActiveScene else { return }
+            coldLaunchAutoplayAllowed = false
+            guard !isInInactiveSequence, !didTerminate else { return }
+            isInInactiveSequence = true
+            isActive = false
+            cancelLifecycleWork()
+            cancelPendingColdLaunchAutoplay()
+            forceSave(.background)
+
+        case .background:
             coldLaunchAutoplayAllowed = false
             guard !isInInactiveSequence, !didTerminate else { return }
             isInInactiveSequence = true
@@ -324,9 +355,11 @@ extension BriefeedApp {
 
     func startRadioServices() async {
         let services = RadioServiceContainer.shared
-        _ = await RSSAudioService.shared.ensureDefaultFeedsExist()
 
         await radioLifecycleDriver.startColdLaunch(
+            prepare: {
+                _ = await RSSAudioService.shared.ensureDefaultFeedsExist()
+            },
             restore: { autoplayAllowed in
                 await services.coordinator.restore(
                     autoplayEnabled: autoplayAllowed

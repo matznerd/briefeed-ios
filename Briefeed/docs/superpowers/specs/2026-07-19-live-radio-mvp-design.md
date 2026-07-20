@@ -631,6 +631,12 @@ MiniAudioPlayerV4
 system safe area / home indicator
 ```
 
+The mini-player is the phone-bottom surface, not a floating card above the home
+indicator. Its material continues through the bottom safe area, its content
+stays clear of the indicator, and only its top corners are rounded. The rail has
+an opaque or sufficiently solid semantic backing so scrolling playlist text is
+never legible through it.
+
 ### RadioTabRail
 
 - One centered glass capsule.
@@ -659,16 +665,51 @@ Remove Settings as a tab. A top-right gear presents the existing `SettingsView` 
 - Playback speed, reflecting the shared last-used value.
 - Feed order and enablement link.
 
+Normal source administration does not occupy Radio Home. Add Source remains a
+direct Radio recovery action only when no enabled source can populate the
+playlist.
+
+### Radio Home Playlist
+
+- Radio Home is a plain, vertically descending playlist rather than a stack of
+  status cards.
+- Start with the coordinator's persisted entries in their exact playback order.
+  This keeps the current or partially played episode visible even when a newer
+  episode from the same source has arrived.
+- After the queued entries, supplement the list with the newest episode from
+  each source when that episode is not already in the current brief. Order
+  supplemental rows by user source priority, then stable source and episode
+  keys.
+- Each row shows title, source, relative publication time, and one of: Ready,
+  Up next, percent listened, Listened, not in the current brief, or unavailable
+  for this session.
+- Completed supplemental episodes remain visible as non-playing Listened rows even
+  though they are absent from the eligible playback queue.
+- A stale or deduplicated latest episode that is absent from the eligible queue
+  remains visible but non-playing as `Not in current brief`.
+- Selecting an eligible row makes it current through the Radio coordinator.
+- Normal playing, paused, and loading states are represented by the row and
+  mini-player. Separate state content is reserved for restoration, refresh,
+  offline recovery, no sources, exhausted, and failure.
+
 ### Mini Player
 
 The mini-player remains compact and uses the approved asymmetric layout:
 
-- Left: episode artwork, one-line title, source, speed, sleep state.
+- Upper left: episode artwork, one-line title, and source inside one accessible
+  44-point target.
 - Right: Back 10, dominant Play or Pause, Forward 10, Next.
-- Bottom: elapsed time, thin draggable scrubber, remaining time.
+- Bottom: speed and sleep on the left, then elapsed time, thin draggable
+  scrubber, and remaining time in the same 44-point row.
 - Secondary upward chevron opens the expanded player.
 
 It appears whenever Radio or Brief has a current or resumable session. On the Radio tab with an exhausted session, it remains in a compact stopped state with `You're caught up` and Refresh available.
+
+Cold-launch Radio restoration begins only after the first observed active scene.
+A transient launch `.inactive` phase is not treated as backgrounding and must
+not consume the single configured autoplay opportunity. Once an active scene
+has been observed, later inactive/background transitions retain the existing
+save-and-cancel behavior.
 
 ### Expanded Player
 
