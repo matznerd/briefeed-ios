@@ -26,6 +26,21 @@
 > ad detection is tracked independently in
 > [`docs/research/2026-07-20-podcast-ad-skip-spike.md`](../../research/2026-07-20-podcast-ad-skip-spike.md).
 
+> **Source-centric follow-up:** The physical list is a source scan, not a raw
+> episode queue. Automatic restore/refresh selects one latest episode per
+> source, localizes hourly bulletin titles, and does not place adjacent old/new
+> hourly editions into the scan. Source rows disclose retained episode history;
+> Play Now and explicitly persisted Play Later are the manual archive paths.
+> Known hourly network labels are compact (`NPR`, `ABC`, `CBS`, and `CBC`).
+> Partial refresh failures are shown only beside affected rows in Radio Sources,
+> not as a Radio Home banner. The navigation/player chrome is a real layout
+> boundary so source rows scroll fully clear of it. The source-centric app and
+> test targets passed build-for-testing before the final test-only geometry
+> assertion, which was syntax-parsed; final product code passes a signed device
+> build and is installed on the approved iPhone. Simulator runtime verification
+> was stopped when shared host load became severe; phone unlock/open and runtime
+> checks remain open.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship a distribution-candidate iOS build whose default Radio tab restores and deterministically advances a persisted source-ordered podcast session, supports opt-in cold-launch autoplay, 10-second transport controls, persisted speed, sleep timing, accessible compact navigation, and reliable background and remote playback without depending on Reddit or article generation.
@@ -44,7 +59,10 @@
 - Autoplay uses the existing `autoPlayLiveNewsOnOpen` key, defaults Off, and runs once per process cold launch only. When no local episode exists, its deferred online-refresh opportunity lasts at most 60 foreground seconds and is canceled by inactive/background or any manual playback command.
 - Playback speed uses the canonical `playbackSpeed` key and exactly `0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0`.
 - In-app and remote skip intervals are exactly 10 seconds. Radio Previous is disabled.
-- Manual Next defers the current partial episode; it never marks the episode complete.
+- Manual Next never marks the episode complete. It retires an automatic hourly
+  bulletin from the current scan and persists that retirement across relaunch
+  until a newer edition for the source replaces it. Daily and explicitly
+  queued archive episodes move to the deferred tail with their saved position.
 - Completion is crash-consistent: save Core Data completion first, then remove and persist the Radio entry.
 - Sleep timer values are Off, End of Episode, 10, 20, 30, 45, 60, and exact Custom 1 through 180 minutes. Sleep state does not survive process termination.
 - Production behavior never depends on live publisher feeds in automated tests.
@@ -1511,7 +1529,7 @@ Run `bash skills/app-testing/scripts/run-radio.sh radio-nav ui` and expect the d
 enum AppTab: Hashable { case radio, brief, feed }
 ```
 
-`ContentView` defaults to `.radio`. Keep a `TabView(selection:)`, apply `.toolbar(.hidden, for: .tabBar)`, and present custom chrome with `safeAreaInset(edge: .bottom, spacing: 0)`. Remove the fixed `49`-point padding. The inset order is `RadioTabRail` above `MiniAudioPlayerV4`, making the mini-player the bottom-most app control above the home indicator.
+`ContentView` defaults to `.radio`. Keep a `TabView(selection:)`, apply `.toolbar(.hidden, for: .tabBar)`, and place the custom chrome after the flexible tab content in the root vertical layout. Do not overlay the chrome or use a fixed `49`-point padding: the tab content's frame must end before `RadioTabRail`, followed by `MiniAudioPlayerV4`, so list rows cannot render under either control and the mini-player remains the bottom-most app control above the home indicator.
 
 - [ ] **Step 4: Implement the compact rail and Settings**
 
@@ -1519,7 +1537,7 @@ Use SF Symbols `dot.radiowaves.left.and.right`, `text.page`, and `newspaper`; no
 
 - [ ] **Step 5: Implement Radio state surfaces**
 
-`RadioHomeView` renders current metadata and source management plus explicit `refreshing`, `waitingForNetwork`, `noSources`, `failed`, and true `exhausted` actions. Only exhausted uses `You're caught up`. Active playback stays primary while `sourceFailures` appear in a nonblocking degraded banner.
+`RadioHomeView` renders the one-row-per-source listening list plus explicit `refreshing`, `waitingForNetwork`, `noSources`, `failed`, and true `exhausted` actions. Only exhausted uses `You're caught up`. Partial per-source failures never displace the list or create a Radio Home banner; `RadioSourceManagementView` marks each affected source with an accessible warning indicator instead.
 
 - [ ] **Step 6: Run navigation UI tests and visual captures**
 

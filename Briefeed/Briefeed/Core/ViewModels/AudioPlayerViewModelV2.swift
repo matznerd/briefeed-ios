@@ -156,7 +156,7 @@ final class AudioPlayerViewModelV2: ObservableObject {
 
     private func refreshNowPlaying() {
         if effectivePlaybackMode == .radio, let episode = currentRadioEpisode {
-            currentTitle = episode.title
+            currentTitle = episode.displayTitle()
             currentArtist = episode.sourceName
             currentItemType = .rssEpisode
         } else {
@@ -229,7 +229,7 @@ final class AudioPlayerViewModelV2: ObservableObject {
         let title: String
         let source: String
         if mode == .radio, let episode = currentRadioEpisode {
-            title = episode.title
+            title = episode.displayTitle()
             source = episode.sourceName
         } else {
             let queuedItem = unifiedPlayer.currentItem ?? (mode == .brief ? queueItems.first : nil)
@@ -599,6 +599,11 @@ extension AudioPlayerViewModelV2 {
         lastError = nil
         await unifiedPlayer.playRadioEpisode(key)
         isLoading = false
+    }
+
+    @discardableResult
+    func queueRadioEpisode(_ key: RadioEpisodeKey) -> Bool {
+        unifiedPlayer.queueRadioEpisode(key)
     }
 
     func retryRadio() async {

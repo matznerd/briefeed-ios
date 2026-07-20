@@ -890,6 +890,15 @@ final class UnifiedAudioPlayer: ObservableObject {
         await execute(radioCoordinator.selectEpisode(key))
     }
 
+    @discardableResult
+    func queueRadioEpisode(_ key: RadioEpisodeKey) -> Bool {
+        cancelDeferredAutoplay()
+        let queued = radioCoordinator.queueEpisode(key)
+        rebuildRadioProjection()
+        updateRemoteAvailability()
+        return queued
+    }
+
     func retryRadio() async {
         cancelDeferredAutoplay()
         await execute(radioCoordinator.retry())

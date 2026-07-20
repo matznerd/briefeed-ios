@@ -122,7 +122,9 @@ final class RadioSessionStore: RadioSessionStoreProtocol {
 
         let currentKey: RadioEpisodeKey?
         if let candidate = snapshot.currentKey {
-            currentKey = entries.contains(where: { $0.key == candidate }) ? candidate : entries.first?.key
+            currentKey = entries.contains(where: {
+                $0.key == candidate && $0.disposition != .retired
+            }) ? candidate : entries.first(where: { $0.disposition != .retired })?.key
         } else {
             currentKey = nil
         }

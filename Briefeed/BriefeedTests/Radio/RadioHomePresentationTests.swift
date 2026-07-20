@@ -4,58 +4,6 @@ import Testing
 
 @Suite("Radio home presentation")
 struct RadioHomePresentationTests {
-    @Test(arguments: [
-        RadioSessionState.readyPaused,
-        .loading,
-        .playing,
-        .pausedByUser
-    ])
-    func degradedBannerAppearsOnlyForPlayableCurrentStates(state: RadioSessionState) {
-        #expect(RadioHomePresentation.showsDegradedBanner(
-            state: state,
-            activeMode: .radio,
-            hasCurrentEpisode: true,
-            sourceFailureCount: 1
-        ))
-    }
-
-    @Test(arguments: [
-        RadioSessionState.noSources,
-        .exhausted,
-        .failed(.allSourcesUnavailable),
-        .waitingForNetwork,
-        .refreshing
-    ])
-    func degradedBannerIsHiddenForTerminalAndUnplayableStates(state: RadioSessionState) {
-        #expect(!RadioHomePresentation.showsDegradedBanner(
-            state: state,
-            activeMode: .radio,
-            hasCurrentEpisode: true,
-            sourceFailureCount: 1
-        ))
-    }
-
-    @Test func degradedBannerNeedsBothCurrentEpisodeAndFailures() {
-        #expect(!RadioHomePresentation.showsDegradedBanner(
-            state: .playing,
-            activeMode: .radio,
-            hasCurrentEpisode: false,
-            sourceFailureCount: 1
-        ))
-        #expect(!RadioHomePresentation.showsDegradedBanner(
-            state: .playing,
-            activeMode: .radio,
-            hasCurrentEpisode: true,
-            sourceFailureCount: 0
-        ))
-        #expect(!RadioHomePresentation.showsDegradedBanner(
-            state: .playing,
-            activeMode: .brief,
-            hasCurrentEpisode: true,
-            sourceFailureCount: 1
-        ))
-    }
-
     @Test func currentControlLabelMatchesRadioActivePlaybackPredicate() {
         #expect(RadioHomePresentation.currentControlLabel(activeMode: .radio, isPlaying: true) == "Pause Radio")
         #expect(RadioHomePresentation.currentControlLabel(activeMode: .brief, isPlaying: true) == "Play Radio")
@@ -68,7 +16,7 @@ struct RadioHomePresentationTests {
         #expect(RadioHomePresentation.failureRecovery(for: .persistence("failed")) == .retryPlayback)
     }
 
-    @Test func playlistPreservesPersistedQueueOrderBeforeSupplementalLatestRows() {
+    @Test func playlistUsesOneNewestEpisodePerSourceInSourcePriorityOrder() {
         let now = Date(timeIntervalSince1970: 10_000)
         let nprLatest = candidate(
             feedID: "npr",
@@ -115,13 +63,13 @@ struct RadioHomePresentationTests {
             currentKey: nprLatest.key
         )
 
-        #expect(items.map(\.candidate.title) == ["World Service Brief", "Morning Update"])
-        #expect(items.map(\.isCurrent) == [false, true])
-        #expect(items[0].status == .upNext)
-        #expect(items[1].status == .inProgress(fraction: 0.25))
+        #expect(items.map(\.candidate.title) == ["Morning Update", "World Service Brief"])
+        #expect(items.map(\.isCurrent) == [true, false])
+        #expect(items[0].status == .inProgress(fraction: 0.25))
+        #expect(items[1].status == .upNext)
     }
 
-    @Test func playlistKeepsOlderCurrentEpisodeAndSupplementsNewerEpisodeFromSameSource() {
+    @Test func playlistShowsOnlyNewestEpisodeWhenCurrentSourceHasAReplacement() {
         let now = Date(timeIntervalSince1970: 20_000)
         let current = candidate(
             feedID: "npr",
@@ -152,9 +100,65 @@ struct RadioHomePresentationTests {
             currentKey: current.key
         )
 
-        #expect(items.map(\.candidate.title) == ["Current Hour", "New Hour"])
-        #expect(items.map(\.status) == [.inProgress(fraction: 0.5), .latest])
-        #expect(items.map(\.isCurrent) == [true, false])
+        #expect(items.map(\.candidate.title) == ["New Hour"])
+        #expect(items.map(\.status) == [.latest])
+        #expect(items.map(\.isCurrent) == [false])
+        #expect(items[0].earlierEpisodeCount == 1)
+    }
+
+    @Test func hourlyTitlesUseSourceIdentityAndTheUsersTimeZone() {
+        let losAngeles = TimeZone(identifier: "America/Los_Angeles")!
+        let locale = Locale(identifier: "en_US_POSIX")
+        let episode = candidate(
+            feedID: "npr-news-now",
+            episodeID: "hour",
+            title: "NPR News: 07-20-2026 5PM EDT",
+            publishedAt: Date(timeIntervalSince1970: 1_784_581_200),
+            priority: 0,
+            sourceName: "NPR News Now"
+        )
+
+        #expect(RadioHomePresentation.displayTitle(
+            for: episode,
+            timeZone: losAngeles,
+            locale: locale
+        ) == "NPR: 2 PM PDT · 7/20/26")
+    }
+
+    @Test(arguments: [
+        ("npr-news-now", "NPR News Now", "NPR"),
+        ("abc-news-update", "ABC News Update", "ABC"),
+        ("cbs-on-the-hour", "CBS News: On The Hour", "CBS"),
+        ("cbc-world-this-hour", "CBC World This Hour", "CBC")
+    ])
+    func hourlySourceIdentitiesUseCompactKnownNetworkNames(
+        feedID: String,
+        sourceName: String,
+        expected: String
+    ) {
+        let episode = candidate(
+            feedID: feedID,
+            episodeID: "hour",
+            title: "Raw title",
+            publishedAt: Date(),
+            priority: 0,
+            sourceName: sourceName
+        )
+
+        #expect(RadioHomePresentation.sourceIdentity(for: episode) == expected)
+    }
+
+    @Test func dailyTitlesRemainEditorial() {
+        let episode = candidate(
+            feedID: "bbc",
+            episodeID: "story",
+            title: "A new government forms",
+            publishedAt: Date(),
+            priority: 1,
+            frequency: .daily
+        )
+
+        #expect(RadioHomePresentation.displayTitle(for: episode) == "A new government forms")
     }
 
     @Test func playlistUsesMoreDurableProgressWhenSessionSnapshotLagsCoreData() {
@@ -230,20 +234,22 @@ struct RadioHomePresentationTests {
         publishedAt: Date,
         priority: Int,
         progress: Double = 0,
-        completed: Bool = false
+        completed: Bool = false,
+        sourceName: String? = nil,
+        frequency: RSSUpdateFrequencyValue = .hourly
     ) -> RadioEpisodeCandidate {
         RadioEpisodeCandidate(
             key: RadioEpisodeKey(feedID: feedID, episodeID: episodeID),
             originalPlaybackURL: URL(string: "https://example.com/\(feedID)/\(episodeID).mp3")!,
             canonicalEnclosureURL: "https://example.com/\(feedID)/\(episodeID).mp3",
             title: title,
-            sourceName: feedID.uppercased(),
+            sourceName: sourceName ?? feedID.uppercased(),
             publicationDate: publishedAt,
             durationSeconds: 300,
             normalizedCoreDataProgress: progress,
             isCompleted: completed,
             sourcePriority: priority,
-            sourceFrequency: .hourly
+            sourceFrequency: frequency
         )
     }
 }

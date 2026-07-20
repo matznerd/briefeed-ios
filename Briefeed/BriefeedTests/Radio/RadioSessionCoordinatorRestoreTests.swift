@@ -320,7 +320,7 @@ struct RadioSessionCoordinatorRestoreTests {
     private func key(_ feed: String, _ episode: String) -> RadioEpisodeKey { .init(feedID: feed, episodeID: episode) }
     private func entry(_ key: RadioEpisodeKey, position: TimeInterval = 0, disposition: RadioEntryDisposition = .pending) -> RadioQueueEntry { .init(key: key, positionSeconds: position, disposition: disposition, playbackFailureCount: 0, lastPlaybackError: nil) }
     private func session(_ entries: [RadioQueueEntry], current: RadioEpisodeKey?) -> PersistedRadioSession { .init(schemaVersion: 1, entries: entries, currentKey: current, savedAt: now) }
-    private func request(for candidate: RadioEpisodeCandidate, position: TimeInterval) -> RadioPlaybackRequest { .init(key: candidate.key, url: candidate.originalPlaybackURL, title: candidate.title, source: candidate.sourceName, positionSeconds: position) }
+    private func request(for candidate: RadioEpisodeCandidate, position: TimeInterval) -> RadioPlaybackRequest { .init(key: candidate.key, url: candidate.originalPlaybackURL, title: candidate.displayTitle(), source: candidate.sourceName, positionSeconds: position) }
     private func candidate(_ feed: String, _ episode: String, date: Date? = nil, completed: Bool = false) -> RadioEpisodeCandidate { .init(key: key(feed, episode), originalPlaybackURL: URL(string: "https://example.com/\(feed)-\(episode).mp3")!, canonicalEnclosureURL: "https://example.com/\(feed)-\(episode).mp3", title: episode, sourceName: feed, publicationDate: date ?? now, durationSeconds: 60, normalizedCoreDataProgress: 0, isCompleted: completed, sourcePriority: 0, sourceFrequency: .hourly) }
 }
 

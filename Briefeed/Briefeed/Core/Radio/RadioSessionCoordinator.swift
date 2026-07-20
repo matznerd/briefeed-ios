@@ -51,6 +51,7 @@ protocol RadioSessionCoordinating: AnyObject {
     func sourceConfigurationDidChange(enabledSourceCount: Int) -> RadioPlaybackIntent?
     func beginCurrent() -> RadioPlaybackIntent?
     func selectEpisode(_ key: RadioEpisodeKey) -> RadioPlaybackIntent?
+    func queueEpisode(_ key: RadioEpisodeKey) -> Bool
     func pauseByUser(positionSeconds: TimeInterval, duration: TimeInterval?) -> RadioPlaybackIntent?
     func seekEnded(positionSeconds: TimeInterval, duration: TimeInterval?) -> RadioPlaybackIntent?
     func manualNext(positionSeconds: TimeInterval, duration: TimeInterval?) -> RadioPlaybackIntent?
@@ -362,12 +363,24 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
 
         let previousCurrent = currentKey.flatMap { current in entries.first(where: { $0.key == current }) }
         let selected = entries.first(where: { $0.key == key })
-            ?? RadioQueueEntry(key: key, positionSeconds: initialPosition(for: candidate), disposition: .pending, playbackFailureCount: 0, lastPlaybackError: nil)
+            ?? RadioQueueEntry(
+                key: key,
+                positionSeconds: initialPosition(for: candidate),
+                disposition: .pending,
+                playbackFailureCount: 0,
+                lastPlaybackError: nil,
+                isManuallyQueued: !isLatestCandidateForSource(candidate)
+            )
         var selectedEntry = selected
         selectedEntry.disposition = .pending
-        let remaining = entries.filter { $0.key != key && $0.key != previousCurrent?.key }
+        let remaining = entries.filter {
+            $0.key != key
+                && $0.key != previousCurrent?.key
+                && ($0.key.feedID != key.feedID || $0.isManuallyQueued)
+        }
         var pending = remaining.filter { $0.disposition == .pending }
         var deferred = remaining.filter { $0.disposition == .deferred }
+        let retired = remaining.filter { $0.disposition == .retired }
         if let previousCurrent,
            previousCurrent.key != key,
            isNearlyComplete(
@@ -379,6 +392,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
                 duration: candidatesByKey[previousCurrent.key]?.durationSeconds
             ) else { return nil }
             let stagedEntries = [selectedEntry] + pending + deferred
+                + retired
                 + remaining.filter { $0.disposition == .failedThisSession }
             let repaired = PersistedRadioSession(
                 schemaVersion: PersistedRadioSession.schemaVersion,
@@ -396,7 +410,20 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
                 markCoreData: true
             )
         }
-        if var previousCurrent, previousCurrent.key != key, previousCurrent.positionSeconds > 0 {
+        let replacesAutomaticSourceSlot = previousCurrent?.key.feedID == key.feedID
+            && previousCurrent?.isManuallyQueued == false
+        if replacesAutomaticSourceSlot, let previousCurrent {
+            do {
+                try repository.saveProgress(
+                    key: previousCurrent.key,
+                    seconds: previousCurrent.positionSeconds,
+                    duration: candidatesByKey[previousCurrent.key]?.durationSeconds
+                )
+            } catch {
+                state = .failed(.persistence(error.localizedDescription))
+                return nil
+            }
+        } else if var previousCurrent, previousCurrent.key != key, previousCurrent.positionSeconds > 0 {
             previousCurrent.disposition = .deferred
             deferred.append(previousCurrent)
         } else if let previousCurrent, previousCurrent.key != key {
@@ -404,12 +431,58 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
             normalized.disposition = .pending
             pending.insert(normalized, at: 0)
         }
-        let stagedEntries = [selectedEntry] + pending + deferred + remaining.filter { $0.disposition == .failedThisSession }
+        let stagedEntries = [selectedEntry] + pending + deferred + retired
+            + remaining.filter { $0.disposition == .failedThisSession }
         let intent = commitSelection(stagedEntries, selected: selectedEntry, candidate: candidate)
         if let intent, case .play(let request) = intent, !canLoad(request.url) {
             setPending(request, purpose: .selection); state = .waitingForNetwork; return nil
         }
         return intent
+    }
+
+    func queueEpisode(_ key: RadioEpisodeKey) -> Bool {
+        cancelPendingColdLaunchAutoplay()
+        let candidate: RadioEpisodeCandidate
+        do {
+            guard let loaded = try repository.candidate(for: key) else { return false }
+            candidate = loaded
+        } catch {
+            _ = handleReadFailure(error)
+            return false
+        }
+        guard isEligibleForSelection(candidate),
+              !entries.contains(where: { $0.key == key }) else { return false }
+
+        candidatesByKey[key] = candidate
+        let becomesCurrent = currentKey == nil
+        let queued = RadioQueueEntry(
+            key: key,
+            positionSeconds: initialPosition(for: candidate),
+            disposition: becomesCurrent ? .pending : .deferred,
+            playbackFailureCount: 0,
+            lastPlaybackError: nil,
+            isManuallyQueued: true
+        )
+        let stagedEntries = entries + [queued]
+        let stagedCurrent = currentKey ?? key
+        let staged = PersistedRadioSession(
+            schemaVersion: PersistedRadioSession.schemaVersion,
+            entries: stagedEntries,
+            currentKey: stagedCurrent,
+            savedAt: now()
+        )
+        do {
+            try store.saveNow(staged)
+        } catch {
+            state = .failed(.persistence(error.localizedDescription))
+            return false
+        }
+        entries = stagedEntries
+        currentKey = stagedCurrent
+        currentEpisode = candidatesByKey[stagedCurrent]
+        updateCanPlayNext()
+        if becomesCurrent { state = .readyPaused }
+        return true
     }
 
     func recordProgress(for key: RadioEpisodeKey, positionSeconds: TimeInterval, duration: TimeInterval?) {
@@ -459,22 +532,37 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
             guard forceSave(positionSeconds: positionSeconds, duration: duration) else { return nil }
             return completeCurrent(at: now())
         }
-        var deferred = current
-        deferred.positionSeconds = validPosition(positionSeconds)
-        deferred.disposition = .deferred
+        var retiredOrDeferred = current
+        retiredOrDeferred.positionSeconds = validPosition(positionSeconds)
+        let retiresHourlySource = candidatesByKey[currentKey]?.sourceFrequency == .hourly
+            && !current.isManuallyQueued
+        retiredOrDeferred.disposition = retiresHourlySource ? .retired : .deferred
         let remaining = entries.filter { $0.key != currentKey }
-        let stagedEntries = remaining.filter { $0.disposition == .pending }
+        var stagedEntries = remaining.filter { $0.disposition == .pending }
             + remaining.filter { $0.disposition == .deferred }
-            + [deferred]
-            + remaining.filter { $0.disposition == .failedThisSession }
-        guard let next = stagedEntries.first(where: { $0.disposition == .pending })
-            ?? stagedEntries.first(where: { $0.disposition == .deferred && $0.key != currentKey }),
-              let candidate = candidatesByKey[next.key] else { return nil }
+        stagedEntries.append(retiredOrDeferred)
+        stagedEntries += remaining.filter { $0.disposition == .retired }
+        stagedEntries += remaining.filter { $0.disposition == .failedThisSession }
+        let next = stagedEntries.first(where: { $0.disposition == .pending })
+            ?? stagedEntries.first(where: { $0.disposition == .deferred && $0.key != currentKey })
+        let staged = PersistedRadioSession(
+            schemaVersion: PersistedRadioSession.schemaVersion,
+            entries: stagedEntries,
+            currentKey: next?.key,
+            savedAt: now()
+        )
         do {
-            try repository.saveProgress(key: currentKey, seconds: deferred.positionSeconds, duration: duration)
-            let staged = PersistedRadioSession(schemaVersion: PersistedRadioSession.schemaVersion, entries: stagedEntries, currentKey: next.key, savedAt: now())
+            try repository.saveProgress(key: currentKey, seconds: retiredOrDeferred.positionSeconds, duration: duration)
             try store.saveNow(staged)
         } catch { state = .failed(.persistence(error.localizedDescription)); return nil }
+        guard let next, let candidate = candidatesByKey[next.key] else {
+            entries = stagedEntries
+            self.currentKey = nil
+            currentEpisode = nil
+            updateCanPlayNext()
+            state = .exhausted
+            return .pause
+        }
         entries = stagedEntries; self.currentKey = next.key; currentEpisode = candidate; updateCanPlayNext(); state = .loading
         let request = playbackRequest(for: candidate, position: next.positionSeconds)
         lastProgressBucket = nil
@@ -834,7 +922,9 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
     private func requestForCurrent() -> RadioPlaybackRequest? {
         guard let currentKey, let candidate = candidatesByKey[currentKey],
               let entry = entries.first(where: { $0.key == currentKey }),
-              entry.disposition != .failedThisSession, !candidate.isCompleted else { return nil }
+              entry.disposition != .failedThisSession,
+              entry.disposition != .retired,
+              !candidate.isCompleted else { return nil }
         return playbackRequest(for: candidate, position: entry.positionSeconds)
     }
 
@@ -844,7 +934,13 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
     }
 
     private func playbackRequest(for candidate: RadioEpisodeCandidate, position: TimeInterval) -> RadioPlaybackRequest {
-        RadioPlaybackRequest(key: candidate.key, url: candidate.originalPlaybackURL, title: candidate.title, source: candidate.sourceName, positionSeconds: position)
+        RadioPlaybackRequest(
+            key: candidate.key,
+            url: candidate.originalPlaybackURL,
+            title: candidate.displayTitle(),
+            source: candidate.sourceName,
+            positionSeconds: position
+        )
     }
 
     private func initialPosition(for candidate: RadioEpisodeCandidate) -> TimeInterval {
@@ -858,7 +954,15 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         guard !entries.contains(where: {
             $0.key != candidate.key && candidatesByKey[$0.key]?.canonicalEnclosureURL == candidate.canonicalEnclosureURL
         }) else { return false }
-        return RadioQueueBuilder(now: now()).buildInitial(candidates: [candidate]).entries.contains { $0.key == candidate.key }
+        return RadioQueueBuilder(now: now()).isEligibleForManualSelection(candidate)
+    }
+
+    private func isLatestCandidateForSource(_ candidate: RadioEpisodeCandidate) -> Bool {
+        !candidatesByKey.values.contains {
+            $0.key.feedID == candidate.key.feedID
+                && ($0.publicationDate > candidate.publicationDate
+                    || ($0.publicationDate == candidate.publicationDate && $0.key.episodeID < candidate.key.episodeID))
+        }
     }
 
     private var hasActivePlaybackState: Bool { isPlaybackState(state) }

@@ -20,6 +20,7 @@ struct RadioPlaylistItem: Identifiable, Equatable {
     let entry: RadioQueueEntry?
     let isCurrent: Bool
     let status: RadioPlaylistStatus
+    let earlierEpisodeCount: Int
 }
 
 enum RadioHomePresentation {
@@ -28,48 +29,52 @@ enum RadioHomePresentation {
         entries: [RadioQueueEntry],
         currentKey: RadioEpisodeKey?
     ) -> [RadioPlaylistItem] {
-        let candidatesByKey = Dictionary(uniqueKeysWithValues: candidates.map { ($0.key, $0) })
-        let queuedItems = entries.compactMap { entry in
-            candidatesByKey[entry.key].map {
-                makePlaylistItem(candidate: $0, entry: entry, currentKey: currentKey)
-            }
-        }
-        let queuedKeys = Set(queuedItems.map(\.candidate.key))
-        let latestBySource = Dictionary(grouping: candidates, by: { $0.key.feedID })
-            .values
-            .compactMap { episodes in
-                episodes.sorted {
-                    if $0.publicationDate != $1.publicationDate {
-                        return $0.publicationDate > $1.publicationDate
-                    }
-                    return $0.key.episodeID < $1.key.episodeID
-                }.first
+        let entriesByKey = Dictionary(uniqueKeysWithValues: entries.map { ($0.key, $0) })
+        let episodesBySource = Dictionary(grouping: candidates, by: { $0.key.feedID })
+        return episodesBySource.values
+            .compactMap { episodes -> RadioPlaylistItem? in
+                let sorted = episodes.sorted(by: candidateRecencySort)
+                guard let latest = sorted.first else { return nil }
+                return makePlaylistItem(
+                    candidate: latest,
+                    entry: entriesByKey[latest.key],
+                    currentKey: currentKey,
+                    earlierEpisodeCount: max(sorted.count - 1, 0)
+                )
             }
             .sorted {
-                if $0.sourcePriority != $1.sourcePriority {
-                    return $0.sourcePriority < $1.sourcePriority
+                if $0.candidate.sourcePriority != $1.candidate.sourcePriority {
+                    return $0.candidate.sourcePriority < $1.candidate.sourcePriority
                 }
-                if $0.key.feedID != $1.key.feedID {
-                    return $0.key.feedID < $1.key.feedID
+                if $0.candidate.key.feedID != $1.candidate.key.feedID {
+                    return $0.candidate.key.feedID < $1.candidate.key.feedID
                 }
-                if $0.publicationDate != $1.publicationDate {
-                    return $0.publicationDate > $1.publicationDate
-                }
-                return $0.key.episodeID < $1.key.episodeID
+                return candidateRecencySort($0.candidate, $1.candidate)
             }
+    }
 
-        let supplementalLatest: [RadioPlaylistItem] = latestBySource.compactMap { candidate in
-            guard !queuedKeys.contains(candidate.key) else { return nil }
-            return makePlaylistItem(candidate: candidate, entry: nil, currentKey: currentKey)
-        }
+    static func displayTitle(
+        for candidate: RadioEpisodeCandidate,
+        timeZone: TimeZone = .autoupdatingCurrent,
+        locale: Locale = .autoupdatingCurrent
+    ) -> String {
+        candidate.displayTitle(timeZone: timeZone, locale: locale)
+    }
 
-        return queuedItems + supplementalLatest
+    static func sourceIdentity(for candidate: RadioEpisodeCandidate) -> String {
+        candidate.sourceIdentity
+    }
+
+    private static func candidateRecencySort(_ lhs: RadioEpisodeCandidate, _ rhs: RadioEpisodeCandidate) -> Bool {
+        if lhs.publicationDate != rhs.publicationDate { return lhs.publicationDate > rhs.publicationDate }
+        return lhs.key.episodeID < rhs.key.episodeID
     }
 
     private static func makePlaylistItem(
         candidate: RadioEpisodeCandidate,
         entry: RadioQueueEntry?,
-        currentKey: RadioEpisodeKey?
+        currentKey: RadioEpisodeKey?,
+        earlierEpisodeCount: Int
     ) -> RadioPlaylistItem {
         let durableProgress = min(max(candidate.normalizedCoreDataProgress, 0), 1)
         let sessionProgress: Double = {
@@ -88,6 +93,8 @@ enum RadioHomePresentation {
             status = .failed
         } else if progress > 0 {
             status = .inProgress(fraction: progress)
+        } else if entry?.disposition == .retired {
+            status = .latest
         } else if entry != nil {
             status = .upNext
         } else {
@@ -97,23 +104,9 @@ enum RadioHomePresentation {
             candidate: candidate,
             entry: entry,
             isCurrent: candidate.key == currentKey,
-            status: status
+            status: status,
+            earlierEpisodeCount: earlierEpisodeCount
         )
-    }
-
-    static func showsDegradedBanner(
-        state: RadioSessionState,
-        activeMode: ActivePlaybackMode,
-        hasCurrentEpisode: Bool,
-        sourceFailureCount: Int
-    ) -> Bool {
-        guard activeMode == .radio, hasCurrentEpisode, sourceFailureCount > 0 else { return false }
-        switch state {
-        case .readyPaused, .loading, .playing, .pausedByUser:
-            return true
-        case .idle, .restoring, .refreshing, .waitingForNetwork, .noSources, .exhausted, .failed:
-            return false
-        }
     }
 
     static func currentControlLabel(
@@ -145,13 +138,6 @@ struct RadioHomeView: View {
     var body: some View {
         NavigationStack {
             List {
-                if showsDegradedBanner {
-                    Section {
-                        sourceFailureBanner
-                    }
-                    .listRowSeparator(.hidden)
-                }
-
                 if !playlistItems.isEmpty {
                     Section("Your radio brief") {
                         ForEach(playlistItems) { item in
@@ -214,18 +200,12 @@ struct RadioHomeView: View {
         }
     }
 
-    private var showsDegradedBanner: Bool {
-        RadioHomePresentation.showsDegradedBanner(
-            state: audioPlayerViewModel.radioState,
-            activeMode: audioPlayerViewModel.activeMode,
-            hasCurrentEpisode: audioPlayerViewModel.currentRadioEpisode != nil,
-            sourceFailureCount: audioPlayerViewModel.sourceFailures.count
-        )
-    }
-
     private func playlistRow(_ item: RadioPlaylistItem) -> some View {
-        Button {
-            Task { await audioPlayerViewModel.playRadioEpisode(item.candidate.key) }
+        NavigationLink {
+            RadioSourceEpisodesView(
+                sourceName: item.candidate.sourceName,
+                episodes: sourceCandidates(for: item.candidate.key.feedID)
+            )
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: playlistIcon(for: item))
@@ -234,18 +214,13 @@ struct RadioHomeView: View {
                     .frame(width: 30)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(item.candidate.title)
+                    Text(RadioHomePresentation.displayTitle(for: item.candidate))
                         .font(.headline)
                         .foregroundStyle(.primary)
                         .lineLimit(2)
                         .accessibilityIdentifier(AccessibilityID.Radio.episodeTitle(item.candidate.key))
 
-                    HStack(spacing: 5) {
-                        Text(item.candidate.sourceName)
-                        Text("•")
-                            .accessibilityHidden(true)
-                        Text(item.candidate.publicationDate, style: .relative)
-                    }
+                    Text(sourceSummary(for: item))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -262,19 +237,38 @@ struct RadioHomeView: View {
                         .foregroundStyle(Color.briefeedRed)
                         .accessibilityLabel(isRadioActivelyPlaying ? "Playing" : "Current episode")
                         .accessibilityIdentifier(AccessibilityID.Radio.currentTitle)
-                } else if item.status != .listened && item.status != .latest {
-                    Image(systemName: "play.fill")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
                 }
             }
             .padding(.vertical, 5)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(item.status == .listened || item.status == .failed || item.status == .latest)
         .accessibilityIdentifier(AccessibilityID.Radio.episode(item.candidate.key))
+    }
+
+    private func sourceCandidates(for feedID: String) -> [RadioEpisodeCandidate] {
+        enabledEpisodes
+            .compactMap { RadioEpisodeCandidate(episode: $0) }
+            .filter { $0.key.feedID == feedID }
+            .sorted {
+                if $0.publicationDate != $1.publicationDate { return $0.publicationDate > $1.publicationDate }
+                return $0.key.episodeID < $1.key.episodeID
+            }
+    }
+
+    private func sourceSummary(for item: RadioPlaylistItem) -> String {
+        let archive = item.earlierEpisodeCount == 1
+            ? "1 earlier episode"
+            : "\(item.earlierEpisodeCount) earlier episodes"
+        if item.candidate.sourceFrequency == .hourly {
+            return item.earlierEpisodeCount > 0 ? "Latest bulletin · \(archive)" : "Latest bulletin"
+        }
+        let relative = RelativeDateTimeFormatter()
+        relative.unitsStyle = .abbreviated
+        let published = relative.localizedString(for: item.candidate.publicationDate, relativeTo: Date())
+        return item.earlierEpisodeCount > 0
+            ? "\(item.candidate.sourceName) · \(published) · \(archive)"
+            : "\(item.candidate.sourceName) · \(published)"
     }
 
     private func playlistIcon(for item: RadioPlaylistItem) -> String {
@@ -288,7 +282,7 @@ struct RadioHomeView: View {
 
     private func playlistTint(for item: RadioPlaylistItem) -> Color {
         switch item.status {
-        case .listened: .green
+        case .listened: .secondary
         case .failed: .orange
         case .upNext, .latest, .inProgress: item.isCurrent ? .briefeedRed : .secondary
         }
@@ -305,7 +299,7 @@ struct RadioHomeView: View {
         case .upNext:
             item.isCurrent ? "Ready" : "Up next"
         case .latest:
-            "Not in current brief"
+            "Latest update"
         }
     }
 
@@ -407,24 +401,6 @@ struct RadioHomeView: View {
         }
     }
 
-    private var sourceFailureBanner: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Some sources could not refresh")
-                    .font(.subheadline.weight(.semibold))
-                Text("Radio will keep playing available episodes.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 4)
-        .accessibilityIdentifier(AccessibilityID.Radio.sourceFailures)
-    }
-
     private func progressState(title: String) -> some View {
         HStack(spacing: 12) {
             ProgressView()
@@ -492,6 +468,107 @@ struct RadioHomeView: View {
         case .persistence:
             "Your listening position could not be saved."
         }
+    }
+}
+
+private struct RadioSourceEpisodesView: View {
+    @EnvironmentObject private var audioPlayerViewModel: AudioPlayerViewModelV2
+
+    let sourceName: String
+    let episodes: [RadioEpisodeCandidate]
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(episodes, id: \.key) { episode in
+                    episodeRow(episode)
+                }
+            } footer: {
+                Text("The newest update is used automatically. Earlier episodes play only when you choose them here.")
+            }
+        }
+        .listStyle(.plain)
+        .navigationTitle(sourceName)
+        .navigationBarTitleDisplayMode(.inline)
+        .accessibilityIdentifier(AccessibilityID.Radio.sourceArchive)
+    }
+
+    private func episodeRow(_ episode: RadioEpisodeCandidate) -> some View {
+        HStack(spacing: 10) {
+            Button {
+                Task { await audioPlayerViewModel.playRadioEpisode(episode.key) }
+            } label: {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(RadioHomePresentation.displayTitle(for: episode))
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+
+                    Text(episode.publicationDate.formatted(date: .abbreviated, time: .shortened))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    Text(episodeStatus(episode))
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(episodeTint(episode))
+                }
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(episode.isCompleted)
+            .accessibilityIdentifier(AccessibilityID.Radio.archivePlay(episode.key))
+
+            Menu {
+                Button {
+                    Task { await audioPlayerViewModel.playRadioEpisode(episode.key) }
+                } label: {
+                    Label("Play Now", systemImage: "play.fill")
+                }
+
+                Button {
+                    _ = audioPlayerViewModel.queueRadioEpisode(episode.key)
+                } label: {
+                    Label("Play Later", systemImage: "text.badge.plus")
+                }
+                .disabled(isQueued(episode))
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.title3)
+                    .frame(width: 44, height: 44)
+            }
+            .disabled(episode.isCompleted)
+            .accessibilityLabel("Options for \(episode.title)")
+            .accessibilityIdentifier(AccessibilityID.Radio.archiveOptions(episode.key))
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func isQueued(_ episode: RadioEpisodeCandidate) -> Bool {
+        audioPlayerViewModel.radioEntries.contains { $0.key == episode.key }
+    }
+
+    private func episodeStatus(_ episode: RadioEpisodeCandidate) -> String {
+        if episode.isCompleted { return "Listened" }
+        if audioPlayerViewModel.currentRadioEpisode?.key == episode.key {
+            return audioPlayerViewModel.isPlaying ? "Playing" : "Current"
+        }
+        if let entry = audioPlayerViewModel.radioEntries.first(where: { $0.key == episode.key }) {
+            if entry.isManuallyQueued { return "Queued for later" }
+            if entry.disposition == .retired { return "Skipped for now" }
+            if episode.durationSeconds.map({ $0 > 0 }) == true, entry.positionSeconds > 0 {
+                let fraction = min(max(entry.positionSeconds / (episode.durationSeconds ?? 1), 0), 1)
+                return "\(Int((fraction * 100).rounded()))% listened"
+            }
+            return "In your brief"
+        }
+        return episode.key == episodes.first?.key ? "Latest" : "Earlier episode"
+    }
+
+    private func episodeTint(_ episode: RadioEpisodeCandidate) -> Color {
+        if episode.isCompleted { return .secondary }
+        if audioPlayerViewModel.currentRadioEpisode?.key == episode.key { return .briefeedRed }
+        return .secondary
     }
 }
 
@@ -586,6 +663,14 @@ struct RadioSourceManagementView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .accessibilityIdentifier(AccessibilityID.Radio.sourceDetail)
+
+            if let failureMessage = audioPlayerViewModel.sourceFailures[feed.id] {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .accessibilityElement()
+                    .accessibilityLabel("\(feed.displayName) could not refresh: \(failureMessage)")
+                    .accessibilityIdentifier(AccessibilityID.Radio.sourceFailure(feed.id))
+            }
 
             Toggle("Enable \(feed.displayName)", isOn: Binding(
                 get: { feed.isEnabled },

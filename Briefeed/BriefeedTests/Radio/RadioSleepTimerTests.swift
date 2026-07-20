@@ -58,7 +58,7 @@ struct RadioSleepTimerTests {
     }
 
     private func candidate(_ id: String, now: Date) -> RadioEpisodeCandidate {
-        .init(key: .init(feedID: "f", episodeID: id), originalPlaybackURL: URL(string: "https://example.com/\(id).mp3")!, canonicalEnclosureURL: "https://example.com/\(id).mp3", title: id, sourceName: "f", publicationDate: now, durationSeconds: 100, normalizedCoreDataProgress: 0, isCompleted: false, sourcePriority: 0, sourceFrequency: .hourly)
+        .init(key: .init(feedID: id, episodeID: id), originalPlaybackURL: URL(string: "https://example.com/\(id).mp3")!, canonicalEnclosureURL: "https://example.com/\(id).mp3", title: id, sourceName: id, publicationDate: now, durationSeconds: 100, normalizedCoreDataProgress: 0, isCompleted: false, sourcePriority: 0, sourceFrequency: .hourly)
     }
 
     private func entry(_ key: RadioEpisodeKey) -> RadioQueueEntry {

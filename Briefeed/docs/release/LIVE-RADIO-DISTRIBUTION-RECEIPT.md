@@ -47,11 +47,50 @@ functional checks. Audible cold-launch autoplay, persisted physical resume,
 Lock Screen/Control Center commands, and sleep-under-lock remain human-observed
 gates rather than simulator claims.
 
+The next physical inspection clarified that the visible list must be
+source-centric. The installed build showed both the 4 PM and 5 PM NPR hourly
+episodes, which is incorrect for a latest-news scan. The follow-up implementation
+deduplicates automatic queue entries by source, localizes hourly title times,
+and adds a source archive with explicit Play Now and Play Later actions. Manual
+archive queueing is persisted and is the sole same-source exception. This
+follow-up requires its own focused runtime and physical reinstall evidence; it
+does not invalidate the earlier player-safe-area evidence.
+
+The follow-up also removes the nonblocking partial-refresh banner from Radio
+Home, moves that diagnosis to an issue indicator on each affected row in Radio
+Sources, abbreviates known hourly networks to NPR/ABC/CBS/CBC, and makes the
+lower chrome a real layout boundary so playlist rows cannot render underneath
+the rail or mini-player. These additions remain part of the same pending
+source-centric verification and phone-reinstall gate until the evidence table
+below is updated with the exact build.
+
+Manual Next now also persists an automatic hourly edition as retired rather
+than deleting its identity. This prevents the same skipped bulletin from being
+re-added on relaunch while preserving progress and avoiding a false Listened
+mark; a genuinely newer edition replaces the retired entry. Daily and manual
+archive selections keep the prior defer-and-resume behavior.
+
+The source-centric app and test targets pass `build-for-testing` compilation;
+the final product code also passes a signed Debug device build and code-sign
+verification. The final UI-test-only geometry assertion was syntax-parsed after
+the host became too saturated for another build-for-testing run. The exact app
+is installed on the approved iPhone 13 Pro without replacing app data.
+Automated launch was denied because the phone was locked; opening the installed
+app and the visual/audible checks therefore remain owner actions. A focused
+simulator run was started only after the fleet admitted the owned lane, then
+stopped when host load rose from warning to severe saturation. No pressure
+override, foreign simulator, or global recovery was used, so runtime unit/UI
+claims below remain attached only to their prior exact builds until this
+follow-up is rerun.
+
 ## Gate Summary
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
 | Build for testing | PASS | Hardening compile: `/tmp/briefeed-radio-phone-hardening-compile-2.log`; `** TEST BUILD SUCCEEDED **` |
+| Source-centric build for testing | PASS BEFORE FINAL TEST-ONLY ASSERTION | `/tmp/briefeed-radio-source-centric-compile-7.log`; `** TEST BUILD SUCCEEDED **`; final `RadioUITests.swift` syntax parse passed |
+| Source-centric simulator runtime | BLOCKED BY HOST LOAD | Owned lane `live-radio-mvp-final` was stopped and shut down after host load rose to 450; no runtime result claimed |
+| Source-centric signed device build/install | PASS / OPEN OWNER LAUNCH | `/tmp/briefeed-radio-source-centric-device-final.log`; `** BUILD SUCCEEDED **`; installed on iPhone 13 Pro, automated launch denied only because the phone was locked |
 | Adapter safety regression | PASS | `bash skills/app-testing/scripts/run-radio-selftest.sh`; `/tmp/briefeed-live-radio-adapter-lock-selftest.log`; covers fresh claims, stale-ownerless recovery, delayed fresh-ownerless preservation, and critical-pressure refusal |
 | Deterministic Radio unit suites | PASS | Exact-commit suites: restore 17/17, lifecycle 11/11, empty state 4/4, RSS refresh 8/8, Unified playback 11/11, playback state 30/30 |
 | Post-phone hardening units | PASS | `/tmp/briefeed-radio-phone-hardening-lifecycle.log`, 13/13; `/tmp/briefeed-radio-phone-hardening-presentation.log`, 10/10 |
@@ -60,7 +99,7 @@ gates rather than simulator claims.
 | Standalone smoke evidence bundle | PASS | Receipt and screenshot under `/tmp/briefeed-radio-live-radio-mvp-final-derived-data/RadioSmokeEvidence/20260720T202539Z/`; final screenshot visually inspected |
 | Focused Brief regression | PASS ON PRIOR BASELINE | `/tmp/briefeed-live-radio-final-brief-selectors.log`; MiniPlayer navigation 13/13 plus focused isolation/state selectors passed at `b3950b9`; not rerun after the scoped Radio/RSS repairs in `12ec494` |
 | Analyze | PASS | `/tmp/briefeed-live-radio-12ec494-analyze.log`; `** ANALYZE SUCCEEDED **` |
-| Physical-device checklist | IN PROGRESS | Exact hardening build succeeded, installed, and launched on owner-approved iPhone 13 Pro / iOS 26.5.2; owner is running audible/lifecycle/remote-control checks |
+| Physical-device checklist | IN PROGRESS | Exact source-centric follow-up succeeded and is installed on the owner-approved iPhone 13 Pro / iOS 26.5.2; unlock/open plus visual, audible, lifecycle, and remote-control checks remain owner-observed |
 | Signed archive/export | PASS | `/tmp/Briefeed-Live-Radio-12ec494.xcarchive`; `/tmp/Briefeed-Live-Radio-12ec494-export/Briefeed.ipa`; code-sign verification passed |
 | Packaged credential audit | BLOCKED | Exported IPA contains nonempty Firecrawl and Gemini values. Do not upload or share it. Remediation is tracked in GitHub #16 |
 | Visual size/appearance matrix | PARTIAL | Final iPhone 15 Pro / iOS 18.6 screenshot inspected; small/large phone, iPad, Dynamic Type, dark-mode, and physical iOS 26 matrix remain GitHub #15 |

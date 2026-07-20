@@ -6,7 +6,7 @@ struct RadioEpisodeKey: Codable, Hashable, Sendable {
 }
 
 enum RadioEntryDisposition: String, Codable, Sendable {
-    case pending, playing, deferred, failedThisSession
+    case pending, playing, deferred, retired, failedThisSession
 }
 
 struct RadioQueueEntry: Codable, Identifiable, Equatable, Sendable {
@@ -16,6 +16,37 @@ struct RadioQueueEntry: Codable, Identifiable, Equatable, Sendable {
     var disposition: RadioEntryDisposition
     var playbackFailureCount: Int
     var lastPlaybackError: String?
+    var isManuallyQueued: Bool
+
+    init(
+        key: RadioEpisodeKey,
+        positionSeconds: TimeInterval,
+        disposition: RadioEntryDisposition,
+        playbackFailureCount: Int,
+        lastPlaybackError: String?,
+        isManuallyQueued: Bool = false
+    ) {
+        self.key = key
+        self.positionSeconds = positionSeconds
+        self.disposition = disposition
+        self.playbackFailureCount = playbackFailureCount
+        self.lastPlaybackError = lastPlaybackError
+        self.isManuallyQueued = isManuallyQueued
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key, positionSeconds, disposition, playbackFailureCount, lastPlaybackError, isManuallyQueued
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        key = try container.decode(RadioEpisodeKey.self, forKey: .key)
+        positionSeconds = try container.decode(TimeInterval.self, forKey: .positionSeconds)
+        disposition = try container.decode(RadioEntryDisposition.self, forKey: .disposition)
+        playbackFailureCount = try container.decode(Int.self, forKey: .playbackFailureCount)
+        lastPlaybackError = try container.decodeIfPresent(String.self, forKey: .lastPlaybackError)
+        isManuallyQueued = try container.decodeIfPresent(Bool.self, forKey: .isManuallyQueued) ?? false
+    }
 }
 
 struct PersistedRadioSession: Codable, Equatable, Sendable {

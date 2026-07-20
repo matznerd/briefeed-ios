@@ -153,10 +153,10 @@ final class RadioUITests: XCTestCase {
             130,
             "The compact controls plus the home-indicator safe area should remain short"
         )
-        XCTAssertGreaterThanOrEqual(
-            player.frame.maxY,
-            app.frame.maxY - 1,
-            "The player material should continue through the bottom safe area"
+        XCTAssertLessThanOrEqual(
+            app.frame.maxY - player.frame.maxY,
+            40,
+            "Player controls should end at the phone's bottom safe-area boundary"
         )
 
         let rail = app.otherElements["navigation.rail"]
@@ -165,7 +165,7 @@ final class RadioUITests: XCTestCase {
     }
 
     @MainActor
-    func testRadioHomeIsAVisiblePersistedOrderPlaylist() throws {
+    func testRadioHomeShowsOneLatestRowPerSourceInPriorityOrder() throws {
         app.launch()
 
         let npr = app.staticTexts["radio.episodeTitle.fixture-npr.fixture-partial"]
@@ -175,6 +175,46 @@ final class RadioUITests: XCTestCase {
         XCTAssertLessThan(npr.frame.minY, bbc.frame.minY)
         XCTAssertTrue(app.staticTexts["20% listened"].exists)
         XCTAssertFalse(app.buttons["radio.manageSources"].exists)
+    }
+
+    @MainActor
+    func testRadioHomeRowsCanClearTheBottomChrome() throws {
+        app.launch()
+
+        let bottomSource = app.buttons["radio.episode.fixture-world.fixture-malformed"]
+        for _ in 0..<5 where !bottomSource.isHittable {
+            app.swipeUp()
+        }
+
+        XCTAssertTrue(bottomSource.waitForExistence(timeout: 3))
+        XCTAssertTrue(bottomSource.isHittable)
+        let rail = app.otherElements["navigation.rail"]
+        XCTAssertTrue(rail.waitForExistence(timeout: 3))
+        XCTAssertLessThanOrEqual(
+            bottomSource.frame.maxY,
+            rail.frame.minY + 1,
+            "A source row must scroll fully above the navigation and player chrome"
+        )
+    }
+
+    @MainActor
+    func testSourceArchiveExposesEarlierEpisodesAndManualQueueing() throws {
+        app.launch()
+
+        let npr = app.buttons["radio.episode.fixture-npr.fixture-partial"]
+        XCTAssertTrue(npr.waitForExistence(timeout: 5))
+        npr.tap()
+
+        XCTAssertTrue(app.otherElements["radio.sourceArchive"].waitForExistence(timeout: 3))
+        let options = app.buttons["radio.archiveOptions.fixture-npr.fixture-duplicate-guid"]
+        XCTAssertTrue(options.waitForExistence(timeout: 3))
+        options.tap()
+        let playLater = app.buttons["Play Later"].exists
+            ? app.buttons["Play Later"]
+            : app.menuItems["Play Later"]
+        XCTAssertTrue(playLater.waitForExistence(timeout: 2))
+        playLater.tap()
+        XCTAssertTrue(app.staticTexts["Queued for later"].waitForExistence(timeout: 3))
     }
 
     @MainActor
@@ -330,11 +370,25 @@ final class RadioUITests: XCTestCase {
         app.terminate()
         app = launchFixture("degraded", reset: true)
         XCTAssertTrue(app.staticTexts["Morning Update"].waitForExistence(timeout: 15))
-        let sourceFailureBanner = app.descendants(matching: .any)
+        let homeFailureNotice = app.descendants(matching: .any)
             .matching(identifier: "radio.sourceFailures")
             .firstMatch
-        XCTAssertTrue(sourceFailureBanner.waitForExistence(timeout: 5))
+        XCTAssertFalse(homeFailureNotice.exists)
+        XCTAssertFalse(app.staticTexts["Some sources could not refresh"].exists)
         XCTAssertFalse(app.staticTexts["Radio needs attention"].exists)
+
+        app.buttons["navigation.settings"].tap()
+        let sourceSettings = app.buttons["settings.feedOrder"]
+        for _ in 0..<4 where !sourceSettings.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(sourceSettings.waitForExistence(timeout: 3))
+        sourceSettings.tap()
+        XCTAssertTrue(app.navigationBars["Radio Sources"].waitForExistence(timeout: 3))
+        let sourceFailure = app.descendants(matching: .any)
+            .matching(identifier: "radio.sourceFailure.fixture-world")
+            .firstMatch
+        XCTAssertTrue(sourceFailure.waitForExistence(timeout: 3))
     }
 
     @MainActor

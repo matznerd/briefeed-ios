@@ -51,8 +51,7 @@ struct ContentView: View {
                     .padding(.trailing, 12)
                     .zIndex(2)
             }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+
             AppBottomChrome(
                 selection: $selectedTab,
                 showsMiniPlayer: shouldShowMiniPlayer

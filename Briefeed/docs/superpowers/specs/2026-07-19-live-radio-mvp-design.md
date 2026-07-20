@@ -15,7 +15,9 @@ The experience is designed for short, repeated visits:
 - With autoplay enabled, a cold launch begins or resumes Radio with minimal delay.
 - Reopening the app during the same listening window does not restart completed episodes.
 - A partially played episode resumes from its saved position.
-- A user can press Next to defer that episode and continue immediately.
+- A user can press Next to continue immediately without marking the episode
+  complete. Automatic hourly bulletins leave the current scan; daily and
+  explicitly queued archive episodes remain resumable in the deferred tail.
 - Refresh adds new episodes without replacing the current session or duplicating entries.
 - The player remains understandable and controllable in the app, on the Lock Screen, and in Control Center.
 
@@ -397,13 +399,16 @@ Reconciliation may reorder only the pending partition. Manual Next moves the cur
 
 ### Manual Next
 
-Manual Next means "defer this episode and continue," not "mark complete."
+Manual Next means "continue without marking complete."
 
 - Save the current seconds position.
-- Change its disposition to `deferred`.
-- Move it behind all currently pending entries.
+- Remove an automatic hourly bulletin from this source scan so an old hour
+  cannot replay after the other sources. Its progress remains in the archive.
+- Change a daily or explicitly queued archive episode to `deferred` and move it
+  behind all currently pending entries.
 - Select and play the next eligible entry.
-- If the session later cycles back to the deferred entry, resume it from the saved position.
+- If the session later cycles back to a retained deferred entry, resume it from
+  the saved position.
 
 ### Completion
 
@@ -471,7 +476,7 @@ deadline(Date)
 endOfEpisode
 ```
 
-`sourceDegraded` is an orthogonal presentation flag derived from non-empty per-source failures. It may coexist with `playing`, `readyPaused`, or another primary session state and must never replace active playback as the primary state.
+`sourceDegraded` is an orthogonal diagnostic flag derived from non-empty per-source failures. It may coexist with `playing`, `readyPaused`, or another primary session state and must never replace active playback as the primary state. Radio Home does not render this diagnostic as a banner; Radio Sources marks only each affected source row.
 
 ### Cold Launch
 
@@ -621,7 +626,7 @@ enum AppTab: Hashable {
 }
 ```
 
-`ContentView` owns the selected `AppTab`, defaulting to `.radio`. Keep a `TabView` to preserve each section's state, hide its native tab bar, and place custom lower chrome through `safeAreaInset(edge: .bottom)` rather than a fixed 49-point offset.
+`ContentView` owns the selected `AppTab`, defaulting to `.radio`. Keep a `TabView` to preserve each section's state and hide its native tab bar. Place the custom lower chrome after the flexible tab content in the root vertical layout rather than overlaying it or using a fixed offset. This gives the list a hard visible boundary above the chrome.
 
 The lower chrome order is:
 
@@ -665,6 +670,10 @@ Remove Settings as a tab. A top-right gear presents the existing `SettingsView` 
 - Playback speed, reflecting the shared last-used value.
 - Feed order and enablement link.
 
+When refresh succeeds only partially, the affected source row in Radio Sources
+shows an orange warning icon with an accessible error description. Radio Home
+continues with available episodes and shows no global partial-refresh banner.
+
 Normal source administration does not occupy Radio Home. Add Source remains a
 direct Radio recovery action only when no enabled source can populate the
 playlist.
@@ -673,24 +682,36 @@ playlist.
 
 - Radio Home is a plain, vertically descending playlist rather than a stack of
   status cards.
-- Start with the coordinator's persisted entries in their exact playback order.
-  This keeps the current or partially played episode visible even when a newer
-  episode from the same source has arrived.
-- After the queued entries, supplement the list with the newest episode from
-  each source when that episode is not already in the current brief. Order
-  supplemental rows by user source priority, then stable source and episode
-  keys.
-- Each row shows title, source, relative publication time, and one of: Ready,
-  Up next, percent listened, Listened, not in the current brief, or unavailable
-  for this session.
-- Completed supplemental episodes remain visible as non-playing Listened rows even
-  though they are absent from the eligible playback queue.
-- A stale or deduplicated latest episode that is absent from the eligible queue
-  remains visible but non-playing as `Not in current brief`.
-- Selecting an eligible row makes it current through the Radio coordinator.
+- Show exactly one automatic row per source, ordered by user source priority.
+  The row represents the newest fetched episode for that source. A newer hourly
+  bulletin replaces an older automatic slot; the brief never schedules both
+  hours consecutively merely because both remain in Core Data.
+- Do not interrupt an actively playing or user-paused older episode when a
+  refresh finds a replacement. Finish or skip that episode, then continue to
+  the next source. The replacement remains available in the source archive.
+- Manual Next never records completion. For an automatic hourly bulletin it
+  persists a retired entry so relaunching cannot re-add that same edition; the
+  retired entry is discarded when a newer edition for that source arrives.
+  Daily and manually queued archive episodes instead move to the deferred tail
+  and retain their saved position.
+- Each row shows title, source, relative publication time, archive availability,
+  and one of: Ready, Up next, percent listened, Listened, Latest update, or
+  unavailable for this session.
+- A completed newest episode remains visible as a muted, non-playing Listened
+  source row even though it is absent from the eligible playback queue.
+- Hourly title-only dates are normalized into `Source: local time · local date`
+  using the user's current time zone. Known networks use compact identities:
+  `NPR`, `ABC`, `CBS`, and `CBC`. Editorial daily episode titles remain
+  unchanged, with publication timing subordinate in metadata.
+- Selecting a source row opens a descending source archive. Retained prior
+  episodes offer Play Now and Play Later. Explicit Play Later entries are
+  persisted manual queue exceptions and may coexist with the source's automatic
+  latest slot; automatic reconciliation itself never creates that duplication.
 - Normal playing, paused, and loading states are represented by the row and
   mini-player. Separate state content is reserved for restoration, refresh,
   offline recovery, no sources, exhausted, and failure.
+- The scroll viewport ends above the navigation rail and mini-player. A source
+  row may not paint underneath either surface, including during a bottom scroll.
 
 ### Mini Player
 
@@ -905,7 +926,8 @@ The Live Radio MVP is ready for a distribution candidate when all of the followi
 - Enabled autoplay runs on cold launch only.
 - A partial episode resumes at the saved position after process recreation.
 - A completed episode is not replayed after reopening in the same hour.
-- Manual Next preserves partial progress and advances to the next eligible episode.
+- Manual Next preserves partial progress and advances to the next eligible
+  source; automatic hourly updates do not recur later in the same scan.
 - Feed priority deterministically controls source order.
 - Refresh retains current and queued entries, appends new eligible entries, and creates no duplicates.
 - Failed sources do not block successful sources.

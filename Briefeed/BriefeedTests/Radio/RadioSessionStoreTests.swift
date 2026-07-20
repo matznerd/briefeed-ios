@@ -90,6 +90,27 @@ struct RadioSessionStoreTests {
         #expect(repaired.currentKey == second)
     }
 
+    @Test func validatePreservesRetiredEntriesButNeverRestoresOneAsCurrent() throws {
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let retired = RadioEpisodeKey(feedID: "npr", episodeID: "5pm")
+        let next = RadioEpisodeKey(feedID: "bbc", episodeID: "latest")
+        let snapshot = PersistedRadioSession(
+            schemaVersion: 1,
+            entries: [
+                .init(key: retired, positionSeconds: 42, disposition: .retired, playbackFailureCount: 0, lastPlaybackError: nil),
+                .init(key: next, positionSeconds: 0, disposition: .pending, playbackFailureCount: 0, lastPlaybackError: nil)
+            ],
+            currentKey: retired,
+            savedAt: .now
+        )
+
+        let repaired = try RadioSessionStore.validate(snapshot, durations: [:])
+
+        #expect(repaired.entries.first?.disposition == .retired)
+        #expect(repaired.entries.first?.positionSeconds == 42)
+        #expect(repaired.currentKey == next)
+    }
+
     @Test func loadDiscardsCorruptData() throws {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         defaults.set(Data("not-json".utf8), forKey: RadioSessionStore.storageKey)
@@ -97,6 +118,18 @@ struct RadioSessionStoreTests {
 
         #expect(try store.load(durations: [:]) == nil)
         #expect(defaults.object(forKey: RadioSessionStore.storageKey) == nil)
+    }
+
+    @Test func olderSnapshotsDecodeEntriesAsAutomaticSourceSlots() throws {
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let json = """
+        {"schemaVersion":1,"entries":[{"key":{"feedID":"npr","episodeID":"5pm"},"positionSeconds":0,"disposition":"pending","playbackFailureCount":0}],"currentKey":{"feedID":"npr","episodeID":"5pm"},"savedAt":0}
+        """
+        defaults.set(Data(json.utf8), forKey: RadioSessionStore.storageKey)
+
+        let restored = try RadioSessionStore(defaults: defaults).load(durations: [:])
+
+        #expect(restored?.entries.first?.isManuallyQueued == false)
     }
 
     @Test func forcedSaveInvalidatesOlderDebounce() throws {

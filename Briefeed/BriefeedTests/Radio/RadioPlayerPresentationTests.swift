@@ -96,7 +96,7 @@ struct RadioPlayerPresentationTests {
         let setup = await makeRestoredPlayer(position: 37, includesNext: true)
 
         setup.viewModel.seekForward()
-        #expect(setup.repository.progress.last?.0 == RadioEpisodeKey(feedID: "npr", episodeID: "one"))
+        #expect(setup.repository.progress.last?.0 == RadioEpisodeKey(feedID: "one", episodeID: "one"))
         #expect(setup.repository.progress.last?.1 == 47)
         #expect(setup.transport.seeks.isEmpty)
         #expect(setup.brief.saveCount == 0)
@@ -155,7 +155,7 @@ struct RadioPlayerPresentationTests {
     @Test func exhaustedRadioBecomesCaughtUpRefreshInsteadOfFakePlayback() async {
         let setup = await makeRestoredPlayer()
         _ = setup.radio.playbackCompleted(
-            for: RadioEpisodeKey(feedID: "npr", episodeID: "one"),
+            for: RadioEpisodeKey(feedID: "one", episodeID: "one"),
             at: .now
         )
         await Task.yield()
@@ -414,7 +414,7 @@ struct RadioPlayerPresentationTests {
 
     private func candidate(_ id: String, title: String) -> RadioEpisodeCandidate {
         RadioEpisodeCandidate(
-            key: .init(feedID: "npr", episodeID: id),
+            key: .init(feedID: id, episodeID: id),
             originalPlaybackURL: URL(string: "https://example.com/\(id).mp3")!,
             canonicalEnclosureURL: "https://example.com/\(id).mp3",
             title: title,
@@ -424,7 +424,7 @@ struct RadioPlayerPresentationTests {
             normalizedCoreDataProgress: 0,
             isCompleted: false,
             sourcePriority: 0,
-            sourceFrequency: .hourly
+            sourceFrequency: .daily
         )
     }
 

@@ -77,6 +77,51 @@ struct RadioQueueBuilderTests {
         #expect(result.currentKey == retained.key)
     }
 
+    @Test func restoreReplacesAnOlderAutomaticSourceSlotWithItsLatestEpisode() {
+        let older = candidate("npr", "4pm", priority: 0, date: now.addingTimeInterval(-3_600))
+        let latest = candidate("npr", "5pm", priority: 0, date: now)
+        let bbc = candidate("bbc", "latest", priority: 1, date: now)
+        let snapshot = session(entries: [entry(older.key, .playing), entry(bbc.key, .pending)], current: older.key)
+
+        let result = RadioQueueBuilder(now: now).restore(snapshot: snapshot, candidates: [older, latest, bbc])
+
+        #expect(result.entries.map(\.key) == [latest.key, bbc.key])
+        #expect(result.currentKey == latest.key)
+    }
+
+    @Test func restoreKeepsRetiredLatestIneligibleUntilItsSourcePublishesAgain() {
+        let skipped = candidate("npr", "5pm", priority: 0, date: now)
+        let bbc = candidate("bbc", "latest", priority: 1, date: now)
+        let snapshot = session(
+            entries: [entry(skipped.key, .retired), entry(bbc.key, .pending)],
+            current: bbc.key
+        )
+
+        let result = RadioQueueBuilder(now: now).restore(
+            snapshot: snapshot,
+            candidates: [skipped, bbc]
+        )
+
+        #expect(result.entries.first { $0.key == skipped.key }?.disposition == .retired)
+        #expect(result.currentKey == bbc.key)
+        #expect(RadioQueueBuilder(now: now).nextEligible(in: result) == nil)
+    }
+
+    @Test func reconcileReplacesARetiredBulletinWhenANewerEditionArrives() {
+        let skipped = candidate("npr", "5pm", priority: 0, date: now.addingTimeInterval(-3_600))
+        let replacement = candidate("npr", "6pm", priority: 0, date: now)
+        let snapshot = session(entries: [entry(skipped.key, .retired)], current: nil)
+
+        let result = RadioQueueBuilder(now: now).reconcile(
+            snapshot: snapshot,
+            candidates: [skipped, replacement]
+        )
+
+        #expect(result.entries.map(\.key) == [replacement.key])
+        #expect(result.entries.first?.disposition == .pending)
+        #expect(result.currentKey == replacement.key)
+    }
+
     @Test func restoreAcceptsExactDailySevenDayRetentionBoundary() {
         let daily = candidate("daily", "one", priority: 1, date: now.addingTimeInterval(-604_800), frequency: .daily)
         let snapshot = session(entries: [entry(daily.key, .pending)], current: daily.key)
@@ -131,8 +176,39 @@ struct RadioQueueBuilderTests {
 
         let result = RadioQueueBuilder(now: now).reconcile(snapshot: snapshot, candidates: [current, deferred, fresh])
 
-        #expect(result.entries.map(\.key) == [current.key, fresh.key, deferred.key])
+        #expect(result.entries.map(\.key) == [current.key, fresh.key])
         #expect(result.currentKey == current.key)
+    }
+
+    @Test func reconcileDoesNotQueueANewerEpisodeBehindAnActivelyPlayingSource() {
+        let current = candidate("npr", "4pm", priority: 0, date: now.addingTimeInterval(-3_600))
+        let latest = candidate("npr", "5pm", priority: 0, date: now)
+        let bbc = candidate("bbc", "latest", priority: 1, date: now)
+        let snapshot = session(entries: [entry(current.key, .playing), entry(bbc.key, .pending)], current: current.key)
+
+        let result = RadioQueueBuilder(now: now).reconcile(snapshot: snapshot, candidates: [current, latest, bbc])
+
+        #expect(result.entries.map(\.key) == [current.key, bbc.key])
+        #expect(result.currentKey == current.key)
+    }
+
+    @Test func reconcileKeepsExplicitlyQueuedArchiveEpisodesAsManualExceptions() {
+        let latest = candidate("marketplace", "latest", priority: 1, date: now, frequency: .daily)
+        let archive = candidate("marketplace", "archive", priority: 1, date: now.addingTimeInterval(-86_400), frequency: .daily)
+        let manual = RadioQueueEntry(
+            key: archive.key,
+            positionSeconds: 0,
+            disposition: .deferred,
+            playbackFailureCount: 0,
+            lastPlaybackError: nil,
+            isManuallyQueued: true
+        )
+        let snapshot = session(entries: [entry(latest.key, .pending), manual], current: latest.key)
+
+        let result = RadioQueueBuilder(now: now).reconcile(snapshot: snapshot, candidates: [latest, archive])
+
+        #expect(result.entries.map(\.key) == [latest.key, archive.key])
+        #expect(result.entries.last?.isManuallyQueued == true)
     }
 
     @Test func reconcileReordersOnlyPendingAndKeepsFailedIneligible() {
@@ -152,10 +228,10 @@ struct RadioQueueBuilderTests {
 
     @Test func reconcilePreservesLivePlayingCurrentAndStableDeferredAndFailedOrder() {
         let current = candidate("current", "one", priority: 9, date: now)
-        let deferredOne = candidate("deferred", "one", priority: 0, date: now)
-        let deferredTwo = candidate("deferred", "two", priority: 0, date: now)
-        let failedOne = candidate("failed", "one", priority: 0, date: now)
-        let failedTwo = candidate("failed", "two", priority: 0, date: now)
+        let deferredOne = candidate("deferred-one", "one", priority: 0, date: now)
+        let deferredTwo = candidate("deferred-two", "two", priority: 0, date: now)
+        let failedOne = candidate("failed-one", "one", priority: 0, date: now)
+        let failedTwo = candidate("failed-two", "two", priority: 0, date: now)
         let snapshot = session(entries: [entry(current.key, .playing), entry(deferredOne.key, .deferred), entry(deferredTwo.key, .deferred), entry(failedOne.key, .failedThisSession), entry(failedTwo.key, .failedThisSession)], current: current.key)
 
         let result = RadioQueueBuilder(now: now).reconcile(snapshot: snapshot, candidates: [current, deferredOne, deferredTwo, failedOne, failedTwo])

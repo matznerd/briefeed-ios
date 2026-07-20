@@ -62,7 +62,7 @@ struct RadioPlaybackStateTests {
     @Test func nextDefersCurrentAtDeferredTailBeforeFailedEntries() async {
         let first = candidate("one"); let next = candidate("two"); let deferred = candidate("three"); let failed = candidate("four")
         let snapshot = session([
-            entry(failed.key), entry(first.key), entry(next.key), entry(deferred.key, disposition: .deferred)
+            entry(failed.key), entry(first.key, manuallyQueued: true), entry(next.key), entry(deferred.key, disposition: .deferred)
         ], current: failed.key)
         let scheduler = TestRadioRetryScheduler()
         let coordinator = make(
@@ -82,6 +82,32 @@ struct RadioPlaybackStateTests {
         #expect(coordinator.entries[2].disposition == .deferred)
     }
 
+    @Test func nextRetiresAnAutomaticHourlyEpisodeBeforeAdvancingSources() async {
+        let npr = candidate("npr")
+        let bbc = candidate("bbc")
+        let repository = CompletionRepository(candidates: [npr, bbc])
+        let store = FakeRadioSessionStore(snapshot: session([entry(npr.key), entry(bbc.key)], current: npr.key))
+        let coordinator = make(
+            store: store,
+            repository: repository
+        )
+        _ = await coordinator.restore(autoplayEnabled: false)
+
+        #expect(coordinator.manualNext(positionSeconds: 42, duration: 300)?.key == bbc.key)
+        #expect(coordinator.entries.first { $0.key == npr.key }?.disposition == .retired)
+        #expect(repository.completed.isEmpty)
+        #expect(repository.progressWrites.last?.seconds == 42)
+
+        let relaunched = make(
+            store: FakeRadioSessionStore(snapshot: store.savedNow),
+            repository: repository
+        )
+        _ = await relaunched.restore(autoplayEnabled: false)
+        #expect(relaunched.currentKey == bbc.key)
+        #expect(relaunched.entries.first { $0.key == npr.key }?.disposition == .retired)
+        #expect(!relaunched.canPlayNext)
+    }
+
     @Test func selectingAnotherEpisodeCompletesNearlyFinishedCurrentInsteadOfDeferringIt() async {
         let first = candidate("one"); let selected = candidate("two")
         let repository = CompletionRepository(candidates: [first, selected])
@@ -95,6 +121,27 @@ struct RadioPlaybackStateTests {
         #expect(!coordinator.entries.contains { $0.key == first.key })
         #expect(coordinator.entries.allSatisfy { $0.disposition != .deferred })
         #expect(store.savedNow?.currentKey == selected.key)
+    }
+
+    @Test func queueingAnArchiveEpisodePersistsItAtTheDeferredTail() async {
+        let current = candidate("current")
+        let archive = RadioEpisodeCandidate(
+            key: .init(feedID: "archive-feed", episodeID: "yesterday"),
+            originalPlaybackURL: URL(string: "https://example.com/archive.mp3")!,
+            canonicalEnclosureURL: "https://example.com/archive.mp3",
+            title: "Earlier this week", sourceName: "Archive", publicationDate: now.addingTimeInterval(-172_800),
+            durationSeconds: 300, normalizedCoreDataProgress: 0, isCompleted: false,
+            sourcePriority: 1, sourceFrequency: .daily
+        )
+        let store = FakeRadioSessionStore(snapshot: session([entry(current.key)], current: current.key))
+        let coordinator = make(store: store, repository: CompletionRepository(candidates: [current, archive]))
+        _ = await coordinator.restore(autoplayEnabled: false)
+
+        #expect(coordinator.queueEpisode(archive.key))
+        #expect(coordinator.entries.map(\.key) == [current.key, archive.key])
+        #expect(coordinator.entries.last?.disposition == .deferred)
+        #expect(coordinator.entries.last?.isManuallyQueued == true)
+        #expect(store.savedNow?.entries.last?.key == archive.key)
     }
 
     @Test func failedCompletionWhileSelectingKeepsExactCurrentAndRetryFinishesSelection() async {
@@ -203,7 +250,7 @@ struct RadioPlaybackStateTests {
         let first = candidate("one"); let next = candidate("two")
         var order: [String] = []
         let repository = CompletionRepository(candidates: [first, next], onCompletion: { order.append("complete") })
-        let store = FakeRadioSessionStore(snapshot: session([entry(first.key), entry(next.key)], current: first.key), onSaveNow: { order.append("snapshot") })
+        let store = FakeRadioSessionStore(snapshot: session([entry(first.key, manuallyQueued: true), entry(next.key)], current: first.key), onSaveNow: { order.append("snapshot") })
         let coordinator = make(store: store, repository: repository)
         _ = await coordinator.restore(autoplayEnabled: false)
         order.removeAll(); store.resetCalls()
@@ -307,7 +354,7 @@ struct RadioPlaybackStateTests {
         _ = coordinator.playbackFailed(for: episode.key, message: "twice", positionSeconds: 8, duration: 100, connectivity: .online)
         #expect(coordinator.entries[0].disposition == .failedThisSession)
 
-        coordinator.applyRefresh(.init(results: [.init(feedID: "feed", outcome: .success(insertedEpisodeIDs: []))]))
+        coordinator.applyRefresh(.init(results: [.init(feedID: episode.key.feedID, outcome: .success(insertedEpisodeIDs: []))]))
         #expect(coordinator.currentKey == episode.key)
         #expect(coordinator.entries[0].disposition == .pending)
         #expect(coordinator.entries[0].playbackFailureCount == 0)
@@ -324,7 +371,7 @@ struct RadioPlaybackStateTests {
         scheduler.fire()
         _ = coordinator.playbackFailed(for: episode.key, message: "two", positionSeconds: 8, duration: 100, connectivity: .online)
 
-        coordinator.applyRefresh(.init(results: [.init(feedID: "feed", outcome: .failed(message: "refresh failed"))]))
+        coordinator.applyRefresh(.init(results: [.init(feedID: episode.key.feedID, outcome: .failed(message: "refresh failed"))]))
         #expect(coordinator.entries[0].disposition == .failedThisSession)
         #expect(coordinator.entries[0].playbackFailureCount == 2)
         #expect(coordinator.currentKey == nil)
@@ -368,7 +415,7 @@ struct RadioPlaybackStateTests {
         _ = coordinator.playbackFailed(for: other.key, message: "two", positionSeconds: 0, duration: 100, connectivity: .online)
 
         coordinator.applyRefresh(.init(results: [
-            .init(feedID: "feed", outcome: .success(insertedEpisodeIDs: [])),
+            .init(feedID: first.key.feedID, outcome: .success(insertedEpisodeIDs: [])),
             .init(feedID: "other", outcome: .failed(message: "still down"))
         ]))
         #expect(coordinator.entries.first { $0.key == first.key }?.disposition == .pending)
@@ -399,7 +446,7 @@ struct RadioPlaybackStateTests {
         #expect(!coordinator.canPlayNext)
 
         coordinator.applyRefresh(.init(results: [
-            .init(feedID: "feed", outcome: .success(insertedEpisodeIDs: [])),
+            .init(feedID: first.key.feedID, outcome: .success(insertedEpisodeIDs: [])),
             .init(feedID: "other", outcome: .success(insertedEpisodeIDs: []))
         ]))
 
@@ -621,11 +668,23 @@ struct RadioPlaybackStateTests {
     }
 
     private func candidate(_ id: String) -> RadioEpisodeCandidate {
-        .init(key: .init(feedID: "feed", episodeID: id), originalPlaybackURL: URL(string: "https://example.com/\(id).mp3")!, canonicalEnclosureURL: "https://example.com/\(id).mp3", title: id, sourceName: "feed", publicationDate: now, durationSeconds: 300, normalizedCoreDataProgress: 0, isCompleted: false, sourcePriority: 0, sourceFrequency: .hourly)
+        .init(key: .init(feedID: id, episodeID: id), originalPlaybackURL: URL(string: "https://example.com/\(id).mp3")!, canonicalEnclosureURL: "https://example.com/\(id).mp3", title: id, sourceName: id, publicationDate: now, durationSeconds: 300, normalizedCoreDataProgress: 0, isCompleted: false, sourcePriority: 0, sourceFrequency: .hourly)
     }
 
-    private func entry(_ key: RadioEpisodeKey, position: TimeInterval = 0, disposition: RadioEntryDisposition = .pending) -> RadioQueueEntry {
-        .init(key: key, positionSeconds: position, disposition: disposition, playbackFailureCount: disposition == .failedThisSession ? 2 : 0, lastPlaybackError: disposition == .failedThisSession ? "failed" : nil)
+    private func entry(
+        _ key: RadioEpisodeKey,
+        position: TimeInterval = 0,
+        disposition: RadioEntryDisposition = .pending,
+        manuallyQueued: Bool = false
+    ) -> RadioQueueEntry {
+        .init(
+            key: key,
+            positionSeconds: position,
+            disposition: disposition,
+            playbackFailureCount: disposition == .failedThisSession ? 2 : 0,
+            lastPlaybackError: disposition == .failedThisSession ? "failed" : nil,
+            isManuallyQueued: manuallyQueued
+        )
     }
 
     private func session(_ entries: [RadioQueueEntry], current: RadioEpisodeKey?) -> PersistedRadioSession {

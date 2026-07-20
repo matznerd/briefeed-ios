@@ -19,19 +19,24 @@ struct RadioQueueBuilder {
         let candidatesByKey = dictionaryByKey(candidates)
         let existingKeys = Set(restored.entries.map(\.key))
         let existingEnclosures = Set(restored.entries.compactMap { candidatesByKey[$0.key]?.canonicalEnclosureURL })
+        let reservedSources = reservedAutomaticSourceIDs(in: restored)
         let appended = newestCandidatePerSource(from: candidates)
             .filter(isFresh)
             .filter { !existingKeys.contains($0.key) }
             .filter { !existingEnclosures.contains($0.canonicalEnclosureURL) }
+            .filter { !reservedSources.contains($0.key.feedID) }
             .map(makePendingEntry)
         let preservedCurrent = restored.entries.first { entry in
-            entry.key == snapshot.currentKey && entry.disposition != .failedThisSession
+            entry.key == snapshot.currentKey
+                && entry.disposition != .failedThisSession
+                && entry.disposition != .retired
         }
         let nonCurrent = restored.entries.filter { $0.key != preservedCurrent?.key }
         let pending = sortPending(nonCurrent.filter { $0.disposition == .pending } + appended, candidatesByKey: candidatesByKey)
         let deferred = nonCurrent.filter { $0.disposition == .deferred }
+        let retired = nonCurrent.filter { $0.disposition == .retired }
         let failed = nonCurrent.filter { $0.disposition == .failedThisSession }
-        let entries = (preservedCurrent.map { [$0] } ?? []) + pending + deferred + failed
+        let entries = (preservedCurrent.map { [$0] } ?? []) + pending + deferred + retired + failed
         let currentKey = preservedCurrent?.key ?? pending.first?.key ?? deferred.first?.key
         return makeSession(entries: entries, currentKey: currentKey)
     }
@@ -45,21 +50,26 @@ struct RadioQueueBuilder {
         )
         let candidatesByKey = dictionaryByKey(candidates)
         let currentEntry = restored.entries.first { entry in
-            entry.key == snapshot.currentKey && entry.disposition != .failedThisSession
+            entry.key == snapshot.currentKey
+                && entry.disposition != .failedThisSession
+                && entry.disposition != .retired
         }
         let nonCurrent = restored.entries.filter { $0.key != currentEntry?.key }
         let deferred = nonCurrent.filter { $0.disposition == .deferred }
+        let retired = nonCurrent.filter { $0.disposition == .retired }
         let failed = nonCurrent.filter { $0.disposition == .failedThisSession }
         let existingEnclosures = Set(restored.entries.compactMap { candidatesByKey[$0.key]?.canonicalEnclosureURL })
         let existingKeys = Set(restored.entries.map(\.key))
+        let reservedSources = reservedAutomaticSourceIDs(in: restored)
         let appended = newestCandidatePerSource(from: candidates)
             .filter(isFresh)
             .filter { !existingKeys.contains($0.key) }
             .filter { !existingEnclosures.contains($0.canonicalEnclosureURL) }
+            .filter { !reservedSources.contains($0.key.feedID) }
 
         let pending = sortPending(nonCurrent.filter { $0.disposition == .pending } + appended.map(makePendingEntry), candidatesByKey: candidatesByKey)
 
-        let entries = (currentEntry.map { [$0] } ?? []) + pending + deferred + failed
+        let entries = (currentEntry.map { [$0] } ?? []) + pending + deferred + retired + failed
         let currentKey = currentEntry?.key ?? pending.first?.key ?? deferred.first?.key
         return makeSession(entries: entries, currentKey: currentKey)
     }
@@ -71,13 +81,34 @@ struct RadioQueueBuilder {
         resetSessionFailures: Bool
     ) -> PersistedRadioSession {
         let candidatesByKey = dictionaryByKey(candidates)
+        let latestAutomaticBySource = Dictionary(
+            uniqueKeysWithValues: newestCandidatePerSource(from: candidates).map { ($0.key.feedID, $0.key) }
+        )
+        let protectedCurrentKey: RadioEpisodeKey? = {
+            guard !normalizePlaying,
+                  let currentKey = snapshot.currentKey,
+                  snapshot.entries.contains(where: {
+                      $0.key == currentKey && $0.disposition == .playing
+                  }) else { return nil }
+            return currentKey
+        }()
+        let protectedCurrentSource = protectedCurrentKey?.feedID
         var seenKeys = Set<RadioEpisodeKey>()
         var seenEnclosures = Set<String>()
+        var seenAutomaticSources = Set<String>()
         var retained: [RadioQueueEntry] = []
 
         for entry in snapshot.entries where seenKeys.insert(entry.key).inserted {
-            guard let candidate = candidatesByKey[entry.key], isRetained(candidate),
-                  seenEnclosures.insert(candidate.canonicalEnclosureURL).inserted else { continue }
+            guard let candidate = candidatesByKey[entry.key], isRetained(candidate) else { continue }
+            if !entry.isManuallyQueued {
+                if candidate.key.feedID == protectedCurrentSource {
+                    guard candidate.key == protectedCurrentKey else { continue }
+                } else {
+                    guard latestAutomaticBySource[candidate.key.feedID] == candidate.key else { continue }
+                }
+                guard seenAutomaticSources.insert(candidate.key.feedID).inserted else { continue }
+            }
+            guard seenEnclosures.insert(candidate.canonicalEnclosureURL).inserted else { continue }
             retained.append(repaired(
                 entry,
                 candidate: candidate,
@@ -86,7 +117,11 @@ struct RadioQueueBuilder {
             ))
         }
 
-        let currentKey = retained.contains(where: { $0.key == snapshot.currentKey && $0.disposition != .failedThisSession })
+        let currentKey = retained.contains(where: {
+            $0.key == snapshot.currentKey
+                && $0.disposition != .failedThisSession
+                && $0.disposition != .retired
+        })
             ? snapshot.currentKey
             : retained.first(where: { $0.disposition == .pending })?.key
                 ?? retained.first(where: { $0.disposition == .deferred })?.key
@@ -96,6 +131,10 @@ struct RadioQueueBuilder {
     func nextEligible(in session: PersistedRadioSession) -> RadioEpisodeKey? {
         session.entries.first(where: { $0.key != session.currentKey && $0.disposition == .pending })?.key
             ?? session.entries.first(where: { $0.key != session.currentKey && $0.disposition == .deferred })?.key
+    }
+
+    func isEligibleForManualSelection(_ candidate: RadioEpisodeCandidate) -> Bool {
+        isRetained(candidate)
     }
 
     private func newestCandidatePerSource(from candidates: [RadioEpisodeCandidate]) -> [RadioEpisodeCandidate] {
@@ -115,6 +154,12 @@ struct RadioQueueBuilder {
         candidates.sorted(by: candidateSort).reduce(into: [:]) { result, candidate in
             result[candidate.key] = result[candidate.key] ?? candidate
         }
+    }
+
+    private func reservedAutomaticSourceIDs(in session: PersistedRadioSession) -> Set<String> {
+        Set(session.entries.compactMap { entry in
+            (!entry.isManuallyQueued || entry.key == session.currentKey) ? entry.key.feedID : nil
+        })
     }
 
     private func candidateSort(_ lhs: RadioEpisodeCandidate, _ rhs: RadioEpisodeCandidate) -> Bool {

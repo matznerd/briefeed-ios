@@ -365,7 +365,7 @@ struct UnifiedRadioPlaybackTests {
 
     private func makeCandidate(_ id: String) -> RadioEpisodeCandidate {
         .init(
-            key: .init(feedID: "feed", episodeID: id),
+            key: .init(feedID: id, episodeID: id),
             originalPlaybackURL: URL(string: "https://example.com/\(id).mp3")!,
             canonicalEnclosureURL: "https://example.com/\(id).mp3",
             title: id,

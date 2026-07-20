@@ -64,6 +64,34 @@ struct RadioEpisodeCandidate: Equatable, Sendable {
     }
 }
 
+extension RadioEpisodeCandidate {
+    func displayTitle(
+        timeZone: TimeZone = .autoupdatingCurrent,
+        locale: Locale = .autoupdatingCurrent
+    ) -> String {
+        guard sourceFrequency == .hourly else { return title }
+        let time = DateFormatter()
+        time.locale = locale
+        time.timeZone = timeZone
+        time.dateFormat = "h a zzz"
+        let date = DateFormatter()
+        date.locale = locale
+        date.timeZone = timeZone
+        date.dateFormat = "M/d/yy"
+        return "\(sourceIdentity): \(time.string(from: publicationDate)) · \(date.string(from: publicationDate))"
+    }
+
+    var sourceIdentity: String {
+        switch key.feedID {
+        case "npr-news-now": "NPR"
+        case "abc-news-update": "ABC"
+        case "cbs-on-the-hour": "CBS"
+        case "cbc-world-this-hour": "CBC"
+        default: sourceName
+        }
+    }
+}
+
 @MainActor
 protocol RadioEpisodeRepository: AnyObject {
     func candidates() throws -> [RadioEpisodeCandidate]
