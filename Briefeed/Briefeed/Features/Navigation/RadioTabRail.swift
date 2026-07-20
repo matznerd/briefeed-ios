@@ -46,7 +46,7 @@ struct RadioTabRail: View {
                     Image(systemName: tab.systemImage)
                         .font(.system(.body, design: .rounded, weight: .semibold))
                         .foregroundStyle(selection == tab ? Color.briefeedRed : Color.primary)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 45, height: 45)
                         .background {
                             if selection == tab {
                                 Capsule()

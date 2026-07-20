@@ -313,7 +313,6 @@ struct RadioHomeView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 8)
-        .accessibilityIdentifier(AccessibilityID.Radio.state)
     }
 
     private func stateMessage(

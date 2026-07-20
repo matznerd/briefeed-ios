@@ -528,7 +528,7 @@ struct RadioPlaybackStateTests {
         #expect(coordinator.manualNext(positionSeconds: 4, duration: 100)?.key == next.key)
         #expect(order == ["progress", "snapshot"])
         order.removeAll()
-        #expect(coordinator.playbackCompleted(for: next.key, at: now) == nil)
+        #expect(coordinator.playbackCompleted(for: next.key, at: now)?.key == first.key)
         #expect(order == ["complete", "snapshot"])
     }
 

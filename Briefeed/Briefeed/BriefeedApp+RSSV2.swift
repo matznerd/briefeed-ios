@@ -310,6 +310,14 @@ extension BriefeedApp {
         let postRestoreIntent = definition.applyPostRestore(to: services.coordinator)
         await UnifiedAudioPlayer.shared.execute(postRestoreIntent)
         RadioFixtureDiagnostics.shared.recordBootstrapExecution(of: postRestoreIntent)
+        if AppRuntime.shouldCompleteRadioFixtureCurrent,
+           let currentKey = services.coordinator.currentKey {
+            let completionIntent = services.coordinator.playbackCompleted(
+                for: currentKey,
+                at: AppRuntime.radioFixtureNow
+            )
+            await UnifiedAudioPlayer.shared.execute(completionIntent)
+        }
         print("🧪 Radio fixture ready: \(definition.scenario.rawValue)")
     }
     #endif

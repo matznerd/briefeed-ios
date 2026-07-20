@@ -109,6 +109,7 @@ final class FluidAudioTTSService: ObservableObject {
     var isModelReady: Bool { modelState == .ready }
 
     private init() {
+        guard !AppRuntime.shouldSkipAutomaticStartupWork else { return }
         migrateFromLegacyTTSIfNeeded()
         checkExistingModels()
     }

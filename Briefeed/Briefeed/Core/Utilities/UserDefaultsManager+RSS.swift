@@ -23,14 +23,21 @@ enum PlaybackSpeedPolicy {
     static func loadAndMigrate(defaults: UserDefaults) -> Float {
         let canonical = UserDefaultsKey.playbackSpeed.rawValue
         let legacy = UserDefaultsKey.rssPlaybackSpeed.rawValue
-        let raw: Float
-        if defaults.object(forKey: canonical) != nil {
-            raw = defaults.float(forKey: canonical)
-        } else if defaults.object(forKey: legacy) != nil {
-            raw = defaults.float(forKey: legacy)
-        } else {
-            raw = 1.0
-        }
+        let canonicalValue = defaults.object(forKey: canonical).map { _ in defaults.float(forKey: canonical) }
+        let legacyValue = defaults.object(forKey: legacy).map { _ in defaults.float(forKey: legacy) }
+        return loadAndMigrate(
+            defaults: defaults,
+            canonicalValue: canonicalValue,
+            legacyValue: legacyValue
+        )
+    }
+
+    static func loadAndMigrate(
+        defaults: UserDefaults,
+        canonicalValue: Float?,
+        legacyValue: Float?
+    ) -> Float {
+        let raw = canonicalValue ?? legacyValue ?? 1.0
         return persist(raw, defaults: defaults)
     }
 

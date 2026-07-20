@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-ENGINE="$HOME/ericode/skills/app-testing/scripts"
+ENGINE="${RADIO_APP_TEST_ENGINE:-$HOME/ericode/skills/app-testing/scripts}"
 export AGENT_SIM_CONFIG="$ROOT/skills/app-testing/config.sh"
 source "$ENGINE/sim-lib.sh"
 
@@ -45,9 +45,13 @@ trap cleanup EXIT INT TERM
 doctor_rc=0
 bash "$ENGINE/sim-doctor.sh" --gc || doctor_rc=$?
 [[ "$doctor_rc" == 0 || "$doctor_rc" == 10 ]] || exit 75
+if [[ "$doctor_rc" == 10 ]]; then
+    echo "Radio lane $lane will not start new work while host pressure is critical" >&2
+    exit 75
+fi
 
-sim_uuid="$(sed -n 's/^SIM_UUID=//p' "$state_file" 2>/dev/null | tail -1)"
-recorded_name="$(sed -n 's/^SIM_NAME=//p' "$state_file" 2>/dev/null | tail -1)"
+sim_uuid="$(sed -n 's/^SIM_UUID=//p' "$state_file" 2>/dev/null | tail -1 || true)"
+recorded_name="$(sed -n 's/^SIM_NAME=//p' "$state_file" 2>/dev/null | tail -1 || true)"
 sim_name=""
 valid_claim=0
 claim_exists=0
@@ -88,7 +92,6 @@ else
     sim_use_lock "$sim_uuid" "$$" "briefeed-$mode-$lane" || exit 75
     use_locked=1
     if [[ "$(sim_field "$sim_uuid" state)" != Booted ]]; then
-        [[ "$doctor_rc" != 10 ]] || exit 75
         sim_acquire_boot_slot || exit 75
         boot_rc=0
         sim_boot_start "$sim_uuid" || boot_rc=$?
@@ -109,11 +112,12 @@ unit)
       -only-testing:"$selector"
     ;;
 ui)
+    selector="${RADIO_UI_TEST_SELECTOR:-BriefeedUITests/RadioUITests}"
     xcodebuild test -project "$ROOT/Briefeed.xcodeproj" -scheme Briefeed \
       -destination "platform=iOS Simulator,id=$sim_uuid" \
       -derivedDataPath "$derived" -parallel-testing-enabled NO \
       -maximum-concurrent-test-simulator-destinations 1 \
-      -only-testing:BriefeedUITests/RadioUITests
+      -only-testing:"$selector"
     ;;
 smoke)
     SIM_UUID="$sim_uuid" DERIVED_DATA_PATH="$derived" \

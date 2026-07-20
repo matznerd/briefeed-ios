@@ -77,6 +77,11 @@ class RSSAudioService: NSObject, ObservableObject {
                     try saveContext()
                 } catch {
                     Self.discardNewDefaultFeeds(in: viewContext, preserving: existingDefaultIDs)
+                    viewContext.rollback()
+                    if viewContext.hasChanges {
+                        viewContext.reset()
+                    }
+                    loadFeeds()
                     throw error
                 }
                 loadFeeds()
@@ -94,7 +99,10 @@ class RSSAudioService: NSObject, ObservableObject {
         let existingIDs = Set(try context.fetch(request).map(\.id))
         var inserted = false
         for config in defaultFeedsConfig where !existingIDs.contains(config.id) {
-            let feed = RSSFeed(context: context)
+            let feed = NSEntityDescription.insertNewObject(
+                forEntityName: "RSSFeed",
+                into: context
+            ) as! RSSFeed
             feed.id = config.id
             feed.url = config.url
             feed.displayName = config.name
@@ -208,6 +216,7 @@ class RSSAudioService: NSObject, ObservableObject {
                     insertedEpisodes: insertedEpisodes,
                     updatedEpisodes: updatedEpisodes
                 )
+                viewContext.rollback()
                 throw error
             }
             return RSSFeedRefreshResult(feedID: feed.id, outcome: .success(insertedEpisodeIDs: insertedIDs))
@@ -335,7 +344,10 @@ class RSSAudioService: NSObject, ObservableObject {
         let feedTitle = episodes.first?.title.components(separatedBy: " - ").first ?? url.host ?? "Unknown Feed"
         
         // Create new feed
-        let feed = RSSFeed(context: viewContext)
+        let feed = NSEntityDescription.insertNewObject(
+            forEntityName: "RSSFeed",
+            into: viewContext
+        ) as! RSSFeed
         feed.id = UUID().uuidString
         feed.url = feedURL
         feed.displayName = feedTitle
@@ -399,7 +411,10 @@ class RSSAudioService: NSObject, ObservableObject {
     }
     
     private func createEpisode(from data: ParsedRSSEpisode, for feed: RSSFeed) -> RSSEpisode {
-        let episode = RSSEpisode(context: viewContext)
+        let episode = NSEntityDescription.insertNewObject(
+            forEntityName: "RSSEpisode",
+            into: viewContext
+        ) as! RSSEpisode
         episode.id = data.guid
         episode.feedId = feed.id
         episode.title = data.title

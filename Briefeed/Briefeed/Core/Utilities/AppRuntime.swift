@@ -30,6 +30,10 @@ enum AppRuntime {
             environment["BRIEFEED_RADIO_RESET_STORE"] == "1"
         }
 
+        var shouldCompleteRadioFixtureCurrent: Bool {
+            environment["BRIEFEED_RADIO_COMPLETE_CURRENT"] == "1"
+        }
+
         var usesIsolatedRadioStore: Bool { radioFixtureScenario != nil }
 
         var isHostedXCTestEnvironment: Bool {
@@ -62,6 +66,10 @@ enum AppRuntime {
 
     static var shouldResetRadioFixtureStore: Bool {
         radioFixtureScenario != nil && configuration.shouldResetRadioFixtureStore
+    }
+
+    static var shouldCompleteRadioFixtureCurrent: Bool {
+        radioFixtureScenario != nil && configuration.shouldCompleteRadioFixtureCurrent
     }
 
     static let radioFixtureNow: Date = {
@@ -103,6 +111,7 @@ enum AppRuntime {
     #else
     static var radioFixtureScenario: Never? { nil }
     static var shouldResetRadioFixtureStore: Bool { false }
+    static var shouldCompleteRadioFixtureCurrent: Bool { false }
     #endif
 
     static var shouldSkipAutomaticStartupWork: Bool {

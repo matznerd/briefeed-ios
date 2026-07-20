@@ -23,30 +23,34 @@ struct ContentView: View {
                     .zIndex(1)
             }
 
-            TabView(selection: $selectedTab) {
-                RadioHomeView()
-                    .appSettingsToolbar { showingSettings = true }
+            ZStack(alignment: .topTrailing) {
+                TabView(selection: $selectedTab) {
+                    RadioHomeView()
                     .tabItem {
                         Label(AppTab.radio.title, systemImage: AppTab.radio.systemImage)
                     }
                     .tag(AppTab.radio)
 
-                FilteredBriefView()
-                    .appSettingsToolbar { showingSettings = true }
+                    FilteredBriefView()
                     .tabItem {
                         Label(AppTab.brief.title, systemImage: AppTab.brief.systemImage)
                     }
                     .tag(AppTab.brief)
 
-                FeedView()
-                    .appSettingsToolbar { showingSettings = true }
+                    FeedView()
                     .tabItem {
                         Label(AppTab.feed.title, systemImage: AppTab.feed.systemImage)
                     }
                     .tag(AppTab.feed)
+                }
+                .toolbar(.hidden, for: .tabBar)
+                .tint(.briefeedRed)
+
+                AppSettingsButton { showingSettings = true }
+                    .padding(.top, 4)
+                    .padding(.trailing, 12)
+                    .zIndex(2)
             }
-            .toolbar(.hidden, for: .tabBar)
-            .tint(.briefeedRed)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             AppBottomChrome(
@@ -88,18 +92,6 @@ struct FeedView: View {
     }
 }
 
-private struct AppSettingsToolbarModifier: ViewModifier {
-    let action: () -> Void
-
-    func body(content: Content) -> some View {
-        content.toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                AppSettingsButton(action: action)
-            }
-        }
-    }
-}
-
 private struct AppSettingsButton: View {
     let action: () -> Void
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -138,12 +130,6 @@ private struct AppSettingsButton: View {
         }
         .accessibilityLabel("Settings")
         .accessibilityIdentifier(AccessibilityID.Navigation.settings)
-    }
-}
-
-private extension View {
-    func appSettingsToolbar(action: @escaping () -> Void) -> some View {
-        modifier(AppSettingsToolbarModifier(action: action))
     }
 }
 

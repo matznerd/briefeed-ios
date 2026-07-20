@@ -6,6 +6,37 @@ import Testing
 @Suite("Audio completion routing")
 @MainActor
 struct AudioCompletionRoutingTests {
+    @Test func fixtureTransportRequiresReadableLocalAudioAndPublishesRealCallbackOrder() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data([0]).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let service = RadioFixtureAudioTransport(duration: 90)
+        let delegate = CompletionDelegateSpy()
+        let id = TransportPlaybackID()
+        service.delegate = delegate
+
+        try await service.play(id: id, url: url, title: "Fixture", artist: "Briefeed")
+        service.seek(to: 18)
+        service.pause()
+        service.resume()
+
+        #expect(delegate.ready.count == 1)
+        #expect(delegate.ready.first?.0 == id)
+        #expect(delegate.ready.first?.1 == 90)
+        #expect(delegate.states.map(\.1) == [.loading, .playing, .paused, .playing])
+        #expect(delegate.progress.last?.1 == 18)
+
+        await #expect(throws: RadioFixtureTransportError.self) {
+            try await service.play(
+                id: TransportPlaybackID(),
+                url: url.deletingLastPathComponent().appendingPathComponent("missing"),
+                title: nil,
+                artist: nil
+            )
+        }
+    }
+
     @Test func naturalEndEmitsExactlyOneIdentityBoundCompletion() {
         let service = SwiftAudioExService(systemIntegrationEnabled: false)
         let delegate = CompletionDelegateSpy()
@@ -86,11 +117,14 @@ private enum CompletionTestError: Error { case failed }
 @MainActor
 private final class CompletionDelegateSpy: SwiftAudioExServiceDelegate {
     var completions: [(TransportPlaybackID, Bool)] = []
+    var ready: [(TransportPlaybackID, TimeInterval)] = []
+    var states: [(TransportPlaybackID, SwiftAudioPlayerState)] = []
+    var progress: [(TransportPlaybackID, TimeInterval)] = []
     var interruptionBeganCount = 0
     var routeRemovalCount = 0
-    func audioItemReady(id: TransportPlaybackID, duration: TimeInterval) {}
-    func audioStateChanged(id: TransportPlaybackID, to newState: SwiftAudioPlayerState, from oldState: SwiftAudioPlayerState) {}
-    func audioProgressUpdated(id: TransportPlaybackID, progress: Float, currentTime: TimeInterval, duration: TimeInterval) {}
+    func audioItemReady(id: TransportPlaybackID, duration: TimeInterval) { ready.append((id, duration)) }
+    func audioStateChanged(id: TransportPlaybackID, to newState: SwiftAudioPlayerState, from oldState: SwiftAudioPlayerState) { states.append((id, newState)) }
+    func audioProgressUpdated(id: TransportPlaybackID, progress: Float, currentTime: TimeInterval, duration: TimeInterval) { self.progress.append((id, currentTime)) }
     func audioDidFinishPlaying(id: TransportPlaybackID, successfully: Bool) { completions.append((id, successfully)) }
     func audioInterruptionBegan(id: TransportPlaybackID?) { interruptionBeganCount += 1 }
     func audioInterruptionEnded(id: TransportPlaybackID?, shouldResume: Bool) {}

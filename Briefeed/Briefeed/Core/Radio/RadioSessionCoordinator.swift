@@ -338,7 +338,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         guard let request = requestForCurrent() else { return nil }
         cancelPendingRequest()
         guard canLoad(request.url) else { setPending(request, purpose: .userStart); state = .waitingForNetwork; return nil }
-        state = .playing
+        state = .loading
         return .play(request)
     }
 

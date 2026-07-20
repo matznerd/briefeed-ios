@@ -142,7 +142,10 @@ struct RSSRefreshPolicyTests {
     private enum SaveError: Error { case denied }
 
     @MainActor private func makeFeed(in context: NSManagedObjectContext, id: String, lastFetchDate: Date? = nil) -> RSSFeed {
-        let feed = RSSFeed(context: context)
+        let feed = NSEntityDescription.insertNewObject(
+            forEntityName: "RSSFeed",
+            into: context
+        ) as! RSSFeed
         feed.id = id
         feed.url = "https://example.com/feed.xml"
         feed.displayName = id
@@ -154,7 +157,10 @@ struct RSSRefreshPolicyTests {
     }
 
     @MainActor private func makeEpisode(in context: NSManagedObjectContext, feed: RSSFeed, id: String, date: Date) -> RSSEpisode {
-        let episode = RSSEpisode(context: context)
+        let episode = NSEntityDescription.insertNewObject(
+            forEntityName: "RSSEpisode",
+            into: context
+        ) as! RSSEpisode
         episode.id = id
         episode.feedId = feed.id
         episode.title = "Original"
@@ -166,6 +172,7 @@ struct RSSRefreshPolicyTests {
     }
 
     private static func feedXML(url: String, date: String) -> Data {
-        Data("<rss><channel><item><title>Updated</title><pubDate>\(date)</pubDate><enclosure url=\"\(url)\" type=\"audio/mpeg\" /></item></channel></rss>".utf8)
+        let escapedURL = url.replacingOccurrences(of: "&", with: "&amp;")
+        return Data("<rss><channel><item><title>Updated</title><pubDate>\(date)</pubDate><enclosure url=\"\(escapedURL)\" type=\"audio/mpeg\" /></item></channel></rss>".utf8)
     }
 }

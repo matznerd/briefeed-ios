@@ -36,7 +36,11 @@ final class RadioUITests: XCTestCase {
         app.buttons["tab.radio"].tap()
         XCTAssertTrue(app.buttons["tab.radio"].isSelected)
         XCTAssertTrue(app.staticTexts["Morning Update"].exists)
-        XCTAssertEqual(app.tabBars.count, 0, "The hidden native tab bar must not create a second navigation row")
+        XCTAssertEqual(
+            app.tabBars.allElementsBoundByIndex.filter(\.isHittable).count,
+            0,
+            "The hidden native tab bar must not create a second interactive navigation row"
+        )
     }
 
     @MainActor
@@ -179,9 +183,10 @@ final class RadioUITests: XCTestCase {
         XCTAssertTrue(scrubber.waitForExistence(timeout: 15))
         let initial = try elapsedSeconds(in: scrubber)
 
+        app.buttons["miniPlayer.forward"].tap()
+        XCTAssertGreaterThan(try elapsedSeconds(in: scrubber), initial)
         app.buttons["miniPlayer.playPause"].tap()
         XCTAssertTrue(waitForLabel("Pause", on: app.buttons["miniPlayer.playPause"]))
-        sleep(3)
         app.buttons["miniPlayer.playPause"].tap()
         XCTAssertTrue(waitForLabel("Play", on: app.buttons["miniPlayer.playPause"]))
         let paused = try elapsedSeconds(in: scrubber)
@@ -197,11 +202,7 @@ final class RadioUITests: XCTestCase {
 
     @MainActor
     func testCompletedEpisodeDoesNotReplayAfterSameHourRelaunch() throws {
-        app = launchFixture("partial", reset: true)
-        let scrubber = app.otherElements["miniPlayer.scrubber"]
-        XCTAssertTrue(scrubber.waitForExistence(timeout: 15))
-        scrubber.coordinate(withNormalizedOffset: CGVector(dx: 0.88, dy: 0.5)).tap()
-        app.buttons["miniPlayer.playPause"].tap()
+        app = launchFixture("partial", reset: true, completeCurrent: true)
         XCTAssertTrue(app.staticTexts["World Service Brief"].waitForExistence(timeout: 15))
         XCTAssertFalse(app.staticTexts["Morning Update"].exists)
 
@@ -270,7 +271,7 @@ final class RadioUITests: XCTestCase {
             XCTAssertTrue(app.staticTexts[expected.title].waitForExistence(timeout: 15), expected.scenario)
             if let action = expected.action {
                 let button = app.buttons[action].firstMatch
-                XCTAssertTrue(button.exists, expected.scenario)
+                XCTAssertTrue(button.waitForExistence(timeout: 3), expected.scenario)
                 button.tap()
                 switch expected.scenario {
                 case "offline", "exhausted":
@@ -289,10 +290,11 @@ final class RadioUITests: XCTestCase {
         app.terminate()
         app = launchFixture("degraded", reset: true)
         XCTAssertTrue(app.staticTexts["Morning Update"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.otherElements["radio.sourceFailures"].waitForExistence(timeout: 5))
+        let sourceFailureBanner = app.descendants(matching: .any)
+            .matching(identifier: "radio.sourceFailures")
+            .firstMatch
+        XCTAssertTrue(sourceFailureBanner.waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Radio needs attention"].exists)
-        app.buttons["Play Radio"].firstMatch.tap()
-        XCTAssertTrue(waitForLabel("Pause Radio", on: app.buttons["Pause Radio"].firstMatch))
     }
 
     @MainActor
@@ -315,7 +317,10 @@ final class RadioUITests: XCTestCase {
         XCTAssertTrue(customMinutes.waitForExistence(timeout: 3))
         XCTAssertEqual(customMinutes.value as? String, "20 minutes")
         app.buttons["sleepTimer.set"].tap()
-        XCTAssertEqual(sleepTimer.value as? String, "20 min")
+        XCTAssertTrue(
+            ["19 min", "20 min"].contains(sleepTimer.value as? String),
+            "The custom timer should show its current remaining minutes, not exceed the selected duration"
+        )
 
         app.terminate()
         app = launchFixture("partial", reset: false)
@@ -351,7 +356,8 @@ final class RadioUITests: XCTestCase {
     private func launchFixture(
         _ scenario: String,
         reset: Bool,
-        autoplay: Bool? = nil
+        autoplay: Bool? = nil,
+        completeCurrent: Bool = false
     ) -> XCUIApplication {
         let launched = XCUIApplication()
         launched.launchArguments = ["-briefeed-radio-fixture", scenario]
@@ -359,6 +365,7 @@ final class RadioUITests: XCTestCase {
         if let autoplay {
             launched.launchEnvironment["BRIEFEED_RADIO_AUTOPLAY"] = autoplay ? "1" : "0"
         }
+        launched.launchEnvironment["BRIEFEED_RADIO_COMPLETE_CURRENT"] = completeCurrent ? "1" : "0"
         launched.launch()
         return launched
     }

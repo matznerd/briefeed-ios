@@ -7,6 +7,7 @@
 
 import XCTest
 import CoreData
+import Combine
 @testable import Briefeed
 
 @MainActor
@@ -15,17 +16,44 @@ final class MiniPlayerNavigationTests: XCTestCase {
     var viewModel: AudioPlayerViewModelV2!
     var persistence: PersistenceController!
     var context: NSManagedObjectContext!
+    var audioURL: URL!
     
     override func setUp() async throws {
         try await super.setUp()
         persistence = PersistenceController(inMemory: true)
         context = persistence.container.viewContext
-        viewModel = AudioPlayerViewModelV2()
+        audioURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mini-player-navigation-\(UUID().uuidString).wav")
+        try Data(repeating: 0, count: 48).write(to: audioURL)
+
+        let brief = NavigationBriefQueueCoordinator(audioURL: audioURL)
+        let radio = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(),
+            repository: RecordingRadioRepository(candidates: []),
+            connectivityStatus: { .online }
+        )
+        let player = UnifiedAudioPlayer(
+            audioPlayer: NavigationAudioTransport(),
+            queueCoordinator: brief,
+            radioCoordinator: radio,
+            context: context,
+            persistPlaybackRate: { _ in }
+        )
+        viewModel = AudioPlayerViewModelV2(
+            unifiedPlayer: player,
+            radioCoordinator: radio,
+            rssService: RSSAudioService(viewContext: context, dataLoader: { _ in Data() }),
+            playbackSpeedLoad: { 1 }
+        )
     }
     
     override func tearDown() async throws {
         viewModel?.stop()
+        if let audioURL {
+            try? FileManager.default.removeItem(at: audioURL)
+        }
         viewModel = nil
+        audioURL = nil
         context = nil
         persistence = nil
         try await super.tearDown()
@@ -329,7 +357,10 @@ final class MiniPlayerNavigationTests: XCTestCase {
     }
     
     private func createTestArticle(title: String = "Test Article", content: String = "Test content") -> Article {
-        let article = Article(context: context)
+        let article = NSEntityDescription.insertNewObject(
+            forEntityName: "Article",
+            into: context
+        ) as! Article
         article.id = UUID()
         article.title = title
         article.content = content
@@ -339,12 +370,166 @@ final class MiniPlayerNavigationTests: XCTestCase {
     }
     
     private func createTestEpisode(title: String = "Test Episode") -> RSSEpisode {
-        let episode = RSSEpisode(context: context)
+        let episode = NSEntityDescription.insertNewObject(
+            forEntityName: "RSSEpisode",
+            into: context
+        ) as! RSSEpisode
         episode.id = UUID().uuidString
         episode.title = title
-        episode.audioUrl = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
+        episode.audioUrl = audioURL.absoluteString
         episode.duration = 300
         episode.pubDate = Date()
         return episode
+    }
+}
+
+@MainActor
+private final class NavigationAudioTransport: AudioPlaybackTransporting {
+    weak var delegate: SwiftAudioExServiceDelegate?
+    var currentTime: TimeInterval = 0
+    var duration: TimeInterval = 300
+
+    func play(id: TransportPlaybackID, url: URL, title: String?, artist: String?) async throws {}
+    func pause() {}
+    func resume() {}
+    func stop() {}
+    func seek(to time: TimeInterval) { currentTime = time }
+    func setRate(_ rate: Float) {}
+    func applyRemoteCommandAvailability(_ availability: RemoteCommandAvailability) {}
+}
+
+@MainActor
+private final class NavigationBriefQueueCoordinator: BriefQueueCoordinating {
+    var queue: [QueueItem] = [] { didSet { queueSubject.send(queue) } }
+    var currentIndex = -1 { didSet { indexSubject.send(currentIndex) } }
+    var currentPosition: TimeInterval = 0
+    var currentItem: QueueItem? {
+        guard queue.indices.contains(currentIndex) else { return nil }
+        return queue[currentIndex]
+    }
+    var itemCount: Int { queue.count }
+    var queuePublisher: AnyPublisher<[QueueItem], Never> { queueSubject.eraseToAnyPublisher() }
+    var currentIndexPublisher: AnyPublisher<Int, Never> { indexSubject.eraseToAnyPublisher() }
+
+    private let audioURL: URL
+    private let queueSubject = CurrentValueSubject<[QueueItem], Never>([])
+    private let indexSubject = CurrentValueSubject<Int, Never>(-1)
+
+    init(audioURL: URL) {
+        self.audioURL = audioURL
+    }
+
+    func addArticle(_ article: Article, playNow: Bool, playNext: Bool) {
+        guard let articleID = article.id,
+              !queue.contains(where: { $0.articleID == articleID }) else { return }
+        insert(
+            QueueItem(
+                id: UUID(),
+                type: .article,
+                title: article.title ?? "Untitled",
+                source: "Test",
+                addedAt: .now,
+                expiresAt: nil,
+                articleID: articleID,
+                summaryState: .ready,
+                cachedAudioURL: audioURL,
+                episodeID: nil,
+                streamURL: nil,
+                lastPosition: 0,
+                isListened: false
+            ),
+            playNow: playNow,
+            playNext: playNext
+        )
+    }
+
+    func addEpisode(_ episode: RSSEpisode, playNow: Bool, playNext: Bool) {
+        guard !queue.contains(where: { $0.episodeID == episode.id }) else { return }
+        insert(
+            QueueItem(
+                id: UUID(),
+                type: .liveNews,
+                title: episode.title,
+                source: "Test",
+                addedAt: .now,
+                expiresAt: nil,
+                articleID: nil,
+                summaryState: .ready,
+                cachedAudioURL: nil,
+                episodeID: episode.id,
+                streamURL: URL(string: episode.audioUrl),
+                lastPosition: 0,
+                isListened: false
+            ),
+            playNow: playNow,
+            playNext: playNext
+        )
+    }
+
+    func removeItem(at index: Int) {
+        guard queue.indices.contains(index) else { return }
+        queue.remove(at: index)
+        if queue.isEmpty {
+            currentIndex = -1
+        } else if index < currentIndex {
+            currentIndex -= 1
+        } else if currentIndex >= queue.count {
+            currentIndex = queue.count - 1
+        }
+    }
+
+    func clearQueue() {
+        queue = []
+        currentIndex = -1
+        currentPosition = 0
+    }
+
+    func setCurrentIndex(_ index: Int) {
+        currentIndex = queue.indices.contains(index) ? index : -1
+        currentPosition = currentItem?.lastPosition ?? 0
+    }
+
+    func updateCurrentPosition(_ position: TimeInterval) {
+        currentPosition = position
+        guard queue.indices.contains(currentIndex) else { return }
+        queue[currentIndex].lastPosition = position
+    }
+
+    func markCurrentAsListened() {
+        guard queue.indices.contains(currentIndex) else { return }
+        queue[currentIndex].isListened = true
+    }
+
+    func updateCachedAudioURL(for itemID: UUID, url: URL?) {
+        guard let index = queue.firstIndex(where: { $0.id == itemID }) else { return }
+        queue[index].cachedAudioURL = url
+    }
+
+    func markItemFailed(for itemID: UUID, error: String) {
+        guard let index = queue.firstIndex(where: { $0.id == itemID }) else { return }
+        queue[index].summaryState = .failed
+        queue[index].errorMessage = error
+    }
+
+    func autoRemoveIfListened(at index: Int) -> UUID? {
+        guard queue.indices.contains(index), queue[index].isListened else { return nil }
+        let id = queue[index].id
+        removeItem(at: index)
+        return id
+    }
+
+    func saveStateNow() {}
+
+    private func insert(_ item: QueueItem, playNow: Bool, playNext: Bool) {
+        if playNow {
+            let index = max(0, currentIndex)
+            queue.insert(item, at: min(index, queue.count))
+            currentIndex = min(index, queue.count - 1)
+        } else if playNext {
+            let index = currentIndex >= 0 ? currentIndex + 1 : 0
+            queue.insert(item, at: min(index, queue.count))
+        } else {
+            queue.append(item)
+        }
     }
 }

@@ -8,9 +8,11 @@ struct PlaybackSpeedSettingsTests {
     @Test func speedMigrationUsesLegacyOnlyWhenCanonicalIsAbsent() {
         let (defaults, suiteName) = isolatedDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set(20.0, forKey: UserDefaultsKey.rssPlaybackSpeed.rawValue)
-
-        let speed = PlaybackSpeedPolicy.loadAndMigrate(defaults: defaults)
+        let speed = PlaybackSpeedPolicy.loadAndMigrate(
+            defaults: defaults,
+            canonicalValue: nil,
+            legacyValue: 20.0
+        )
 
         #expect(speed == 3.0)
         #expect(defaults.float(forKey: UserDefaultsKey.playbackSpeed.rawValue) == 3.0)
@@ -19,10 +21,11 @@ struct PlaybackSpeedSettingsTests {
     @Test func canonicalWinsOverLegacy() {
         let (defaults, suiteName) = isolatedDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set(1.25, forKey: UserDefaultsKey.playbackSpeed.rawValue)
-        defaults.set(3.0, forKey: UserDefaultsKey.rssPlaybackSpeed.rawValue)
-
-        #expect(PlaybackSpeedPolicy.loadAndMigrate(defaults: defaults) == 1.25)
+        #expect(PlaybackSpeedPolicy.loadAndMigrate(
+            defaults: defaults,
+            canonicalValue: 1.25,
+            legacyValue: 3.0
+        ) == 1.25)
     }
 
     @Test func normalizeHandlesNonFiniteBoundsNearestAndLowerTie() {

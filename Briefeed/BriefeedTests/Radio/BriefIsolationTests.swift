@@ -79,8 +79,15 @@ struct BriefIsolationTests {
         #expect(!events.values.contains("resume"))
     }
 
-    @Test func viewModelAndAppDefaultSkipsAreTenSeconds() {
+    @Test func viewModelAndAppDefaultSkipsAreTenSeconds() async {
         let brief = FakeBriefQueueCoordinator()
+        brief.queue = [QueueItem(
+            id: UUID(), type: .liveNews, title: "Brief", source: "Source",
+            addedAt: .now, expiresAt: nil, articleID: nil, summaryState: .ready,
+            cachedAudioURL: nil, episodeID: "brief", streamURL: URL(string: "https://example.com/brief.mp3"),
+            lastPosition: 0, isListened: false
+        )]
+        brief.currentIndex = 0
         let transport = SpyAudioTransport()
         let radio = RadioSessionCoordinator(
             store: FakeRadioSessionStore(),
@@ -98,6 +105,7 @@ struct BriefIsolationTests {
         let viewModel = AudioPlayerViewModelV2(unifiedPlayer: player, radioCoordinator: radio, rssService: rss)
         let appViewModel = AppViewModel(audioPlayerViewModel: viewModel)
 
+        await player.play(at: 0)
         appViewModel.skipForward()
         appViewModel.skipBackward()
 

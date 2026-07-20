@@ -310,8 +310,15 @@ final class UnifiedAudioPlayer: ObservableObject {
     // MARK: - Initialization
 
     private convenience init() {
+        #if DEBUG
+        let transport: AudioPlaybackTransporting = AppRuntime.radioFixtureScenario == nil
+            ? SwiftAudioExService()
+            : RadioFixtureAudioTransport()
+        #else
+        let transport: AudioPlaybackTransporting = SwiftAudioExService()
+        #endif
         self.init(
-            audioPlayer: SwiftAudioExService(),
+            audioPlayer: transport,
             queueCoordinator: QueueCoordinator.shared,
             radioCoordinator: RadioServiceContainer.shared.coordinator,
             context: PersistenceController.shared.container.viewContext
@@ -337,6 +344,8 @@ final class UnifiedAudioPlayer: ObservableObject {
         self.persistPlaybackRate = persistPlaybackRate
         self.briefCompletionDelay = briefCompletionDelay
         setupAudioPlayer()
+        rebuildQueueFromCoordinator(queueCoordinator.queue)
+        reconcileBriefIndex()
         setupQueueCoordinatorBindings()
         setupRadioBindings()
     }
@@ -371,6 +380,7 @@ final class UnifiedAudioPlayer: ObservableObject {
             .sink { [weak self] coordinatorQueue in
                 guard let self = self else { return }
                 self.rebuildQueueFromCoordinator(coordinatorQueue)
+                self.reconcileBriefIndex()
                 self.updateRemoteAvailability()
             }
             .store(in: &cancellables)
@@ -436,6 +446,17 @@ final class UnifiedAudioPlayer: ObservableObject {
             }
 
             return UnifiedQueueItem(from: queueItem, article: article, episode: episode)
+        }
+    }
+
+    private func reconcileBriefIndex() {
+        let coordinatorIndex = queueCoordinator.currentIndex
+        if queue.isEmpty {
+            currentIndex = -1
+        } else if coordinatorIndex >= 0 && coordinatorIndex < queue.count {
+            currentIndex = coordinatorIndex
+        } else {
+            currentIndex = max(-1, min(coordinatorIndex, queue.count - 1))
         }
     }
 

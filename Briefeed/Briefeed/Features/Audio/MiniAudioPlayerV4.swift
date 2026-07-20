@@ -679,6 +679,7 @@ struct RadioSleepMenu: View {
                 onCancel: { showingCustomSheet = false },
                 onSet: {
                     viewModel.setCustomSleepTimer(minutes: customMinutes)
+                    now = Date()
                     showingCustomSheet = false
                 }
             )
