@@ -5,7 +5,7 @@ Branch: `codex/live-radio-mvp`
 Implementation base commit: `2f260fa`
 Verified implementation commit: `12ec494`
 Verification tooling commit: `fa3a890`
-Status: **focused simulator verification complete; exported IPA approved for authorized local phone testing only; public distribution blocked**
+Status: **focused simulator verification complete; development build installed on the approved local phone; physical functional gate open; public distribution blocked**
 
 ## Gate Summary
 
@@ -19,7 +19,7 @@ Status: **focused simulator verification complete; exported IPA approved for aut
 | Standalone smoke evidence bundle | NOT RUN | An earlier attempt was refused at critical pressure; pressure later recovered for focused/UI suites, but the separate script was not retried and no screenshot receipt was created |
 | Focused Brief regression | PASS ON PRIOR BASELINE | `/tmp/briefeed-live-radio-final-brief-selectors.log`; MiniPlayer navigation 13/13 plus focused isolation/state selectors passed at `b3950b9`; not rerun after the scoped Radio/RSS repairs in `12ec494` |
 | Analyze | PASS | `/tmp/briefeed-live-radio-12ec494-analyze.log`; `** ANALYZE SUCCEEDED **` |
-| Physical-device checklist | NOT RUN | No developer device was selected or modified |
+| Physical-device checklist | STARTED - INSTALL ONLY | Owner-approved iPhone 13 Pro on iOS 26.5.2 received and launched the development build; no functional rows were run |
 | Signed archive/export | PASS | `/tmp/Briefeed-Live-Radio-12ec494.xcarchive`; `/tmp/Briefeed-Live-Radio-12ec494-export/Briefeed.ipa`; code-sign verification passed |
 | Packaged credential audit | BLOCKED | Exported IPA contains nonempty Firecrawl and Gemini values. Do not upload or share it. Remediation is tracked in GitHub #16 |
 | Visual size/appearance matrix | NOT RUN | One iPhone 15 Pro / iOS 18.6 runtime verified; follow-up GitHub #15 |
@@ -183,10 +183,14 @@ correct Gemini TTS model remains
 
 ## Physical Device
 
-Read-only discovery found `Eric's iPhone (2)`, an available paired iPhone 13 Pro
-with identifier `2E288699-F8E0-5B18-A2D9-DE8B1384C33A`. It was not selected,
-installed to, or changed. See `LIVE-RADIO-DEVICE-CHECKLIST.md`; every physical
-row remains open.
+The owner explicitly selected `Eric's iPhone (2)`, an available paired iPhone
+13 Pro on iOS 26.5.2 with identifier
+`2E288699-F8E0-5B18-A2D9-DE8B1384C33A`. A Debug device build from repository
+HEAD `9621d1f` was signed with Apple Development, installed, and launched
+successfully. Its process remained alive after a follow-up check. This proves
+only build, signing, installation, and launch. See
+`LIVE-RADIO-DEVICE-CHECKLIST.md`; every functional, audio, lifecycle, route,
+and isolation row remains open.
 
 ## Distribution Decision
 

@@ -14,25 +14,28 @@ using the exact commit and archive recorded in
 
 | Field | Value |
 | --- | --- |
-| Build commit | `12ec494` |
+| Verified implementation commit | `12ec494` |
+| Installed development build | `9621d1f` |
 | Archive | `/tmp/Briefeed-Live-Radio-12ec494.xcarchive` |
 | IPA | `/tmp/Briefeed-Live-Radio-12ec494-export/Briefeed.ipa` |
 | IPA SHA-256 | `514e336ebd3d6d128ed54622f1dc7dee8516b9760a723c772d26cf92f03b640f` |
-| Device | Not selected |
-| iOS version | Not recorded |
-| Tester | Not recorded |
-| Date | Not run |
+| Device | `Eric's iPhone (2)`, iPhone 13 Pro |
+| iOS version | 26.5.2 (23F84) |
+| Tester | Eric, owner-approved local test |
+| Date | July 20, 2026 |
 
-Read-only discovery on July 20, 2026 found one paired, available physical device:
-`Eric's iPhone (2)`, iPhone 13 Pro (`2E288699-F8E0-5B18-A2D9-DE8B1384C33A`).
-No build was installed and this device was not selected for the gate.
+The owner explicitly requested installation on `Eric's iPhone (2)`, iPhone 13
+Pro (`2E288699-F8E0-5B18-A2D9-DE8B1384C33A`). A Debug device build from
+repository HEAD `9621d1f` was signed with Apple Development, installed, and
+launched successfully. The process remained alive after a follow-up check. No
+functional, audio, lifecycle, route, or isolation row below was executed.
 
 ## Preconditions
 
-- [ ] Confirm the device owner approves installing this exact build.
-- [ ] Confirm this is an authorized local test only and that the IPA will not
+- [x] Confirm the device owner approves installing this exact build.
+- [x] Confirm this is an authorized local test only and that the IPA will not
   be uploaded or shared while GitHub #16 remains open.
-- [ ] Record device model, iOS version, build commit, archive checksum, tester,
+- [x] Record device model, iOS version, build commit, archive checksum, tester,
   and test date above.
 - [ ] Start with Radio autoplay Off and at least two enabled sources.
 - [ ] Confirm the test includes one remote episode and one locally available
@@ -84,7 +87,7 @@ No build was installed and this device was not selected for the gate.
 
 ## Gate Result
 
-Status: **OPEN - physical-device verification not run**
+Status: **OPEN - development build installed and launched; physical checks not run**
 
 Do not call the build a distribution candidate until every required row passes
 on the selected device, GitHub #16 is cleared by a newly inspected
