@@ -169,7 +169,8 @@ struct RadioSessionCoordinatorRestoreTests {
         clock = now.addingTimeInterval(59)
         #expect(coordinator.applyRefresh(success()) == nil)
         #expect(coordinator.hasPendingColdLaunchAutoplay)
-        #expect(coordinator.applyInitialRefresh(success()) != nil)
+        #expect(coordinator.applyInitialRefresh(success()) == nil)
+        #expect(!coordinator.hasPendingColdLaunchAutoplay)
 
         let offlineRepository = FakeRadioEpisodeRepository(candidates: [])
         let offline = RadioSessionCoordinator(store: FakeRadioSessionStore(), repository: offlineRepository, now: { now }, connectivityStatus: { .online })
