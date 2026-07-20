@@ -4,6 +4,7 @@ Date: July 20, 2026
 Branch: `codex/live-radio-mvp`
 Implementation base commit: `2f260fa`
 Verified implementation commit: `12ec494`
+Verification tooling commit: `fa3a890`
 Status: **focused simulator verification complete; exported IPA approved for authorized local phone testing only; public distribution blocked**
 
 ## Gate Summary
@@ -11,7 +12,7 @@ Status: **focused simulator verification complete; exported IPA approved for aut
 | Gate | Result | Evidence |
 | --- | --- | --- |
 | Build for testing | PASS | `make radio-compile`; `/tmp/briefeed-live-radio-12ec494-compile.log`; `** TEST BUILD SUCCEEDED **` |
-| Adapter safety regression | PASS | `bash skills/app-testing/scripts/run-radio-selftest.sh`; `/tmp/briefeed-live-radio-cb04d12-adapter-selftest.log`; covers fresh/ownerless claims and critical-pressure refusal |
+| Adapter safety regression | PASS | `bash skills/app-testing/scripts/run-radio-selftest.sh`; `/tmp/briefeed-live-radio-adapter-lock-selftest.log`; covers fresh claims, stale-ownerless recovery, delayed fresh-ownerless preservation, and critical-pressure refusal |
 | Deterministic Radio unit suites | PASS | Exact-commit suites: restore 17/17, lifecycle 11/11, empty state 4/4, RSS refresh 8/8, Unified playback 11/11, playback state 30/30 |
 | Radio UI suite | PASS | `/tmp/briefeed-live-radio-12ec494-ui.log`; 15/15 tests in 226.6 seconds |
 | Headless Radio smoke behavior | PASS | `RadioUITests.testHeadlessRadioSmoke` passed inside the complete UI suite |
@@ -42,9 +43,15 @@ is created and reaches the test command.
 The adapter also now refuses **all** new simulator work at critical host
 pressure, including when the doctor reports `PRESSURE=critical` with exit zero
 and when reusing an already booted claim. Its self-test proves that an active
-lane cannot be stolen, an ownerless claim-lock can recover after a bounded
-wait, and the test command is never invoked at critical pressure. No
+lane cannot be stolen, an ownerless claim-lock is reclaimed only after its
+existing 10-second stale threshold, and a fresh ownerless lock survives even
+when its creator writes the holder after the bounded 500-millisecond wait. The
+test command is never invoked at critical pressure. No
 `AGENT_SIM_PRESSURE_OVERRIDE` was used.
+
+This final lock correction is verification tooling commit `fa3a890`. The script
+is not packaged in the iOS app, so the signed archive correctly remains tied to
+app implementation commit `12ec494`.
 
 ## CoreSimulator Audio Limitation
 
