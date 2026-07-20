@@ -298,6 +298,21 @@ final class RadioAppLifecycleDriver {
 
 // MARK: - Radio App Initialization
 extension BriefeedApp {
+    #if DEBUG
+    func startRadioFixtureSession() async {
+        guard let definition = AppRuntime.radioFixtureDefinition else { return }
+        let services = RadioServiceContainer.shared
+        let restoreIntent = await services.coordinator.restore(
+            autoplayEnabled: UserDefaultsManager.shared.autoPlayLiveNewsOnOpen
+        )
+        await UnifiedAudioPlayer.shared.execute(restoreIntent)
+        await UnifiedAudioPlayer.shared.execute(
+            definition.applyPostRestore(to: services.coordinator)
+        )
+        print("🧪 Radio fixture ready: \(definition.scenario.rawValue)")
+    }
+    #endif
+
     func startRadioServices() async {
         let services = RadioServiceContainer.shared
         _ = await RSSAudioService.shared.ensureDefaultFeedsExist()

@@ -20,13 +20,17 @@ struct BriefeedApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     init() {
+        #if DEBUG
+        AppRuntime.prepareRadioFixturePreferencesIfNeeded()
+        if let definition = AppRuntime.radioFixtureDefinition {
+            RadioServiceContainer.installFixtureOverride(definition: definition)
+        }
+        #endif
+
         print("🚀 BriefeedApp initializing...")
-        
-        // Task 12 installs deterministic fixture overrides at this preflight
-        // boundary, before any singleton-backed app dependency is resolved.
+        persistenceController = PersistenceController.shared
         let defaultsManager = UserDefaultsManager.shared
         defaultsManager.loadSettings()
-        persistenceController = PersistenceController.shared
 
         let audioVM = AudioPlayerViewModelV2()
         _userDefaultsManager = StateObject(wrappedValue: defaultsManager)
@@ -66,12 +70,30 @@ struct BriefeedApp: App {
                     applyThemeSettings()
                 }
                 .task {
-                    await appViewModel.connect()
-
-                    guard !AppRuntime.shouldSkipAutomaticStartupWork else {
-                        print("🧪 Skipping automatic startup services for hosted XCTest or Radio fixture")
+                    #if DEBUG
+                    if let scenario = AppRuntime.radioFixtureScenario {
+                        do {
+                            try RadioFixtureSeeder(
+                                context: persistenceController.container.viewContext,
+                                now: { AppRuntime.radioFixtureNow }
+                            ).seed(
+                                scenario: scenario,
+                                reset: AppRuntime.shouldResetRadioFixtureStore
+                            )
+                            await startRadioFixtureSession()
+                        } catch {
+                            print("🧪 Radio fixture failed: \(error.localizedDescription)")
+                        }
                         return
                     }
+                    #endif
+
+                    guard !AppRuntime.shouldSkipAutomaticStartupWork else {
+                        print("🧪 Skipping automatic startup services for hosted XCTest")
+                        return
+                    }
+
+                    await appViewModel.connect()
 
                     handleScenePhase(scenePhase)
                     await startRadioServices()
@@ -91,6 +113,16 @@ struct BriefeedApp: App {
                 }
                 .onChange(of: scenePhase) {
                     let newPhase = scenePhase
+                    #if DEBUG
+                    if AppRuntime.radioFixtureScenario != nil {
+                        if newPhase == .background {
+                            UnifiedAudioPlayer.shared.handleAppBackground()
+                        } else if newPhase == .active {
+                            UnifiedAudioPlayer.shared.handleAppForeground()
+                        }
+                        return
+                    }
+                    #endif
                     guard !AppRuntime.shouldSkipAutomaticStartupWork else { return }
                     handleScenePhase(newPhase)
                     if newPhase == .active {
@@ -98,6 +130,12 @@ struct BriefeedApp: App {
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
+                    #if DEBUG
+                    if AppRuntime.radioFixtureScenario != nil {
+                        UnifiedAudioPlayer.shared.handleAppTermination()
+                        return
+                    }
+                    #endif
                     guard !AppRuntime.shouldSkipAutomaticStartupWork else { return }
                     radioLifecycleDriver.handleTermination()
                 }

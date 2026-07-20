@@ -1,3 +1,4 @@
+import CoreData
 import Foundation
 
 @MainActor
@@ -26,6 +27,33 @@ final class RadioServiceContainer {
     static func installProcessOverride(_ override: @escaping Factory) {
         precondition(instance == nil, "Install Radio override before resolving shared services")
         factory = override
+    }
+
+    static func installFixtureOverride(definition: RadioFixtureScenarioDefinition) {
+        installProcessOverride {
+            makeFixtureContainer(
+                definition: definition,
+                context: PersistenceController.shared.container.viewContext,
+                defaults: .standard
+            )
+        }
+    }
+
+    static func makeFixtureContainer(
+        definition: RadioFixtureScenarioDefinition,
+        context: NSManagedObjectContext,
+        defaults: UserDefaults
+    ) -> RadioServiceContainer {
+        let connectivity = RadioFixtureConnectivityMonitor(
+            initialStatus: definition.initialConnectivity
+        )
+        let coordinator = RadioSessionCoordinator(
+            store: RadioSessionStore(defaults: defaults),
+            repository: CoreDataRadioEpisodeRepository(context: context),
+            now: { definition.now },
+            connectivity: connectivity
+        )
+        return RadioServiceContainer(connectivity: connectivity, coordinator: coordinator)
     }
     #endif
 

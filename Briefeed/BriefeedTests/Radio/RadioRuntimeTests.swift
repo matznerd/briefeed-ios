@@ -36,6 +36,53 @@ struct RadioRuntimeTests {
         #expect(runtime.shouldSkipAutomaticStartupWork)
     }
 
+    #if DEBUG
+    @Test func fixturePreflightResetsOnlyRadioKeysBeforeSettingsResolution() throws {
+        let suiteName = "RadioRuntimeTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.set("keep-me", forKey: "unrelated-preference")
+        defaults.set(Data([1]), forKey: RadioSessionStore.storageKey)
+        defaults.set(2.5, forKey: UserDefaultsKey.playbackSpeed.rawValue)
+        defaults.set(1.75, forKey: UserDefaultsKey.rssPlaybackSpeed.rawValue)
+        defaults.set(true, forKey: UserDefaultsKey.autoPlayLiveNewsOnOpen.rawValue)
+        defaults.set("legacy", forKey: UserDefaultsKey.rssLastPlayedEpisodeId.rawValue)
+
+        AppRuntime.prepareRadioFixturePreferencesIfNeeded(
+            configuration: .init(
+                arguments: ["Briefeed", "-briefeed-radio-fixture", "partial"],
+                environment: ["BRIEFEED_RADIO_RESET_STORE": "1"]
+            ),
+            defaults: defaults
+        )
+
+        #expect(defaults.string(forKey: "unrelated-preference") == "keep-me")
+        #expect(defaults.data(forKey: RadioSessionStore.storageKey) == nil)
+        #expect(defaults.double(forKey: UserDefaultsKey.playbackSpeed.rawValue) == 1)
+        #expect(defaults.object(forKey: UserDefaultsKey.rssPlaybackSpeed.rawValue) == nil)
+        #expect(!defaults.bool(forKey: UserDefaultsKey.autoPlayLiveNewsOnOpen.rawValue))
+        #expect(defaults.object(forKey: UserDefaultsKey.rssLastPlayedEpisodeId.rawValue) == nil)
+    }
+
+    @Test func invalidFixtureNameCannotResetPreferencesOrSelectFixtureRuntime() throws {
+        let suiteName = "RadioRuntimeTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.set(2, forKey: UserDefaultsKey.playbackSpeed.rawValue)
+        let configuration = AppRuntime.Configuration(
+            arguments: ["Briefeed", "-briefeed-radio-fixture", "not-a-scenario"],
+            environment: ["BRIEFEED_RADIO_RESET_STORE": "1"]
+        )
+
+        AppRuntime.prepareRadioFixturePreferencesIfNeeded(
+            configuration: configuration,
+            defaults: defaults
+        )
+
+        #expect(defaults.double(forKey: UserDefaultsKey.playbackSpeed.rawValue) == 2)
+        #expect(configuration.radioFixtureScenario == "not-a-scenario")
+        #expect(RadioFixtureScenario(rawValue: configuration.radioFixtureScenario ?? "") == nil)
+    }
+    #endif
+
     @Test func resettingExplicitStoreRemovesPreviouslySavedObjects() throws {
         let storeURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("Briefeed-RadioRuntime-\(UUID().uuidString).sqlite")

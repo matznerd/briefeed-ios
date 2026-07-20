@@ -609,6 +609,15 @@ extension AudioPlayerViewModelV2 {
 
     func refreshRadio() async {
         isLoading = true
+        #if DEBUG
+        if let definition = AppRuntime.radioFixtureDefinition {
+            await unifiedPlayer.execute(
+                definition.applyPostRestore(to: radioCoordinator)
+            )
+            isLoading = false
+            return
+        }
+        #endif
         radioCoordinator.refreshStarted(enabledSourceCount: rssService.feeds.filter(\.isEnabled).count)
         let result = await rssService.refreshAllFeeds()
         await unifiedPlayer.execute(radioCoordinator.applyRefresh(result))

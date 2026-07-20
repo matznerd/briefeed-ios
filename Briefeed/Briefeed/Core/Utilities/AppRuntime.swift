@@ -55,10 +55,64 @@ enum AppRuntime {
         return configuration.isHostedXCTestEnvironment || hasLoadedUnitTestBundle
     }
 
-    static var radioFixtureScenario: String? { configuration.radioFixtureScenario }
-    static var shouldResetRadioFixtureStore: Bool { configuration.shouldResetRadioFixtureStore }
+    #if DEBUG
+    static var radioFixtureScenario: RadioFixtureScenario? {
+        configuration.radioFixtureScenario.flatMap(RadioFixtureScenario.init(rawValue:))
+    }
+
+    static var shouldResetRadioFixtureStore: Bool {
+        radioFixtureScenario != nil && configuration.shouldResetRadioFixtureStore
+    }
+
+    static let radioFixtureNow: Date = {
+        Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970 / 3_600) * 3_600)
+    }()
+
+    static var radioFixtureDefinition: RadioFixtureScenarioDefinition? {
+        radioFixtureScenario.map { RadioFixtureScenarioDefinition.make(scenario: $0, now: radioFixtureNow) }
+    }
+
+    static func prepareRadioFixturePreferencesIfNeeded(
+        configuration: Configuration = configuration,
+        defaults: UserDefaults = .standard
+    ) {
+        guard configuration.radioFixtureScenario.flatMap(RadioFixtureScenario.init(rawValue:)) != nil else {
+            return
+        }
+        if configuration.shouldResetRadioFixtureStore {
+            resetRadioFixturePreferences(defaults: defaults)
+        }
+        if let rawAutoplay = configuration.environment["BRIEFEED_RADIO_AUTOPLAY"] {
+            defaults.set(rawAutoplay == "1", forKey: UserDefaultsKey.autoPlayLiveNewsOnOpen.rawValue)
+        }
+    }
+
+    static func resetRadioFixturePreferences(defaults: UserDefaults = .standard) {
+        for key in [
+            RadioSessionStore.storageKey,
+            UserDefaultsKey.playbackSpeed.rawValue,
+            UserDefaultsKey.rssPlaybackSpeed.rawValue,
+            UserDefaultsKey.autoPlayLiveNewsOnOpen.rawValue,
+            UserDefaultsKey.rssLastPlayedEpisodeId.rawValue
+        ] {
+            defaults.removeObject(forKey: key)
+        }
+        defaults.set(false, forKey: UserDefaultsKey.autoPlayLiveNewsOnOpen.rawValue)
+        defaults.set(1.0, forKey: UserDefaultsKey.playbackSpeed.rawValue)
+    }
+    #else
+    static var radioFixtureScenario: Never? { nil }
+    static var shouldResetRadioFixtureStore: Bool { false }
+    #endif
 
     static var shouldSkipAutomaticStartupWork: Bool {
-        configuration.shouldSkipAutomaticStartupWork || isHostedXCTest
+        #if DEBUG
+        return radioFixtureScenario != nil
+            || configuration.environment["BRIEFEED_DISABLE_AUTOMATIC_STARTUP"] == "1"
+            || isHostedXCTest
+        #else
+        return configuration.environment["BRIEFEED_DISABLE_AUTOMATIC_STARTUP"] == "1"
+            || isHostedXCTest
+        #endif
     }
 }

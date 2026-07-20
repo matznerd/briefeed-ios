@@ -26,6 +26,28 @@ struct RadioServiceContainerTests {
         monitor = nil
         #expect(pathMonitor.cancelCount == 1)
     }
+
+    #if DEBUG
+    @Test func fixtureContainerSharesOneInjectedMonitorWithCoordinator() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let suiteName = "RadioServiceContainerTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        let definition = RadioFixtureScenarioDefinition.make(
+            scenario: .offline,
+            now: Date(timeIntervalSince1970: 3_600)
+        )
+        let container = RadioServiceContainer.makeFixtureContainer(
+            definition: definition,
+            context: persistence.container.viewContext,
+            defaults: defaults
+        )
+
+        #expect(container.connectivity.status == .offline)
+        _ = await container.coordinator.restore(autoplayEnabled: false)
+        container.coordinator.refreshStarted(enabledSourceCount: 1)
+        #expect(container.coordinator.state == .waitingForNetwork)
+    }
+    #endif
 }
 
 @MainActor private final class ContainerConnectivityMonitor: ConnectivityMonitoring {

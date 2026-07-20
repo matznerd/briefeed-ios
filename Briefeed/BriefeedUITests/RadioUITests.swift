@@ -166,4 +166,207 @@ final class RadioUITests: XCTestCase {
             XCTAssertTrue(app.buttons[label].exists || app.menuItems[label].exists)
         }
     }
+
+    @MainActor
+    func testPartialPlaybackPersistsAcrossProcessRelaunch() throws {
+        app = launchFixture("partial", reset: true)
+        let scrubber = app.otherElements["miniPlayer.scrubber"]
+        XCTAssertTrue(scrubber.waitForExistence(timeout: 15))
+        let initial = try elapsedSeconds(in: scrubber)
+
+        app.buttons["miniPlayer.playPause"].tap()
+        XCTAssertTrue(waitForLabel("Pause", on: app.buttons["miniPlayer.playPause"]))
+        sleep(3)
+        app.buttons["miniPlayer.playPause"].tap()
+        XCTAssertTrue(waitForLabel("Play", on: app.buttons["miniPlayer.playPause"]))
+        let paused = try elapsedSeconds(in: scrubber)
+        XCTAssertGreaterThan(paused, initial)
+
+        app.terminate()
+        app = launchFixture("partial", reset: false)
+        let restored = app.otherElements["miniPlayer.scrubber"]
+        XCTAssertTrue(restored.waitForExistence(timeout: 15))
+        XCTAssertEqual(try elapsedSeconds(in: restored), paused, accuracy: 3)
+        XCTAssertTrue(app.staticTexts["Morning Update"].exists)
+    }
+
+    @MainActor
+    func testCompletedEpisodeDoesNotReplayAfterSameHourRelaunch() throws {
+        app = launchFixture("partial", reset: true)
+        let scrubber = app.otherElements["miniPlayer.scrubber"]
+        XCTAssertTrue(scrubber.waitForExistence(timeout: 15))
+        scrubber.coordinate(withNormalizedOffset: CGVector(dx: 0.88, dy: 0.5)).tap()
+        app.buttons["miniPlayer.playPause"].tap()
+        XCTAssertTrue(app.staticTexts["World Service Brief"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.staticTexts["Morning Update"].exists)
+
+        app.terminate()
+        app = launchFixture("partial", reset: false)
+        XCTAssertTrue(app.staticTexts["World Service Brief"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.staticTexts["Morning Update"].exists)
+    }
+
+    @MainActor
+    func testAutoplayRemainsOptInAndStartsOnlyWhenEnabled() throws {
+        app = launchFixture("partial", reset: true, autoplay: false)
+        XCTAssertTrue(app.buttons["miniPlayer.playPause"].waitForExistence(timeout: 15))
+        XCTAssertTrue(waitForLabel("Play", on: app.buttons["miniPlayer.playPause"]))
+        app.terminate()
+
+        app = launchFixture("partial", reset: true, autoplay: true)
+        XCTAssertTrue(app.buttons["miniPlayer.playPause"].waitForExistence(timeout: 15))
+        XCTAssertTrue(waitForLabel("Pause", on: app.buttons["miniPlayer.playPause"], timeout: 8))
+        XCTAssertEqual(app.staticTexts.matching(identifier: "radio.currentTitle").count, 1)
+    }
+
+    @MainActor
+    func testResetBoundariesPreventCrossScenarioBleed() throws {
+        app = launchFixture("partial", reset: true)
+        XCTAssertTrue(app.staticTexts["Morning Update"].waitForExistence(timeout: 15))
+        app.terminate()
+
+        app = launchFixture("completed", reset: true)
+        XCTAssertTrue(app.staticTexts["World Service Brief"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.staticTexts["Morning Update"].exists)
+        app.terminate()
+
+        app = launchFixture("partial", reset: true)
+        XCTAssertTrue(app.staticTexts["Morning Update"].waitForExistence(timeout: 15))
+        let scrubber = app.otherElements["miniPlayer.scrubber"]
+        XCTAssertTrue(scrubber.waitForExistence(timeout: 5))
+        XCTAssertEqual(try elapsedSeconds(in: scrubber), 18, accuracy: 1)
+    }
+
+    @MainActor
+    func testFixtureStatesRemainDistinctAndExposeRecoveryActions() throws {
+        let expectations: [(scenario: String, title: String, action: String?)] = [
+            ("offline", "Waiting for Network", "radio.retry"),
+            ("refreshing", "Refreshing Radio", nil),
+            ("all-failed", "Radio needs attention", "radio.retry"),
+            ("no-sources", "Choose your sources", "radio.addSource"),
+            ("exhausted", "You're caught up", "radio.refresh")
+        ]
+
+        for expected in expectations {
+            app?.terminate()
+            app = launchFixture(expected.scenario, reset: true)
+            XCTAssertTrue(app.staticTexts[expected.title].waitForExistence(timeout: 15), expected.scenario)
+            if let action = expected.action {
+                let button = app.buttons[action].firstMatch
+                XCTAssertTrue(button.exists, expected.scenario)
+                button.tap()
+                switch expected.scenario {
+                case "offline", "all-failed", "exhausted":
+                    XCTAssertTrue(app.staticTexts[expected.title].waitForExistence(timeout: 3))
+                case "no-sources":
+                    XCTAssertTrue(app.navigationBars["Add RSS Feed"].waitForExistence(timeout: 3))
+                default:
+                    break
+                }
+            }
+        }
+
+        app.terminate()
+        app = launchFixture("degraded", reset: true)
+        XCTAssertTrue(app.staticTexts["Morning Update"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.otherElements["radio.sourceFailures"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Radio needs attention"].exists)
+        app.buttons["Play Radio"].firstMatch.tap()
+        XCTAssertTrue(waitForLabel("Pause Radio", on: app.buttons["Pause Radio"].firstMatch))
+    }
+
+    @MainActor
+    func testSpeedPersistsAndSleepTimerCanUseEndOfEpisode() throws {
+        app = launchFixture("partial", reset: true)
+        let speed = app.buttons["miniPlayer.speed"]
+        XCTAssertTrue(speed.waitForExistence(timeout: 15))
+        speed.tap()
+        app.buttons["1.5x"].tap()
+        XCTAssertEqual(speed.value as? String, "1.5x")
+
+        let sleepTimer = app.buttons["miniPlayer.sleep"]
+        sleepTimer.tap()
+        app.buttons["End of Episode"].tap()
+        XCTAssertEqual(sleepTimer.value as? String, "End of Episode")
+
+        sleepTimer.tap()
+        app.buttons["Custom"].tap()
+        let customMinutes = app.steppers["sleepTimer.customMinutes"]
+        XCTAssertTrue(customMinutes.waitForExistence(timeout: 3))
+        XCTAssertEqual(customMinutes.value as? String, "20 minutes")
+        app.buttons["sleepTimer.set"].tap()
+        XCTAssertEqual(sleepTimer.value as? String, "20 min")
+
+        app.terminate()
+        app = launchFixture("partial", reset: false)
+        let restoredSpeed = app.buttons["miniPlayer.speed"]
+        XCTAssertTrue(restoredSpeed.waitForExistence(timeout: 15))
+        XCTAssertEqual(restoredSpeed.value as? String, "1.5x")
+    }
+
+    @MainActor
+    func testHeadlessRadioSmoke() throws {
+        app = launchFixture("partial", reset: true)
+        XCTAssertTrue(app.staticTexts["Morning Update"].waitForExistence(timeout: 15))
+        let scrubber = app.otherElements["miniPlayer.scrubber"]
+        XCTAssertTrue(scrubber.waitForExistence(timeout: 5))
+        let initial = try elapsedSeconds(in: scrubber)
+
+        app.buttons["miniPlayer.playPause"].tap()
+        XCTAssertTrue(waitForLabel("Pause", on: app.buttons["miniPlayer.playPause"]))
+        sleep(2)
+        app.buttons["miniPlayer.forward"].tap()
+        XCTAssertGreaterThan(try elapsedSeconds(in: scrubber), initial + 8)
+        app.buttons["miniPlayer.rewind"].tap()
+        app.buttons["miniPlayer.next"].tap()
+        XCTAssertTrue(app.staticTexts["World Service Brief"].waitForExistence(timeout: 5))
+        app.buttons["miniPlayer.playPause"].tap()
+
+        app.terminate()
+        app = launchFixture("partial", reset: false)
+        XCTAssertTrue(app.staticTexts["World Service Brief"].waitForExistence(timeout: 15))
+    }
+
+    @MainActor
+    private func launchFixture(
+        _ scenario: String,
+        reset: Bool,
+        autoplay: Bool? = nil
+    ) -> XCUIApplication {
+        let launched = XCUIApplication()
+        launched.launchArguments = ["-briefeed-radio-fixture", scenario]
+        launched.launchEnvironment["BRIEFEED_RADIO_RESET_STORE"] = reset ? "1" : "0"
+        if let autoplay {
+            launched.launchEnvironment["BRIEFEED_RADIO_AUTOPLAY"] = autoplay ? "1" : "0"
+        }
+        launched.launch()
+        return launched
+    }
+
+    private func elapsedSeconds(in scrubber: XCUIElement) throws -> Double {
+        let value = try XCTUnwrap(scrubber.value as? String)
+        let expression = try NSRegularExpression(
+            pattern: #"([0-9]+) minutes?, ([0-9]+) seconds? elapsed"#
+        )
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        guard let match = expression.firstMatch(in: value, range: range),
+              let minuteRange = Range(match.range(at: 1), in: value),
+              let secondRange = Range(match.range(at: 2), in: value),
+              let minutes = Double(value[minuteRange]),
+              let seconds = Double(value[secondRange]) else {
+            XCTFail("Unexpected scrubber value: \(value)")
+            return 0
+        }
+        return minutes * 60 + seconds
+    }
+
+    private func waitForLabel(
+        _ label: String,
+        on element: XCUIElement,
+        timeout: TimeInterval = 5
+    ) -> Bool {
+        let predicate = NSPredicate(format: "label == %@", label)
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
 }
