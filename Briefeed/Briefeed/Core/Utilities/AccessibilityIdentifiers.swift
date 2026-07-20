@@ -70,6 +70,7 @@ enum AccessibilityID {
         static let scrubber = "miniPlayer.scrubber"
         static let speed = "miniPlayer.speed"
         static let sleep = "miniPlayer.sleep"
+        static let refresh = "miniPlayer.refresh"
     }
 
     enum ExpandedPlayer {

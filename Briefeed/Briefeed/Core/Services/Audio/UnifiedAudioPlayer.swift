@@ -223,6 +223,7 @@ final class UnifiedAudioPlayer: ObservableObject {
     private let radioCoordinator: RadioSessionCoordinating
     private let pipelineTimer = PipelineTimer.shared
     private let context: NSManagedObjectContext
+    private let persistPlaybackRate: @MainActor (Float) -> Void
 
     var radioSessionCoordinator: RadioSessionCoordinating { radioCoordinator }
 
@@ -251,10 +252,26 @@ final class UnifiedAudioPlayer: ObservableObject {
     @Published private(set) var radioQueue: [UnifiedQueueItem] = []
     @Published private(set) var radioIndex: Int = -1
 
+    /// A restored Radio episode is usable before the audio transport is loaded,
+    /// so `.none` can still present and route as Radio.
+    var effectivePlaybackMode: ActivePlaybackMode {
+        guard activeMode == .none else { return activeMode }
+        if hasResumableRadioEpisode { return .radio }
+        return queue.isEmpty ? .none : .brief
+    }
+
+    var presentationPosition: TimeInterval {
+        effectivePlaybackMode == .radio ? radioControlPosition : finiteNonnegative(currentTime)
+    }
+
+    var presentationDuration: TimeInterval {
+        effectivePlaybackMode == .radio ? (radioControlDuration ?? 0) : finiteNonnegative(duration)
+    }
+
     // MARK: - Current Item
 
     var currentItem: UnifiedQueueItem? {
-        switch activeMode {
+        switch effectivePlaybackMode {
         case .radio:
             guard radioIndex >= 0 && radioIndex < radioQueue.count else { return nil }
             return radioQueue[radioIndex]
@@ -266,7 +283,7 @@ final class UnifiedAudioPlayer: ObservableObject {
 
     /// Get current QueueItem from coordinator (only valid when not streaming Live News)
     var currentQueueItem: QueueItem? {
-        activeMode == .radio ? nil : queueCoordinator.currentItem
+        effectivePlaybackMode == .radio ? nil : queueCoordinator.currentItem
     }
 
     // MARK: - Private Properties
@@ -304,12 +321,16 @@ final class UnifiedAudioPlayer: ObservableObject {
         audioPlayer: AudioPlaybackTransporting,
         queueCoordinator: BriefQueueCoordinating,
         radioCoordinator: RadioSessionCoordinating,
-        context: NSManagedObjectContext
+        context: NSManagedObjectContext,
+        persistPlaybackRate: @escaping @MainActor (Float) -> Void = {
+            UserDefaultsManager.shared.playbackSpeed = $0
+        }
     ) {
         self.audioPlayer = audioPlayer
         self.queueCoordinator = queueCoordinator
         self.radioCoordinator = radioCoordinator
         self.context = context
+        self.persistPlaybackRate = persistPlaybackRate
         setupAudioPlayer()
         setupQueueCoordinatorBindings()
         setupRadioBindings()
@@ -366,7 +387,7 @@ final class UnifiedAudioPlayer: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] intent in
                 Task { @MainActor [weak self] in
-                    guard let self, self.activeMode == .radio else { return }
+                    guard let self, self.effectivePlaybackMode == .radio else { return }
                     await self.execute(intent)
                 }
             }
@@ -658,8 +679,8 @@ final class UnifiedAudioPlayer: ObservableObject {
     /// Play next item
     func playNext() async {
         cancelDeferredAutoplay()
-        if activeMode == .radio {
-            await execute(radioCoordinator.manualNext(positionSeconds: currentTime, duration: duration > 0 ? duration : nil))
+        if effectivePlaybackMode == .radio {
+            await execute(radioCoordinator.manualNext(positionSeconds: radioControlPosition, duration: radioControlDuration))
         } else {
             if currentIndex < queue.count - 1 {
                 await play(at: currentIndex + 1)
@@ -714,7 +735,7 @@ final class UnifiedAudioPlayer: ObservableObject {
     /// Play previous item
     func playPrevious() async {
         cancelDeferredAutoplay()
-        if activeMode != .radio {
+        if effectivePlaybackMode != .radio {
             if currentIndex > 0 {
                 await play(at: currentIndex - 1)
             }
@@ -733,9 +754,9 @@ final class UnifiedAudioPlayer: ObservableObject {
     /// Pause playback
     func pause() {
         cancelDeferredAutoplay()
-        if activeMode == .radio {
-            let intent = radioCoordinator.pauseByUser(positionSeconds: currentTime, duration: duration > 0 ? duration : nil)
-            if intent == .pause { audioPlayer.pause() }
+        if effectivePlaybackMode == .radio {
+            let intent = radioCoordinator.pauseByUser(positionSeconds: radioControlPosition, duration: radioControlDuration)
+            if intent == .pause, activeMode == .radio { audioPlayer.pause() }
         } else {
             queueCoordinator.updateCurrentPosition(currentTime)
             queueCoordinator.saveStateNow()
@@ -748,7 +769,7 @@ final class UnifiedAudioPlayer: ObservableObject {
     /// Resume playback
     func resume() {
         cancelDeferredAutoplay()
-        if activeMode == .radio {
+        if effectivePlaybackMode == .radio {
             Task { @MainActor in await execute(radioCoordinator.beginCurrent()) }
         } else {
             audioPlayer.resume()
@@ -758,8 +779,8 @@ final class UnifiedAudioPlayer: ObservableObject {
     
     /// Stop playback
     func stop() {
-        if activeMode == .radio {
-            _ = radioCoordinator.pauseByUser(positionSeconds: currentTime, duration: duration > 0 ? duration : nil)
+        if effectivePlaybackMode == .radio {
+            _ = radioCoordinator.pauseByUser(positionSeconds: radioControlPosition, duration: radioControlDuration)
         } else if activeMode == .brief {
             queueCoordinator.updateCurrentPosition(currentTime)
             queueCoordinator.saveStateNow()
@@ -779,35 +800,37 @@ final class UnifiedAudioPlayer: ObservableObject {
         playbackRate = normalized
         audioPlayer.setRate(normalized)
         
-        // Save preference
-        UserDefaultsManager.shared.playbackSpeed = normalized
+        persistPlaybackRate(normalized)
     }
     
     /// Seek to time
     func seek(to time: TimeInterval) {
         cancelDeferredAutoplay()
-        let bounded = max(0, duration > 0 ? min(time, duration) : time)
-        if activeMode == .radio {
-            _ = radioCoordinator.seekEnded(positionSeconds: bounded, duration: duration > 0 ? duration : nil)
+        let knownDuration = effectivePlaybackMode == .radio ? (radioControlDuration ?? 0) : duration
+        let bounded = finiteNonnegative(knownDuration > 0 ? min(time, knownDuration) : time)
+        if effectivePlaybackMode == .radio {
+            _ = radioCoordinator.seekEnded(positionSeconds: bounded, duration: radioControlDuration)
         } else {
             queueCoordinator.updateCurrentPosition(bounded)
             queueCoordinator.saveStateNow()
         }
-        audioPlayer.seek(to: bounded)
-        currentTime = bounded
-        if activeMode == .brief {
-            queueCoordinator.updateCurrentPosition(time)
+        if activeMode != .none, activePlaybackID != nil {
+            audioPlayer.seek(to: bounded)
         }
+        currentTime = bounded
     }
     
     /// Skip forward
     func skipForward(_ seconds: TimeInterval = 10) {
-        seek(to: min(currentTime + seconds, duration > 0 ? duration : currentTime + seconds))
+        let position = effectivePlaybackMode == .radio ? radioControlPosition : currentTime
+        let knownDuration = effectivePlaybackMode == .radio ? (radioControlDuration ?? 0) : duration
+        seek(to: min(position + seconds, knownDuration > 0 ? knownDuration : position + seconds))
     }
     
     /// Skip backward
     func skipBackward(_ seconds: TimeInterval = 10) {
-        seek(to: max(currentTime - seconds, 0))
+        let position = effectivePlaybackMode == .radio ? radioControlPosition : currentTime
+        seek(to: max(position - seconds, 0))
     }
 
     // MARK: - Radio Playback
@@ -958,7 +981,7 @@ final class UnifiedAudioPlayer: ObservableObject {
     }
 
     private func updateRemoteAvailability() {
-        switch activeMode {
+        switch effectivePlaybackMode {
         case .radio:
             audioPlayer.applyRemoteCommandAvailability(.radio(canPlayNext: radioCoordinator.canPlayNext))
         case .brief, .none:
@@ -1513,6 +1536,39 @@ final class UnifiedAudioPlayer: ObservableObject {
     private func validLifecyclePosition(_ position: TimeInterval) -> TimeInterval {
         position.isFinite ? max(0, position) : 0
     }
+
+    private var hasResumableRadioEpisode: Bool {
+        guard let key = radioCoordinator.currentKey,
+              radioCoordinator.currentEpisode != nil,
+              let entry = radioCoordinator.entries.first(where: { $0.key == key }),
+              entry.disposition != .failedThisSession else { return false }
+        switch radioCoordinator.state {
+        case .exhausted, .noSources:
+            return false
+        default:
+            return true
+        }
+    }
+
+    private var radioControlPosition: TimeInterval {
+        if activeMode == .radio { return finiteNonnegative(currentTime) }
+        guard let key = radioCoordinator.currentKey else { return 0 }
+        return finiteNonnegative(
+            radioCoordinator.entries.first(where: { $0.key == key })?.positionSeconds ?? 0
+        )
+    }
+
+    private var radioControlDuration: TimeInterval? {
+        let candidate = activeMode == .radio && duration.isFinite && duration > 0
+            ? duration
+            : radioCoordinator.currentEpisode?.durationSeconds
+        guard let candidate, candidate.isFinite, candidate > 0 else { return nil }
+        return candidate
+    }
+
+    private func finiteNonnegative(_ value: TimeInterval) -> TimeInterval {
+        value.isFinite ? max(0, value) : 0
+    }
     
     private func startProgressTimer() {
         playbackProgressTimer?.invalidate()
@@ -1678,29 +1734,31 @@ extension UnifiedAudioPlayer {
     
     /// Get progress percentage
     var progressPercentage: Double {
+        let duration = presentationDuration
         guard duration > 0 else { return 0 }
-        return currentTime / duration
+        return presentationPosition / duration
     }
     
     /// Get formatted current time
     var formattedCurrentTime: String {
-        formatTime(currentTime)
+        formatTime(presentationPosition)
     }
     
     /// Get formatted duration
     var formattedDuration: String {
-        formatTime(duration)
+        formatTime(presentationDuration)
     }
     
     /// Get formatted remaining time
     var formattedRemainingTime: String {
-        formatTime(duration - currentTime)
+        formatTime(presentationDuration - presentationPosition)
     }
     
     private func formatTime(_ time: TimeInterval) -> String {
-        let hours = Int(time) / 3600
-        let minutes = (Int(time) % 3600) / 60
-        let seconds = Int(time) % 60
+        let totalSeconds = Int(finiteNonnegative(time).rounded(.down))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
         
         if hours > 0 {
             return String(format: "%d:%02d:%02d", hours, minutes, seconds)
@@ -1711,12 +1769,14 @@ extension UnifiedAudioPlayer {
     
     /// Check if can play next
     var canPlayNext: Bool {
-        activeMode == .radio ? radioCoordinator.canPlayNext : currentIndex < queue.count - 1
+        effectivePlaybackMode == .radio
+            ? radioCoordinator.canPlayNext
+            : currentIndex >= 0 && currentIndex < queue.count - 1
     }
 
     /// Check if can play previous
     var canPlayPrevious: Bool {
-        activeMode == .radio ? false : currentIndex > 0
+        effectivePlaybackMode == .radio ? false : currentIndex > 0
     }
 }
 

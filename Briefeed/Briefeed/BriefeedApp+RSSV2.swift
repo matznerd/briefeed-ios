@@ -62,6 +62,8 @@ final class RadioAppLifecycleDriver {
     private var isActive = false
     private var isInInactiveSequence = false
     private var didTerminate = false
+    private var pendingRestoreProjection: (@MainActor () async -> Void)?
+    private var restoreProjectionTask: Task<Void, Never>?
 
     var hasPendingRefresh: Bool { pendingRefresh != nil }
     var hasInFlightRefresh: Bool { inFlightRefreshID != nil }
@@ -104,6 +106,8 @@ final class RadioAppLifecycleDriver {
 
         guard restoreGeneration == generation, isActive else {
             cancelPendingColdLaunchAutoplay()
+            pendingRestoreProjection = { await applyRestoreIntent(nil) }
+            applyPendingRestoreProjectionIfActive()
             recoverFromStaleRestoreIfActive()
             return
         }
@@ -129,6 +133,8 @@ final class RadioAppLifecycleDriver {
             isInInactiveSequence = false
             let isForegroundReturn = hasObservedActiveScene
             hasObservedActiveScene = true
+
+            applyPendingRestoreProjectionIfActive()
 
             if didFinishRestore {
                 if !didRequestInitialRefresh {
@@ -160,6 +166,9 @@ final class RadioAppLifecycleDriver {
         isInInactiveSequence = true
         coldLaunchAutoplayAllowed = false
         cancelLifecycleWork()
+        restoreProjectionTask?.cancel()
+        restoreProjectionTask = nil
+        pendingRestoreProjection = nil
         cancelPendingColdLaunchAutoplay()
         forceSave(.termination)
     }
@@ -181,6 +190,13 @@ final class RadioAppLifecycleDriver {
             requestStaleRefreshWhenOnline(now: now(), operation: foregroundRefreshWork)
         }
         armPollIfNeeded()
+    }
+
+    private func applyPendingRestoreProjectionIfActive() {
+        guard isActive, !didTerminate, let projection = pendingRestoreProjection else { return }
+        pendingRestoreProjection = nil
+        restoreProjectionTask?.cancel()
+        restoreProjectionTask = Task { @MainActor in await projection() }
     }
 
     private func connectivityChanged(_ status: ConnectivityStatus) {

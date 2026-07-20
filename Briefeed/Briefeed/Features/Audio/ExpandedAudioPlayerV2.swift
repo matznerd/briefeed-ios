@@ -11,6 +11,7 @@ import SwiftUI
 struct ExpandedAudioPlayerV2: View {
     @EnvironmentObject var viewModel: AudioPlayerViewModelV2
     @Environment(\.dismiss) var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var showQueue = false
     
     var body: some View {
@@ -19,30 +20,22 @@ struct ExpandedAudioPlayerV2: View {
                 // Header
                 header
                 
-                ScrollView {
-                    VStack(spacing: 24) {
-                        // Artwork/Waveform
-                        artworkSection
-                            .padding(.top, 20)
-                        
-                        // Title and Artist
-                        titleSection
-                        
-                        // Progress Bar
-                        progressSection
-                        
-                        // Main Controls
-                        mainControls
-                        
-                        // Speed Control
-                        speedControl
-                        
-                        // Queue Info
-                        queueInfo
-                        
-                        Spacer(minLength: 20)
+                if viewModel.playerPresentation.allowsExpand {
+                    ScrollView {
+                        VStack(spacing: 24) {
+                            artworkSection
+                                .padding(.top, 20)
+                            titleSection
+                            progressSection
+                            mainControls
+                            speedControl
+                            queueInfo
+                            Spacer(minLength: 20)
+                        }
+                        .padding(.horizontal, 24)
                     }
-                    .padding(.horizontal, 24)
+                } else {
+                    stoppedContent
                 }
             }
             .background(Color(UIColor.systemBackground))
@@ -52,13 +45,42 @@ struct ExpandedAudioPlayerV2: View {
             }
         }
     }
+
+    private var stoppedContent: some View {
+        VStack(spacing: 16) {
+            Spacer()
+            Image(systemName: viewModel.playerPresentation.kind == .caughtUp ? "checkmark.circle.fill" : "radio")
+                .font(.largeTitle)
+                .foregroundStyle(Color.briefeedRed)
+            Text(viewModel.playerPresentation.title)
+                .font(.title2.bold())
+                .multilineTextAlignment(.center)
+            Text(viewModel.playerPresentation.source)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            if viewModel.playerPresentation.primaryAction == .refresh {
+                Button {
+                    Task { await viewModel.refreshRadio() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                        .frame(minWidth: 88, minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.briefeedRed)
+            }
+            Spacer()
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
     
     // MARK: - Header
     private var header: some View {
         HStack {
             Button(action: { dismiss() }) {
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 20, weight: .medium))
+                    .font(.title3.weight(.medium))
                     .foregroundColor(.primary)
                     .frame(width: 44, height: 44)
             }
@@ -67,18 +89,18 @@ struct ExpandedAudioPlayerV2: View {
             Spacer()
             
             Text("Now Playing")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.headline)
             
             Spacer()
             
-            if viewModel.activeMode == .radio {
+            if !viewModel.playerPresentation.showsQueue {
                 Color.clear
                     .frame(width: 44, height: 44)
                     .accessibilityHidden(true)
             } else {
                 Button(action: { showQueue = true }) {
                     Image(systemName: "list.bullet")
-                        .font(.system(size: 18))
+                        .font(.headline)
                         .foregroundColor(.primary)
                         .frame(width: 44, height: 44)
                 }
@@ -97,9 +119,9 @@ struct ExpandedAudioPlayerV2: View {
     // MARK: - Artwork Section
     private var artworkSection: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 20)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.gray.opacity(0.1))
-                .frame(height: 320)
+                .frame(height: dynamicTypeSize.isAccessibilitySize ? 180 : 280)
             
             if viewModel.isGenerating {
                 VStack(spacing: 16) {
@@ -107,22 +129,23 @@ struct ExpandedAudioPlayerV2: View {
                         .scaleEffect(1.5)
                     
                     Text("Generating Audio...")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.subheadline.weight(.medium))
                         .foregroundColor(.secondary)
                     
                     if !viewModel.generationProgress.isEmpty {
                         Text(viewModel.generationProgress)
-                            .font(.system(size: 12))
+                            .font(.caption)
                             .foregroundColor(.orange)
                     }
                 }
             } else if viewModel.isPlaying {
                 WaveformView(isPlaying: true)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 200)
+                    .frame(height: dynamicTypeSize.isAccessibilitySize ? 120 : 180)
             } else {
                 Image(systemName: itemIcon)
-                    .font(.system(size: 80))
+                    .font(.largeTitle)
+                    .imageScale(.large)
                     .foregroundColor(.secondary.opacity(0.5))
             }
         }
@@ -131,25 +154,25 @@ struct ExpandedAudioPlayerV2: View {
     // MARK: - Title Section
     private var titleSection: some View {
         VStack(spacing: 8) {
-            Text(viewModel.currentTitle ?? "Not Playing")
-                .font(.system(size: 22, weight: .bold))
+            Text(viewModel.playerPresentation.title)
+                .font(.title2.bold())
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
             
-            if let artist = viewModel.currentArtist {
-                Text(artist)
-                    .font(.system(size: 16))
+            if !viewModel.playerPresentation.source.isEmpty {
+                Text(viewModel.playerPresentation.source)
+                    .font(.body)
                     .foregroundColor(.secondary)
             }
             
             if viewModel.currentItemType != .none {
                 Label(itemTypeText, systemImage: itemIcon)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.caption.weight(.medium))
                     .foregroundColor(.accentColor)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 4)
                     .background(Color.accentColor.opacity(0.1))
-                    .cornerRadius(12)
+                    .clipShape(Capsule())
             }
         }
     }
@@ -157,8 +180,8 @@ struct ExpandedAudioPlayerV2: View {
     // MARK: - Progress Section
     private var progressSection: some View {
         PlayerScrubber(
-            position: viewModel.currentTime,
-            duration: viewModel.duration,
+            position: viewModel.playerPresentation.position,
+            duration: viewModel.playerPresentation.duration,
             identifier: AccessibilityID.ExpandedPlayer.progress,
             onSeek: viewModel.seek(to:)
         )
@@ -167,7 +190,7 @@ struct ExpandedAudioPlayerV2: View {
     // MARK: - Main Controls
     private var mainControls: some View {
         HStack(spacing: 8) {
-            if PlayerPresentationPolicy.showsPrevious(for: viewModel.activeMode) {
+            if viewModel.playerPresentation.showsPrevious {
                 Button {
                     Task { await viewModel.playPrevious() }
                 } label: {
@@ -256,7 +279,7 @@ struct ExpandedAudioPlayerV2: View {
                     .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.speed)
             }
 
-            if viewModel.activeMode == .radio {
+            if viewModel.playerPresentation.showsSleep {
                 Divider()
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Sleep")
@@ -277,17 +300,17 @@ struct ExpandedAudioPlayerV2: View {
     // MARK: - Queue Info
     private var queueInfo: some View {
         Group {
-            if viewModel.activeMode != .radio, !viewModel.queueItems.isEmpty {
+            if viewModel.playerPresentation.showsQueue, !viewModel.queueItems.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Queue")
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.subheadline.weight(.medium))
                             .foregroundColor(.secondary)
                         
                         Spacer()
                         
                         Text("\(viewModel.currentQueueIndex + 1) of \(viewModel.queueItems.count)")
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.subheadline.weight(.medium))
                             .foregroundColor(.secondary)
                     }
                     
@@ -295,11 +318,11 @@ struct ExpandedAudioPlayerV2: View {
                        viewModel.currentQueueIndex + 1 < viewModel.queueItems.count {
                         HStack {
                             Text("Next:")
-                                .font(.system(size: 12))
+                                .font(.caption)
                                 .foregroundColor(.secondary)
                             
                             Text(viewModel.queueItems[viewModel.currentQueueIndex + 1].title)
-                                .font(.system(size: 12, weight: .medium))
+                                .font(.caption.weight(.medium))
                                 .lineLimit(1)
                         }
                     }
@@ -354,12 +377,12 @@ struct QueueView: View {
                         // Playing indicator
                         if index == viewModel.currentQueueIndex {
                             Image(systemName: "speaker.wave.2.fill")
-                                .font(.system(size: 14))
+                                .font(.subheadline)
                                 .foregroundColor(.accentColor)
                                 .frame(width: 20)
                         } else {
                             Text("\(index + 1)")
-                                .font(.system(size: 12, weight: .medium))
+                                .font(.caption.weight(.medium))
                                 .foregroundColor(.secondary)
                                 .frame(width: 20)
                         }
@@ -367,13 +390,13 @@ struct QueueView: View {
                         // Item info
                         VStack(alignment: .leading, spacing: 4) {
                             Text(viewModel.queueItems[index].title)
-                                .font(.system(size: 14, weight: index == viewModel.currentQueueIndex ? .semibold : .regular))
+                                .font(index == viewModel.currentQueueIndex ? .subheadline.weight(.semibold) : .subheadline)
                                 .lineLimit(2)
                             
                             if let source = viewModel.queueItems[index].article?.author ?? 
                                            viewModel.queueItems[index].episode?.feed?.displayName {
                                 Text(source)
-                                    .font(.system(size: 12))
+                                    .font(.caption)
                                     .foregroundColor(.secondary)
                                     .lineLimit(1)
                             }
@@ -385,18 +408,18 @@ struct QueueView: View {
                         switch viewModel.queueItems[index].generationState {
                         case .ready:
                             Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 16))
+                                .font(.body)
                                 .foregroundColor(.green)
                         case .generating:
                             ProgressView()
                                 .scaleEffect(0.7)
                         case .failed:
                             Image(systemName: "exclamationmark.circle.fill")
-                                .font(.system(size: 16))
+                                .font(.body)
                                 .foregroundColor(.red)
                         case .pending:
                             Image(systemName: "circle")
-                                .font(.system(size: 16))
+                                .font(.body)
                                 .foregroundColor(.secondary.opacity(0.5))
                         }
                     }

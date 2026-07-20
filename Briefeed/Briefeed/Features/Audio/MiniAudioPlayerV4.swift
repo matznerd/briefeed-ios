@@ -59,6 +59,33 @@ enum PlayerPresentationPolicy {
     }
 }
 
+enum PlayerSurfaceKind: Equatable {
+    case playable
+    case caughtUp
+    case unavailable
+}
+
+enum PlayerPrimaryAction: Equatable {
+    case playPause
+    case refresh
+}
+
+struct PlayerSurfacePresentation: Equatable {
+    let kind: PlayerSurfaceKind
+    let mode: ActivePlaybackMode
+    let title: String
+    let source: String
+    let position: TimeInterval
+    let duration: TimeInterval
+    let showsPrevious: Bool
+    let showsSleep: Bool
+    let showsQueue: Bool
+    let allowsPlay: Bool
+    let allowsSeek: Bool
+    let allowsExpand: Bool
+    let primaryAction: PlayerPrimaryAction
+}
+
 enum RadioSleepMenuOption: Equatable, Identifiable {
     case off
     case endOfEpisode
@@ -126,15 +153,17 @@ enum RadioSleepMenuOption: Equatable, Identifiable {
 
 enum PlayerPresentationFormat {
     static func elapsed(_ seconds: TimeInterval) -> String {
-        clock(max(0, seconds))
+        clock(finiteNonnegative(seconds))
     }
 
     static func remaining(position: TimeInterval, duration: TimeInterval) -> String {
-        "-\(clock(max(0, duration - position)))"
+        "-\(clock(max(0, finiteNonnegative(duration) - finiteNonnegative(position))))"
     }
 
     static func scrubberAccessibilityValue(position: TimeInterval, duration: TimeInterval) -> String {
-        let elapsed = components(max(0, position))
+        let position = finiteNonnegative(position)
+        let duration = finiteNonnegative(duration)
+        let elapsed = components(position)
         let remaining = components(max(0, duration - position))
         return "\(spoken(elapsed)) elapsed, \(spoken(remaining)) remaining"
     }
@@ -153,7 +182,8 @@ enum PlayerPresentationFormat {
         case .endOfEpisode:
             return "End of Episode"
         case .deadline(let deadline):
-            let minutes = max(0, Int(ceil(deadline.timeIntervalSince(now) / 60)))
+            let interval = deadline.timeIntervalSince(now)
+            let minutes = interval.isFinite ? max(0, Int(ceil(interval / 60))) : 0
             return "\(minutes) min"
         }
     }
@@ -166,7 +196,7 @@ enum PlayerPresentationFormat {
     }
 
     private static func clock(_ seconds: TimeInterval) -> String {
-        let totalSeconds = max(0, Int(seconds.rounded(.down)))
+        let totalSeconds = Int(finiteNonnegative(seconds).rounded(.down))
         let hours = totalSeconds / 3_600
         let minutes = (totalSeconds % 3_600) / 60
         let remainder = totalSeconds % 60
@@ -177,12 +207,16 @@ enum PlayerPresentationFormat {
     }
 
     private static func components(_ seconds: TimeInterval) -> (minutes: Int, seconds: Int) {
-        let totalSeconds = max(0, Int(seconds.rounded(.down)))
+        let totalSeconds = Int(finiteNonnegative(seconds).rounded(.down))
         return (totalSeconds / 60, totalSeconds % 60)
     }
 
     private static func spoken(_ value: (minutes: Int, seconds: Int)) -> String {
         "\(value.minutes) \(value.minutes == 1 ? "minute" : "minutes"), \(value.seconds) \(value.seconds == 1 ? "second" : "seconds")"
+    }
+
+    private static func finiteNonnegative(_ value: TimeInterval) -> TimeInterval {
+        value.isFinite ? max(0, value) : 0
     }
 }
 
@@ -197,34 +231,13 @@ struct MiniAudioPlayerV4: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if dynamicTypeSize.isAccessibilitySize {
-                VStack(alignment: .trailing, spacing: 4) {
-                    metadata
-                    transportCluster
-                }
-                .padding(.horizontal, 10)
-                .padding(.top, 6)
+            if viewModel.playerPresentation.kind == .caughtUp {
+                caughtUpContent
+            } else if viewModel.playerPresentation.kind == .unavailable {
+                unavailableContent
             } else {
-                HStack(spacing: 8) {
-                    metadata
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .layoutPriority(0)
-
-                    transportCluster
-                        .fixedSize(horizontal: true, vertical: false)
-                        .layoutPriority(2)
-                }
-                .padding(.horizontal, 10)
-                .padding(.top, 6)
+                playableContent
             }
-
-            PlayerScrubber(
-                position: viewModel.currentTime,
-                duration: viewModel.duration,
-                identifier: AccessibilityID.MiniPlayer.scrubber,
-                onSeek: viewModel.seek(to:)
-            )
-            .padding(.horizontal, 10)
         }
         .background(playerBackground)
         .overlay(playerBoundary)
@@ -241,6 +254,92 @@ struct MiniAudioPlayerV4: View {
             ExpandedAudioPlayerV2()
                 .environmentObject(viewModel)
         }
+    }
+
+    @ViewBuilder
+    private var playableContent: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .trailing, spacing: 4) {
+                metadata
+                transportCluster
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 6)
+        } else {
+            HStack(spacing: 8) {
+                metadata
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(0)
+                transportCluster
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(2)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 6)
+        }
+
+        PlayerScrubber(
+            position: viewModel.playerPresentation.position,
+            duration: viewModel.playerPresentation.duration,
+            identifier: AccessibilityID.MiniPlayer.scrubber,
+            onSeek: viewModel.seek(to:)
+        )
+        .padding(.horizontal, 10)
+    }
+
+    private var caughtUpContent: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.title3)
+                .foregroundStyle(Color.briefeedRed)
+                .frame(width: 44, height: 44)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(viewModel.playerPresentation.title)
+                    .font(.caption.weight(.semibold))
+                    .accessibilityIdentifier(AccessibilityID.MiniPlayer.title)
+                Text(viewModel.playerPresentation.source)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier(AccessibilityID.MiniPlayer.source)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button {
+                Task { await viewModel.refreshRadio() }
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+                    .font(.caption.weight(.semibold))
+                    .frame(minWidth: 74, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Color.briefeedRed)
+            .accessibilityIdentifier(AccessibilityID.MiniPlayer.refresh)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+
+    private var unavailableContent: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "radio")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 44, height: 44)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(viewModel.playerPresentation.title)
+                    .font(.caption.weight(.semibold))
+                    .accessibilityIdentifier(AccessibilityID.MiniPlayer.title)
+                Text(viewModel.playerPresentation.source)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier(AccessibilityID.MiniPlayer.source)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
     }
 
     private var metadata: some View {
@@ -263,6 +362,7 @@ struct MiniAudioPlayerV4: View {
                 .frame(width: 36, height: 36)
                 .contentShape(Rectangle())
             }
+            .frame(width: 44, height: 44)
             .buttonStyle(.plain)
             .accessibilityLabel("Open player")
             .accessibilityIdentifier(AccessibilityID.MiniPlayer.expand)
@@ -275,13 +375,14 @@ struct MiniAudioPlayerV4: View {
                         showExpandedPlayer = true
                     }
                 } label: {
-                    Text(viewModel.currentTitle ?? "Not Playing")
+                    Text(viewModel.playerPresentation.title)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .frame(minHeight: 44)
                 .buttonStyle(.plain)
                 .accessibilityIdentifier(AccessibilityID.MiniPlayer.title)
 
@@ -294,7 +395,7 @@ struct MiniAudioPlayerV4: View {
 
                 HStack(spacing: 2) {
                     PlayerSpeedMenu(viewModel: viewModel, compact: true)
-                    if viewModel.activeMode == .radio {
+                    if viewModel.playerPresentation.showsSleep {
                         RadioSleepMenu(viewModel: viewModel, compact: true)
                     }
                 }
@@ -306,7 +407,7 @@ struct MiniAudioPlayerV4: View {
 
     private var transportCluster: some View {
         HStack(spacing: 2) {
-            ForEach(Array(PlayerPresentationPolicy.transportControls(for: viewModel.activeMode).enumerated()), id: \.offset) { _, control in
+            ForEach(Array(PlayerPresentationPolicy.transportControls(for: viewModel.playerPresentation.mode).enumerated()), id: \.offset) { _, control in
                 transportButton(control)
             }
         }
@@ -359,7 +460,7 @@ struct MiniAudioPlayerV4: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(viewModel.radioEntries.isEmpty && viewModel.queueItems.isEmpty)
+            .disabled(!viewModel.playerPresentation.allowsPlay)
             .accessibilityLabel(viewModel.isPlaying ? "Pause" : "Play")
             .accessibilityIdentifier(AccessibilityID.MiniPlayer.playPause)
 
@@ -407,7 +508,7 @@ struct MiniAudioPlayerV4: View {
         if viewModel.isGenerating {
             return viewModel.generationPhase.shortMessage
         }
-        return viewModel.currentArtist ?? "Briefeed Radio"
+        return viewModel.playerPresentation.source
     }
 
     private var itemIcon: String {
@@ -526,7 +627,7 @@ struct PlayerSpeedMenu: View {
         } label: {
             Label(PlayerPresentationFormat.speed(viewModel.playbackSpeed), systemImage: "speedometer")
                 .font(compact ? .caption2.weight(.semibold) : .subheadline.weight(.semibold))
-                .frame(minHeight: 44)
+                .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -563,7 +664,7 @@ struct RadioSleepMenu: View {
                 systemImage: "moon.fill"
             )
             .font(compact ? .caption2.weight(.semibold) : .subheadline.weight(.semibold))
-            .frame(minHeight: 44)
+            .frame(minWidth: 44, minHeight: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -576,9 +677,7 @@ struct RadioSleepMenu: View {
                 minutes: $customMinutes,
                 onCancel: { showingCustomSheet = false },
                 onSet: {
-                    viewModel.setSleepTimer(
-                        RadioSleepMenuOption.custom.timer(now: Date(), customMinutes: customMinutes)
-                    )
+                    viewModel.setCustomSleepTimer(minutes: customMinutes)
                     showingCustomSheet = false
                 }
             )

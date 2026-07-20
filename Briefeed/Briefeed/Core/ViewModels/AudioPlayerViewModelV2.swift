@@ -78,13 +78,18 @@ final class AudioPlayerViewModelV2: ObservableObject {
     init(
         unifiedPlayer: UnifiedAudioPlayer,
         radioCoordinator: RadioSessionCoordinating? = nil,
-        rssService: RSSAudioService
+        rssService: RSSAudioService,
+        playbackSpeedLoad: @escaping @MainActor () -> Float = {
+            UserDefaultsManager.shared.playbackSpeed
+        }
     ) {
         self.unifiedPlayer = unifiedPlayer
         self.radioCoordinator = radioCoordinator ?? unifiedPlayer.radioSessionCoordinator
         self.rssService = rssService
+        let restoredSpeed = PlaybackSpeedPolicy.normalize(playbackSpeedLoad())
+        self.playbackSpeed = restoredSpeed
+        unifiedPlayer.setRate(restoredSpeed)
         setupBindings()
-        loadSavedState()
     }
     
     // MARK: - Setup
@@ -150,7 +155,7 @@ final class AudioPlayerViewModelV2: ObservableObject {
     }
 
     private func refreshNowPlaying() {
-        if activeMode == .radio, let episode = currentRadioEpisode {
+        if effectivePlaybackMode == .radio, let episode = currentRadioEpisode {
             currentTitle = episode.title
             currentArtist = episode.sourceName
             currentItemType = .rssEpisode
@@ -159,14 +164,6 @@ final class AudioPlayerViewModelV2: ObservableObject {
         }
     }
     
-    private func loadSavedState() {
-        // Load saved playback speed
-        playbackSpeed = UserDefaultsManager.shared.playbackSpeed
-        
-        // Load saved queue if any
-        // This would be implemented with persistence
-    }
-
     private func applyPlaybackSpeed() {
         guard !isApplyingPlaybackSpeed else { return }
 
@@ -176,7 +173,6 @@ final class AudioPlayerViewModelV2: ObservableObject {
             playbackSpeed = normalized
         }
         unifiedPlayer.setRate(normalized)
-        UserDefaultsManager.shared.playbackSpeed = normalized
         isApplyingPlaybackSpeed = false
     }
     
@@ -205,16 +201,87 @@ final class AudioPlayerViewModelV2: ObservableObject {
     var progressPercentage: Double {
         unifiedPlayer.progressPercentage
     }
+
+    var effectivePlaybackMode: ActivePlaybackMode {
+        unifiedPlayer.effectivePlaybackMode
+    }
+
+    var playerPresentation: PlayerSurfacePresentation {
+        if activeMode != .brief, radioState == .exhausted {
+            return PlayerSurfacePresentation(
+                kind: .caughtUp,
+                mode: .radio,
+                title: "You're caught up",
+                source: "Check for new episodes",
+                position: 0,
+                duration: 0,
+                showsPrevious: false,
+                showsSleep: false,
+                showsQueue: false,
+                allowsPlay: false,
+                allowsSeek: false,
+                allowsExpand: false,
+                primaryAction: .refresh
+            )
+        }
+
+        let mode = effectivePlaybackMode
+        let title: String
+        let source: String
+        if mode == .radio, let episode = currentRadioEpisode {
+            title = episode.title
+            source = episode.sourceName
+        } else {
+            let queuedItem = unifiedPlayer.currentItem ?? (mode == .brief ? queueItems.first : nil)
+            title = currentTitle ?? queuedItem?.title ?? "Not Playing"
+            source = currentArtist
+                ?? queuedItem?.article?.author
+                ?? queuedItem?.episode?.feed?.displayName
+                ?? (mode == .radio ? "Briefeed Radio" : "Briefeed")
+        }
+        let playable = mode != .none || currentTitle != nil
+        return PlayerSurfacePresentation(
+            kind: playable ? .playable : .unavailable,
+            mode: mode,
+            title: title,
+            source: source,
+            position: unifiedPlayer.presentationPosition,
+            duration: unifiedPlayer.presentationDuration,
+            showsPrevious: PlayerPresentationPolicy.showsPrevious(for: mode),
+            showsSleep: mode == .radio,
+            showsQueue: mode != .radio && !queueItems.isEmpty,
+            allowsPlay: playable,
+            allowsSeek: playable,
+            allowsExpand: playable,
+            primaryAction: .playPause
+        )
+    }
     
     // MARK: - Playback Control
     
     func togglePlayPause() {
-        unifiedPlayer.togglePlayPause()
+        if isPlaying {
+            unifiedPlayer.pause()
+        } else if activeMode == .none {
+            Task { await play() }
+        } else {
+            unifiedPlayer.resume()
+        }
     }
     
     func play() async {
-        if activeMode == .radio {
+        if effectivePlaybackMode == .radio {
             await unifiedPlayer.playRadio()
+            return
+        }
+        if activeMode == .none {
+            let indexToPlay = currentQueueIndex >= 0 ? currentQueueIndex : 0
+            guard indexToPlay >= 0, indexToPlay < queueItems.count else { return }
+            isLoading = true
+            lastError = nil
+            await Task.yield()
+            defer { isLoading = false }
+            await unifiedPlayer.play(at: indexToPlay)
             return
         }
         if currentTitle != nil {
@@ -586,6 +653,10 @@ extension AudioPlayerViewModelV2 {
 
     func setSleepTimer(_ timer: RadioSleepTimer) {
         unifiedPlayer.setRadioSleepTimer(timer)
+    }
+
+    func setCustomSleepTimer(minutes: Int, now: Date = Date()) {
+        setSleepTimer(RadioSleepMenuOption.custom.timer(now: now, customMinutes: minutes))
     }
 
     func cancelSleepTimer() {

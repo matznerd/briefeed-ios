@@ -110,6 +110,10 @@ final class RadioUITests: XCTestCase {
         XCTAssertFalse(app.buttons["miniPlayer.previous"].exists)
 
         for identifier in [
+            "miniPlayer.expand",
+            "miniPlayer.title",
+            "miniPlayer.speed",
+            "miniPlayer.sleep",
             "miniPlayer.rewind",
             "miniPlayer.playPause",
             "miniPlayer.forward",
@@ -125,6 +129,22 @@ final class RadioUITests: XCTestCase {
         XCTAssertTrue(scrubber.waitForExistence(timeout: 3))
         XCTAssertGreaterThanOrEqual(scrubber.frame.height, 44)
         XCTAssertFalse(scrubber.value as? String == nil)
+    }
+
+    @MainActor
+    func testCaughtUpMiniPlayerOffersOnlyRefresh() throws {
+        app.launchArguments = ["-briefeed-radio-fixture", "exhausted"]
+        app.launchEnvironment["BRIEFEED_RADIO_RESET_STORE"] = "1"
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["You're caught up"].waitForExistence(timeout: 5))
+        let refresh = app.buttons["miniPlayer.refresh"]
+        XCTAssertTrue(refresh.exists)
+        XCTAssertGreaterThanOrEqual(refresh.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(refresh.frame.height, 44)
+        XCTAssertFalse(app.buttons["miniPlayer.playPause"].exists)
+        XCTAssertFalse(app.otherElements["miniPlayer.scrubber"].exists)
+        XCTAssertFalse(app.buttons["miniPlayer.expand"].exists)
     }
 
     @MainActor

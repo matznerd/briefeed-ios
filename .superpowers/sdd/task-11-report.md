@@ -56,3 +56,41 @@ NEXT: sim-gui.sh hide
 ```
 
 The adapter stopped before acquiring or booting a Briefeed simulator. No pressure override, GUI action, foreign simulator mutation, or CoreSimulator recovery was attempted. Focused unit execution, Radio UI execution, and the requested visual matrix remain for the shared fleet verification pass.
+
+## Review Repair
+
+The Task 11 review identified restored-session routing, exhausted-state truthfulness, hit-target, finite-value, Dynamic Type, and behavioral-test gaps. The repair adds one effective playback context shared by the transport and both player surfaces, so a restored Radio episode routes Play, ten-second seeks, Next, metadata, progress, remote commands, sleep, and queue gating to Radio even before an audio item is loaded. A completed queue now becomes an explicit stopped "You're caught up" surface with Refresh and no fake seek/play/expand controls.
+
+Playback speed persistence now has injected load/save seams and loads before Combine bindings can overwrite the saved value. Custom sleep deadlines are tested through the actual coordinator. Stale restore completion projects the restored Radio state without replaying a discarded autoplay intent, immediately when active or once on the next foreground transition. All mini-player interactive elements have at least 44 by 44 point frames, every clock/accessibility conversion rejects non-finite values, and the expanded player uses semantic text styles with accessibility-size-aware artwork.
+
+An adjacent Brief regression audit also preserves the pre-existing mini-player path: when the app restores queued Brief items without an active transport, the effective context is Brief, the primary Play action loads the selected item instead of sending a false transport resume, and genuinely unavailable surfaces expose no seek or transport controls.
+
+Review RED evidence:
+
+```text
+make radio-compile
+RadioPlayerPresentationTests.swift: AudioPlayerViewModelV2 has no member 'effectivePlaybackMode'
+RadioPlayerPresentationTests.swift: AudioPlayerViewModelV2 has no member 'playerPresentation'
+RadioPlayerPresentationTests.swift: extra argument 'persistPlaybackRate' in call
+RadioPlayerPresentationTests.swift: extra argument 'playbackSpeedLoad' in call
+** TEST BUILD FAILED **
+```
+
+Review GREEN/static evidence:
+
+```text
+make radio-compile
+** TEST BUILD SUCCEEDED **
+git diff --check
+rg 'font\(\.system\(size:' Briefeed/Features/Audio/ExpandedAudioPlayerV2.swift
+# no matches
+```
+
+The focused safe runtime lane remained correctly blocked at preflight because `Simulator.app` was open. The agent did not quit the user's Simulator window or bypass the fleet guard:
+
+```text
+RADIO_TEST_SELECTOR='BriefeedTests/RadioPlayerPresentationTests' make radio-unit
+SIMULATOR_APP=open
+NEXT: sim-gui.sh hide
+make: *** [radio-unit] Error 1
+```

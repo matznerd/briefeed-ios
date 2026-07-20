@@ -270,11 +270,45 @@ struct RadioAppLifecycleTests {
         await startup.value
         await settle()
 
-        #expect(appliedIntents.isEmpty)
+        #expect(appliedIntents == [nil])
         #expect(initialCount == 0)
         #expect(foregroundCount == 1)
         #expect(driver.hasActivePoll)
         #expect(sleepCalls == [900])
+    }
+
+    @Test func restoreCompletedWhileInactiveReconcilesPresentationOnForegroundWithoutAutoplay() async {
+        let monitor = LifecycleConnectivityMonitor(.online)
+        let gate = LifecycleIntentGate()
+        var appliedIntents: [RadioPlaybackIntent?] = []
+        let driver = makeDriver(monitor: monitor)
+        driver.handleScenePhase(.active)
+
+        let startup = Task { @MainActor in
+            await driver.startColdLaunch(
+                restore: { _ in await gate.wait() },
+                applyRestoreIntent: { appliedIntents.append($0) },
+                initialRefresh: refreshWork(load: { self.emptyRefresh }),
+                foregroundRefresh: refreshWork(load: { self.emptyRefresh })
+            )
+        }
+        await settle()
+        driver.handleScenePhase(.background)
+        gate.release(.play(RadioPlaybackRequest(
+            key: RadioEpisodeKey(feedID: "npr", episodeID: "late"),
+            url: URL(string: "https://example.com/late.mp3")!,
+            title: "Late",
+            source: "NPR",
+            positionSeconds: 12
+        )))
+        await startup.value
+        await settle()
+        #expect(appliedIntents.isEmpty)
+
+        driver.handleScenePhase(.active)
+        await settle()
+
+        #expect(appliedIntents == [nil])
     }
 
     @Test func backgroundForceSavesActiveRadioTransportPositionAndBriefWithoutStoppingAudio() async {
