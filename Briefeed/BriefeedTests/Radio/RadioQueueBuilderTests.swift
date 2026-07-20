@@ -40,6 +40,15 @@ struct RadioQueueBuilderTests {
         #expect(result.entries.map(\.key) == [first.key, third.key])
     }
 
+    @Test func initialBuildAcceptsExactDailyFreshnessAndClampsCoreDataProgressOnlyWithDuration() {
+        let daily = candidate("daily", "one", priority: 1, date: now.addingTimeInterval(-86_400), frequency: .daily, duration: 60, progress: 1.5)
+        let unknownDuration = candidate("unknown", "one", priority: 2, date: now, duration: nil, progress: 0.5)
+
+        let result = RadioQueueBuilder(now: now).buildInitial(candidates: [daily, unknownDuration])
+
+        #expect(result.entries.map(\.positionSeconds) == [60, 0])
+    }
+
     @Test func restoreDropsDuplicateCompletedAndExpiredEntriesButPreservesCurrentOrder() {
         let current = candidate("hourly", "current", priority: 1, date: now.addingTimeInterval(-86_399))
         let deferred = candidate("daily", "deferred", priority: 2, date: now.addingTimeInterval(-604_799), frequency: .daily)
@@ -64,11 +73,21 @@ struct RadioQueueBuilderTests {
 
         let result = RadioQueueBuilder(now: now).restore(snapshot: snapshot, candidates: [retained, deferred, appended])
 
-        #expect(result.entries.map(\.key) == [retained.key, deferred.key, appended.key])
+        #expect(result.entries.map(\.key) == [retained.key, appended.key, deferred.key])
         #expect(result.currentKey == retained.key)
     }
 
-    @Test func restoreRepairsFailedCurrentBySelectingPendingBeforeDeferred() {
+    @Test func restoreAcceptsExactDailySevenDayRetentionBoundary() {
+        let daily = candidate("daily", "one", priority: 1, date: now.addingTimeInterval(-604_800), frequency: .daily)
+        let snapshot = session(entries: [entry(daily.key, .pending)], current: daily.key)
+
+        let result = RadioQueueBuilder(now: now).restore(snapshot: snapshot, candidates: [daily])
+
+        #expect(result.entries.map(\.key) == [daily.key])
+        #expect(result.currentKey == daily.key)
+    }
+
+    @Test func restoreResetsFailedCurrentToPendingAndPreservesIt() {
         let failed = candidate("failed", "one", priority: 0, date: now)
         let deferred = candidate("deferred", "one", priority: 0, date: now)
         let pending = candidate("pending", "one", priority: 0, date: now)
@@ -76,7 +95,32 @@ struct RadioQueueBuilderTests {
 
         let result = RadioQueueBuilder(now: now).restore(snapshot: snapshot, candidates: [failed, deferred, pending])
 
-        #expect(result.currentKey == pending.key)
+        #expect(result.currentKey == failed.key)
+        #expect(result.entries.first?.disposition == .pending)
+    }
+
+    @Test func restoreMovesCurrentFirstAndSortsAllPendingBeforeDeferred() {
+        let current = candidate("current", "one", priority: 9, date: now)
+        let pendingLate = candidate("z", "one", priority: 2, date: now)
+        let pendingEarly = candidate("a", "one", priority: 1, date: now)
+        let deferred = candidate("deferred", "one", priority: 0, date: now)
+        let appended = candidate("appended", "one", priority: 0, date: now)
+        let snapshot = session(entries: [entry(deferred.key, .deferred), entry(pendingLate.key, .pending), entry(current.key, .playing), entry(pendingEarly.key, .pending)], current: current.key)
+
+        let result = RadioQueueBuilder(now: now).restore(snapshot: snapshot, candidates: [current, pendingLate, pendingEarly, deferred, appended])
+
+        #expect(result.entries.map(\.key) == [current.key, appended.key, pendingEarly.key, pendingLate.key, deferred.key])
+    }
+
+    @Test func restoreMissingCurrentSelectsAppendedPendingBeforeSavedDeferred() {
+        let deferred = candidate("deferred", "one", priority: 1, date: now)
+        let appended = candidate("appended", "one", priority: 0, date: now)
+        let snapshot = session(entries: [entry(deferred.key, .deferred)], current: key("missing", "one"))
+
+        let result = RadioQueueBuilder(now: now).restore(snapshot: snapshot, candidates: [deferred, appended])
+
+        #expect(result.currentKey == appended.key)
+        #expect(result.entries.map(\.key) == [appended.key, deferred.key])
     }
 
     @Test func reconcilePreservesCurrentAndPartitionsNewPendingBeforeDeferred() {
@@ -120,6 +164,17 @@ struct RadioQueueBuilderTests {
         #expect(result.entries.map(\.key) == [current.key, deferredOne.key, deferredTwo.key, failedOne.key, failedTwo.key])
     }
 
+    @Test func reconcileExcludesFailedCurrentAndSelectsPending() {
+        let failed = candidate("failed", "one", priority: 0, date: now)
+        let pending = candidate("pending", "one", priority: 1, date: now)
+        let snapshot = session(entries: [entry(failed.key, .failedThisSession), entry(pending.key, .pending)], current: failed.key)
+
+        let result = RadioQueueBuilder(now: now).reconcile(snapshot: snapshot, candidates: [failed, pending])
+
+        #expect(result.currentKey == pending.key)
+        #expect(result.entries.map(\.key) == [pending.key, failed.key])
+    }
+
     @Test func reconcileAppendsWithoutInsertingBeforeCurrentAndDeduplicatesKeysAndEnclosures() {
         let current = candidate("current", "one", priority: 10, date: now)
         let duplicateKey = candidate("current", "one", priority: 0, date: now)
@@ -136,8 +191,8 @@ struct RadioQueueBuilderTests {
         RadioEpisodeKey(feedID: feedID, episodeID: episodeID)
     }
 
-    private func candidate(_ feedID: String, _ episodeID: String, priority: Int, date: Date, frequency: RSSUpdateFrequencyValue = .hourly, completed: Bool = false, enclosure: String? = nil) -> RadioEpisodeCandidate {
-        RadioEpisodeCandidate(key: key(feedID, episodeID), originalPlaybackURL: URL(string: "https://example.com/\(feedID)-\(episodeID).mp3")!, canonicalEnclosureURL: enclosure ?? "https://example.com/\(feedID)-\(episodeID).mp3", title: episodeID, sourceName: feedID, publicationDate: date, durationSeconds: 60, normalizedCoreDataProgress: 0, isCompleted: completed, sourcePriority: priority, sourceFrequency: frequency)
+    private func candidate(_ feedID: String, _ episodeID: String, priority: Int, date: Date, frequency: RSSUpdateFrequencyValue = .hourly, completed: Bool = false, enclosure: String? = nil, duration: TimeInterval? = 60, progress: Double = 0) -> RadioEpisodeCandidate {
+        RadioEpisodeCandidate(key: key(feedID, episodeID), originalPlaybackURL: URL(string: "https://example.com/\(feedID)-\(episodeID).mp3")!, canonicalEnclosureURL: enclosure ?? "https://example.com/\(feedID)-\(episodeID).mp3", title: episodeID, sourceName: feedID, publicationDate: date, durationSeconds: duration, normalizedCoreDataProgress: progress, isCompleted: completed, sourcePriority: priority, sourceFrequency: frequency)
     }
 
     private func entry(_ key: RadioEpisodeKey, _ disposition: RadioEntryDisposition) -> RadioQueueEntry {

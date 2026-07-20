@@ -24,9 +24,15 @@ struct RadioQueueBuilder {
             .filter { !existingKeys.contains($0.key) }
             .filter { !existingEnclosures.contains($0.canonicalEnclosureURL) }
             .map(makePendingEntry)
-        let entries = restored.entries + appended
-        let currentKey = restored.currentKey ?? entries.first(where: { $0.disposition == .pending })?.key
-            ?? entries.first(where: { $0.disposition == .deferred })?.key
+        let preservedCurrent = restored.entries.first { entry in
+            entry.key == snapshot.currentKey && entry.disposition != .failedThisSession
+        }
+        let nonCurrent = restored.entries.filter { $0.key != preservedCurrent?.key }
+        let pending = sortPending(nonCurrent.filter { $0.disposition == .pending } + appended, candidatesByKey: candidatesByKey)
+        let deferred = nonCurrent.filter { $0.disposition == .deferred }
+        let failed = nonCurrent.filter { $0.disposition == .failedThisSession }
+        let entries = (preservedCurrent.map { [$0] } ?? []) + pending + deferred + failed
+        let currentKey = preservedCurrent?.key ?? pending.first?.key ?? deferred.first?.key
         return makeSession(entries: entries, currentKey: currentKey)
     }
 
@@ -51,13 +57,7 @@ struct RadioQueueBuilder {
             .filter { !existingKeys.contains($0.key) }
             .filter { !existingEnclosures.contains($0.canonicalEnclosureURL) }
 
-        let pending = (nonCurrent.filter { $0.disposition == .pending } + appended.map(makePendingEntry))
-            .sorted { lhs, rhs in
-                guard let left = candidatesByKey[lhs.key], let right = candidatesByKey[rhs.key] else {
-                    return lhs.key.feedID == rhs.key.feedID ? lhs.key.episodeID < rhs.key.episodeID : lhs.key.feedID < rhs.key.feedID
-                }
-                return candidateSort(left, right)
-            }
+        let pending = sortPending(nonCurrent.filter { $0.disposition == .pending } + appended.map(makePendingEntry), candidatesByKey: candidatesByKey)
 
         let entries = (currentEntry.map { [$0] } ?? []) + pending + deferred + failed
         let currentKey = currentEntry?.key ?? pending.first?.key ?? deferred.first?.key
@@ -122,6 +122,18 @@ struct RadioQueueBuilder {
         if lhs.key.feedID != rhs.key.feedID { return lhs.key.feedID < rhs.key.feedID }
         if lhs.publicationDate != rhs.publicationDate { return lhs.publicationDate > rhs.publicationDate }
         return lhs.key.episodeID < rhs.key.episodeID
+    }
+
+    private func sortPending(
+        _ entries: [RadioQueueEntry],
+        candidatesByKey: [RadioEpisodeKey: RadioEpisodeCandidate]
+    ) -> [RadioQueueEntry] {
+        entries.sorted { lhs, rhs in
+            guard let left = candidatesByKey[lhs.key], let right = candidatesByKey[rhs.key] else {
+                return lhs.key.feedID == rhs.key.feedID ? lhs.key.episodeID < rhs.key.episodeID : lhs.key.feedID < rhs.key.feedID
+            }
+            return candidateSort(left, right)
+        }
     }
 
     private func isFresh(_ candidate: RadioEpisodeCandidate) -> Bool {

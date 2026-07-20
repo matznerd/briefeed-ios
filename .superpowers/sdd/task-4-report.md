@@ -33,3 +33,10 @@
 - Invalid or failed current keys repair to pending first, then deferred, and never select failed entries.
 - Completion save failure restores only `isListened`, `listenedDate`, and `lastPosition`; unrelated unsaved context mutations remain untouched.
 - `make radio-compile` passed after the fixes.
+
+## Second Review Fixes
+
+- Cold restore now emits the approved partitions: preserved current first, all pending (including newly appended candidates) deterministically sorted, then stable deferred and failed partitions.
+- A valid cold-start `failedThisSession` current is reset to pending and retained as current. Live reconciliation keeps session failures transient and excludes a failed current in favor of pending, then deferred.
+- Added coverage for source/date boundaries (including exact daily 24-hour freshness and seven-day retention), restored current repositioning, pending reorder with appended items, invalid-current selection with an appended pending item, 200-entry store acceptance, and Core Data progress clamping/unknown duration.
+- `make radio-compile` passed and `git diff --check` passed after this correction. Simulator pressure was not overridden.

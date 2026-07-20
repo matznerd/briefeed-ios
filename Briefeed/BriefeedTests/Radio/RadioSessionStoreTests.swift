@@ -54,6 +54,16 @@ struct RadioSessionStoreTests {
         }
     }
 
+    @Test func validateAcceptsExactlyTwoHundredEntries() throws {
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let entries = (0..<200).map { index in
+            RadioQueueEntry(key: .init(feedID: "feed", episodeID: "\(index)"), positionSeconds: 0, disposition: .pending, playbackFailureCount: 0, lastPlaybackError: nil)
+        }
+        let snapshot = PersistedRadioSession(schemaVersion: 1, entries: entries, currentKey: entries[0].key, savedAt: .now)
+
+        #expect(try RadioSessionStore.validate(snapshot, durations: [:]).entries.count == 200)
+    }
+
     @Test func validateRepairsDuplicatesPositionsAndKnownDurations() throws {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let first = RadioEpisodeKey(feedID: "feed", episodeID: "first")
