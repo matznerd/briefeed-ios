@@ -432,18 +432,26 @@ class RSSAudioService: NSObject, ObservableObject {
     }
 
     private func performRecoverableContextChanges<T>(_ changes: () throws -> T) throws -> T {
-        // Callers enter only after their awaits; this temporary undo group owns
+        // Callers enter only after their awaits; this scoped undo group owns
         // the service's synchronous mutation without touching prior dirty state.
         let previousUndoManager = viewContext.undoManager
-        let transactionUndoManager = UndoManager()
-        viewContext.undoManager = transactionUndoManager
+        let transactionUndoManager = previousUndoManager ?? UndoManager()
+        if previousUndoManager == nil {
+            viewContext.undoManager = transactionUndoManager
+        }
         transactionUndoManager.beginUndoGrouping()
-        defer { viewContext.undoManager = previousUndoManager }
+        defer {
+            if previousUndoManager == nil {
+                viewContext.undoManager = nil
+            }
+        }
 
         do {
             let value = try changes()
             transactionUndoManager.endUndoGrouping()
-            transactionUndoManager.removeAllActions()
+            if previousUndoManager == nil {
+                transactionUndoManager.removeAllActions()
+            }
             return value
         } catch {
             transactionUndoManager.endUndoGrouping()
