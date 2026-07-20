@@ -1,0 +1,12 @@
+# Live Radio MVP SDD Progress
+
+Plan: `Briefeed/docs/superpowers/plans/2026-07-19-live-radio-mvp.md`
+Branch: `codex/live-radio-mvp`
+
+Task 1: complete (commits fbabc52..8aa3e3a, review clean; simulator runtime proof deferred by critical host-pressure gate)
+Task 2: complete (commits 8aa3e3a..0c97049, review clean; simulator runtime proof deferred by critical host-pressure gate)
+Task 3: complete (commits 0c97049..6747586, review clean; simulator runtime proof deferred by critical host-pressure gate)
+Task 4: complete (commits 6747586..8e55f65, review clean; simulator runtime proof deferred by host safety gate)
+Task 5: complete (commits 8e55f65..db5db93, review clean; hosted tests deferred by simulator safety gate)
+Task 6: complete (commits db5db93..47d444b, review clean; compile green; hosted runtime deferred by simulator safety gate)
+Tasks 7-8: complete (commits ec5195c..HEAD; compile green; hosted runtime deferred by critical simulator safety gate)
