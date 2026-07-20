@@ -199,6 +199,12 @@ enum GenerationPhase: Equatable {
 
 // MARK: - Unified Audio Player
 
+enum ActivePlaybackMode: Equatable {
+    case none
+    case brief
+    case radio
+}
+
 @MainActor
 final class UnifiedAudioPlayer: ObservableObject {
 
@@ -211,10 +217,14 @@ final class UnifiedAudioPlayer: ObservableObject {
     private let ttsGenerator = TTSGeneratorService.shared
     private let openAITTS = OpenAITTSServiceSimple.shared
     private let fluidAudioService = FluidAudioTTSService.shared
-    private let audioPlayer = SwiftAudioExService()
+    private let audioPlayer: AudioPlaybackTransporting
     private let cacheManager = AudioCacheManager.shared
-    private let queueCoordinator = QueueCoordinator.shared
+    private let queueCoordinator: BriefQueueCoordinating
+    private let radioCoordinator: RadioSessionCoordinating
     private let pipelineTimer = PipelineTimer.shared
+    private let context: NSManagedObjectContext
+
+    var radioSessionCoordinator: RadioSessionCoordinating { radioCoordinator }
 
     // MARK: - Published Properties
 
@@ -237,22 +247,18 @@ final class UnifiedAudioPlayer: ObservableObject {
         generationPhase.displayMessage
     }
 
-    // MARK: - Live News Streaming (temporary, not persisted)
-
-    /// Temporary streaming queue for Live News (not persisted to Brief)
-    @Published private(set) var liveNewsStreamQueue: [UnifiedQueueItem] = []
-    @Published private(set) var isStreamingLiveNews: Bool = false
-    @Published private(set) var liveNewsStreamIndex: Int = -1
+    @Published private(set) var activeMode: ActivePlaybackMode = .none
+    @Published private(set) var radioQueue: [UnifiedQueueItem] = []
+    @Published private(set) var radioIndex: Int = -1
 
     // MARK: - Current Item
 
     var currentItem: UnifiedQueueItem? {
-        if isStreamingLiveNews {
-            // Use Live News stream queue
-            guard liveNewsStreamIndex >= 0 && liveNewsStreamIndex < liveNewsStreamQueue.count else { return nil }
-            return liveNewsStreamQueue[liveNewsStreamIndex]
-        } else {
-            // Use Brief queue
+        switch activeMode {
+        case .radio:
+            guard radioIndex >= 0 && radioIndex < radioQueue.count else { return nil }
+            return radioQueue[radioIndex]
+        case .brief, .none:
             guard currentIndex >= 0 && currentIndex < queue.count else { return nil }
             return queue[currentIndex]
         }
@@ -260,7 +266,7 @@ final class UnifiedAudioPlayer: ObservableObject {
 
     /// Get current QueueItem from coordinator (only valid when not streaming Live News)
     var currentQueueItem: QueueItem? {
-        isStreamingLiveNews ? nil : queueCoordinator.currentItem
+        activeMode == .radio ? nil : queueCoordinator.currentItem
     }
 
     // MARK: - Private Properties
@@ -268,9 +274,11 @@ final class UnifiedAudioPlayer: ObservableObject {
     private var preGenerationTask: Task<Void, Never>?
     private var playbackProgressTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
-    private let context = PersistenceController.shared.container.viewContext
-
     private var pendingSeekTime: TimeInterval?
+    private var activePlaybackID: TransportPlaybackID?
+    private var activeRadioKey: RadioEpisodeKey?
+    private var consumedPlaybackIDs = Set<TransportPlaybackID>()
+    private var briefInterruptionResumeEligible = false
 
     /// Cache of Article/Episode Core Data objects by ID for queue rebuilding
     private var articleCache: [UUID: Article] = [:]
@@ -278,10 +286,29 @@ final class UnifiedAudioPlayer: ObservableObject {
 
     // MARK: - Initialization
 
-    private init() {
+    private convenience init() {
+        self.init(
+            audioPlayer: SwiftAudioExService(),
+            queueCoordinator: QueueCoordinator.shared,
+            radioCoordinator: RadioServiceContainer.shared.coordinator,
+            context: PersistenceController.shared.container.viewContext
+        )
+    }
+
+    init(
+        audioPlayer: AudioPlaybackTransporting,
+        queueCoordinator: BriefQueueCoordinating,
+        radioCoordinator: RadioSessionCoordinating,
+        context: NSManagedObjectContext
+    ) {
+        self.audioPlayer = audioPlayer
+        self.queueCoordinator = queueCoordinator
+        self.radioCoordinator = radioCoordinator
+        self.context = context
         setupAudioPlayer()
         setupNotifications()
         setupQueueCoordinatorBindings()
+        setupRadioBindings()
     }
 
     // MARK: - Setup
@@ -307,7 +334,7 @@ final class UnifiedAudioPlayer: ObservableObject {
     /// Subscribe to QueueCoordinator changes - QueueCoordinator is the single source of truth
     private func setupQueueCoordinatorBindings() {
         // Sync current index from coordinator (with bounds clamping)
-        queueCoordinator.$currentIndex
+        queueCoordinator.currentIndexPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] index in
                 guard let self = self else { return }
@@ -318,17 +345,52 @@ final class UnifiedAudioPlayer: ObservableObject {
                 } else {
                     self.currentIndex = max(-1, min(index, self.queue.count - 1))
                 }
+                self.updateRemoteAvailability()
             }
             .store(in: &cancellables)
 
         // Rebuild queue when QueueCoordinator queue changes
-        queueCoordinator.$queue
+        queueCoordinator.queuePublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] coordinatorQueue in
                 guard let self = self else { return }
                 self.rebuildQueueFromCoordinator(coordinatorQueue)
+                self.updateRemoteAvailability()
             }
             .store(in: &cancellables)
+    }
+
+    private func setupRadioBindings() {
+        radioCoordinator.entriesPublisher
+            .combineLatest(radioCoordinator.currentEpisodePublisher)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _, _ in self?.rebuildRadioProjection() }
+            .store(in: &cancellables)
+
+        radioCoordinator.canPlayNextPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateRemoteAvailability() }
+            .store(in: &cancellables)
+
+        radioCoordinator.pendingNetworkIntentPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] intent in
+                Task { @MainActor in await self?.execute(intent) }
+            }
+            .store(in: &cancellables)
+
+        rebuildRadioProjection()
+    }
+
+    private func rebuildRadioProjection() {
+        radioQueue = radioCoordinator.entries.compactMap { entry in
+            fetchEpisode(feedID: entry.key.feedID, episodeID: entry.key.episodeID).map(UnifiedQueueItem.init(episode:))
+        }
+        if let currentKey = radioCoordinator.currentKey {
+            radioIndex = radioCoordinator.entries.firstIndex { $0.key == currentKey } ?? -1
+        } else {
+            radioIndex = -1
+        }
     }
 
     /// Rebuild local queue from QueueCoordinator, hydrating Core Data objects by ID
@@ -384,6 +446,13 @@ final class UnifiedAudioPlayer: ObservableObject {
         }
     }
 
+    private func fetchEpisode(feedID: String, episodeID: String) -> RSSEpisode? {
+        let request: NSFetchRequest<RSSEpisode> = RSSEpisode.fetchRequest()
+        request.predicate = NSPredicate(format: "feedId == %@ AND id == %@", feedID, episodeID)
+        request.fetchLimit = 1
+        return try? context.fetch(request).first
+    }
+
     /// Cache Core Data objects for queue rebuilding
     private func cacheObjects(articles: [Article] = [], episodes: [RSSEpisode] = []) {
         for article in articles {
@@ -401,9 +470,6 @@ final class UnifiedAudioPlayer: ObservableObject {
     /// Load queue from articles - adds to QueueCoordinator, queue syncs via Combine
     /// Set `replace` to true (used by "Play All") to clear existing queue first
     func loadQueue(from articles: [Article], replace: Bool = false) async {
-        // Exit Live News streaming mode if active
-        stopLiveNewsStream()
-
         // Clear existing queue if replacing (e.g. "Play All")
         if replace {
             queueCoordinator.clearQueue()
@@ -415,7 +481,7 @@ final class UnifiedAudioPlayer: ObservableObject {
         // Add to QueueCoordinator (single source of truth)
         // The Combine subscription will rebuild local queue
         for article in articles {
-            queueCoordinator.addArticle(article)
+            queueCoordinator.addArticle(article, playNow: false, playNext: false)
         }
 
         // Do not generate audio just because the queue was hydrated.
@@ -423,17 +489,13 @@ final class UnifiedAudioPlayer: ObservableObject {
     }
 
     /// Load queue from RSS episodes for Brief - adds to QueueCoordinator, queue syncs via Combine
-    /// NOTE: For immediate Live News playback (no queuing), use playLiveNewsStream() instead
     func loadQueue(from episodes: [RSSEpisode]) async {
-        // Exit Live News streaming mode if active
-        stopLiveNewsStream()
-
         // Cache Core Data objects for queue rebuilding
         cacheObjects(episodes: episodes)
 
         // Add to QueueCoordinator (single source of truth)
         for episode in episodes {
-            queueCoordinator.addEpisode(episode)
+            queueCoordinator.addEpisode(episode, playNow: false, playNext: false)
         }
 
         // RSS episodes don't need TTS generation - mark ready in local queue
@@ -442,9 +504,6 @@ final class UnifiedAudioPlayer: ObservableObject {
 
     /// Load mixed queue - adds to QueueCoordinator, queue syncs via Combine
     func loadMixedQueue(items: [Any]) async {
-        // Exit Live News streaming mode if active
-        stopLiveNewsStream()
-
         // Separate articles and episodes for caching
         let articles = items.compactMap { $0 as? Article }
         let episodes = items.compactMap { $0 as? RSSEpisode }
@@ -452,93 +511,14 @@ final class UnifiedAudioPlayer: ObservableObject {
 
         // Add to QueueCoordinator (single source of truth)
         for article in articles {
-            queueCoordinator.addArticle(article)
+            queueCoordinator.addArticle(article, playNow: false, playNext: false)
         }
         for episode in episodes {
-            queueCoordinator.addEpisode(episode)
+            queueCoordinator.addEpisode(episode, playNow: false, playNext: false)
         }
 
         // Do not generate audio just because mixed content was queued.
         // Generation starts when playback starts, then only the immediate next item is warmed.
-    }
-
-    // MARK: - Live News Streaming (immediate play, no queuing)
-
-    /// Play Live News episodes immediately WITHOUT adding to Brief queue
-    /// Per PRD: "Play Live News" streams immediately and doesn't queue
-    func playLiveNewsStream(episodes: [RSSEpisode]) async {
-        guard !episodes.isEmpty else { return }
-
-        // Stop any current playback
-        stop()
-
-        // Enter Live News streaming mode
-        isStreamingLiveNews = true
-        liveNewsStreamIndex = -1
-
-        // Build temporary stream queue (not persisted)
-        liveNewsStreamQueue = episodes.map { episode in
-            let item = UnifiedQueueItem(episode: episode)
-            if item.audioURL != nil {
-                item.generationState = .ready
-                item.cachedAudioURL = item.audioURL
-            }
-            return item
-        }
-
-        print("[UnifiedPlayer] Started Live News stream with \(episodes.count) episodes (not queued to Brief)")
-
-        // Start playing first episode
-        await playLiveNewsStreamItem(at: 0)
-    }
-
-    /// Play item in Live News stream
-    private func playLiveNewsStreamItem(at index: Int) async {
-        guard index >= 0 && index < liveNewsStreamQueue.count else {
-            // Stream finished
-            stopLiveNewsStream()
-            return
-        }
-
-        liveNewsStreamIndex = index
-        let item = liveNewsStreamQueue[index]
-
-        // Play if audio is ready
-        if let audioURL = item.cachedAudioURL ?? item.audioURL {
-            do {
-                let artist = item.episode?.feed?.displayName ?? "Live News"
-                try await audioPlayer.play(url: audioURL, title: item.title, artist: artist)
-                isPlaying = true
-
-                // Mark episode as listened
-                if let episode = item.episode {
-                    await markEpisodeAsListened(episode)
-                }
-            } catch {
-                print("[UnifiedPlayer] Failed to play Live News stream: \(error)")
-                // Try next episode
-                await playNextLiveNewsStreamItem()
-            }
-        } else {
-            // No audio URL, skip to next
-            await playNextLiveNewsStreamItem()
-        }
-    }
-
-    /// Play next item in Live News stream
-    func playNextLiveNewsStreamItem() async {
-        guard isStreamingLiveNews else { return }
-        await playLiveNewsStreamItem(at: liveNewsStreamIndex + 1)
-    }
-
-    /// Stop Live News streaming and return to normal queue mode
-    func stopLiveNewsStream() {
-        if isStreamingLiveNews {
-            isStreamingLiveNews = false
-            liveNewsStreamIndex = -1
-            liveNewsStreamQueue.removeAll()
-            print("[UnifiedPlayer] Exited Live News streaming mode")
-        }
     }
 
     /// Add item to queue (delegates to QueueCoordinator - single source of truth)
@@ -580,15 +560,14 @@ final class UnifiedAudioPlayer: ObservableObject {
         queueCoordinator.removeItem(at: index)
 
         // Stop playback if current item was removed
-        if wasCurrentItem {
+        if wasCurrentItem, activeMode == .brief {
             stop()
         }
     }
 
     /// Clear queue (delegates to QueueCoordinator - single source of truth)
     func clearQueue() {
-        stop()
-        stopLiveNewsStream()
+        if activeMode == .brief { stop() }
         queueCoordinator.clearQueue()
         // Local queue clears via Combine subscription
     }
@@ -597,14 +576,18 @@ final class UnifiedAudioPlayer: ObservableObject {
 
     /// Play item at index
     func play(at index: Int) async {
-        // If we're in Live News streaming mode, explicitly exit it before playing from the Brief queue.
-        if isStreamingLiveNews {
-            stop()
-            stopLiveNewsStream()
-        }
-
         guard index >= 0 && index < queue.count else { return }
 
+        if activeMode == .radio {
+            _ = radioCoordinator.pauseByUser(positionSeconds: currentTime, duration: duration > 0 ? duration : nil)
+            audioPlayer.stop()
+        } else if activePlaybackID != nil {
+            queueCoordinator.updateCurrentPosition(currentTime)
+            queueCoordinator.saveStateNow()
+            audioPlayer.stop()
+        }
+
+        activeMode = .brief
         currentIndex = index
         // Sync to QueueCoordinator
         queueCoordinator.setCurrentIndex(index)
@@ -632,7 +615,13 @@ final class UnifiedAudioPlayer: ObservableObject {
             do {
                 // Pass title and artist info for lock screen display
                 let artist = item.type == .article ? (item.article?.author ?? "Article") : (item.episode?.feed?.displayName ?? "Podcast")
-                try await audioPlayer.play(url: audioURL, title: item.title, artist: artist)
+                let playbackID = TransportPlaybackID()
+                activePlaybackID = playbackID
+                activeRadioKey = nil
+                consumedPlaybackIDs.remove(playbackID)
+                updateRemoteAvailability()
+                try await audioPlayer.play(id: playbackID, url: audioURL, title: item.title, artist: artist)
+                audioPlayer.setRate(playbackRate)
                 isPlaying = true
                 print("[UnifiedPlayer] Successfully started playback")
 
@@ -671,11 +660,10 @@ final class UnifiedAudioPlayer: ObservableObject {
     
     /// Play next item
     func playNext() async {
-        if isStreamingLiveNews {
-            // Live News streaming mode
-            await playNextLiveNewsStreamItem()
+        cancelDeferredAutoplay()
+        if activeMode == .radio {
+            await execute(radioCoordinator.manualNext(positionSeconds: currentTime, duration: duration > 0 ? duration : nil))
         } else {
-            // Brief queue mode
             if currentIndex < queue.count - 1 {
                 await play(at: currentIndex + 1)
             }
@@ -685,12 +673,6 @@ final class UnifiedAudioPlayer: ObservableObject {
     /// Handle natural track completion: auto-remove played items (processing chamber)
     /// Only called when a track finishes naturally, NOT on manual skip-next.
     private func handleTrackFinished() async {
-        // In Live News streaming mode, just advance
-        if isStreamingLiveNews {
-            await playNextLiveNewsStreamItem()
-            return
-        }
-
         let finishedIndex = currentIndex
         guard finishedIndex >= 0 && finishedIndex < queue.count else {
             return
@@ -734,13 +716,8 @@ final class UnifiedAudioPlayer: ObservableObject {
 
     /// Play previous item
     func playPrevious() async {
-        if isStreamingLiveNews {
-            // Live News streaming mode
-            if liveNewsStreamIndex > 0 {
-                await playLiveNewsStreamItem(at: liveNewsStreamIndex - 1)
-            }
-        } else {
-            // Brief queue mode
+        cancelDeferredAutoplay()
+        if activeMode != .radio {
             if currentIndex > 0 {
                 await play(at: currentIndex - 1)
             }
@@ -758,19 +735,40 @@ final class UnifiedAudioPlayer: ObservableObject {
     
     /// Pause playback
     func pause() {
-        audioPlayer.pause()
+        cancelDeferredAutoplay()
+        if activeMode == .radio {
+            let intent = radioCoordinator.pauseByUser(positionSeconds: currentTime, duration: duration > 0 ? duration : nil)
+            if intent == .pause { audioPlayer.pause() }
+        } else {
+            queueCoordinator.updateCurrentPosition(currentTime)
+            queueCoordinator.saveStateNow()
+            audioPlayer.pause()
+        }
         isPlaying = false
+        updateRemoteAvailability()
     }
     
     /// Resume playback
     func resume() {
-        audioPlayer.resume()
-        isPlaying = true
+        cancelDeferredAutoplay()
+        if activeMode == .radio {
+            Task { @MainActor in await execute(radioCoordinator.beginCurrent()) }
+        } else {
+            audioPlayer.resume()
+            isPlaying = true
+        }
     }
     
     /// Stop playback
     func stop() {
+        if activeMode == .radio {
+            _ = radioCoordinator.pauseByUser(positionSeconds: currentTime, duration: duration > 0 ? duration : nil)
+        } else if activeMode == .brief {
+            queueCoordinator.updateCurrentPosition(currentTime)
+            queueCoordinator.saveStateNow()
+        }
         audioPlayer.stop()
+        activePlaybackID = nil
         isPlaying = false
         currentTime = 0
         duration = 0
@@ -779,33 +777,162 @@ final class UnifiedAudioPlayer: ObservableObject {
     
     /// Set playback rate
     func setRate(_ rate: Float) {
-        playbackRate = rate
-        audioPlayer.setRate(rate)
+        cancelDeferredAutoplay()
+        let normalized = PlaybackSpeedPolicy.normalize(rate)
+        playbackRate = normalized
+        audioPlayer.setRate(normalized)
         
         // Save preference
-        UserDefaultsManager.shared.playbackSpeed = rate
+        UserDefaultsManager.shared.playbackSpeed = normalized
     }
     
     /// Seek to time
     func seek(to time: TimeInterval) {
-        audioPlayer.seek(to: time)
-        currentTime = time
-        // Only sync position to QueueCoordinator in Brief queue mode (not Live News streaming)
-        if !isStreamingLiveNews {
+        cancelDeferredAutoplay()
+        let bounded = max(0, duration > 0 ? min(time, duration) : time)
+        if activeMode == .radio {
+            _ = radioCoordinator.seekEnded(positionSeconds: bounded, duration: duration > 0 ? duration : nil)
+        } else {
+            queueCoordinator.updateCurrentPosition(bounded)
+            queueCoordinator.saveStateNow()
+        }
+        audioPlayer.seek(to: bounded)
+        currentTime = bounded
+        if activeMode == .brief {
             queueCoordinator.updateCurrentPosition(time)
         }
     }
     
     /// Skip forward
-    func skipForward(_ seconds: TimeInterval = 30) {
-        audioPlayer.skipForward(seconds)
+    func skipForward(_ seconds: TimeInterval = 10) {
+        seek(to: min(currentTime + seconds, duration > 0 ? duration : currentTime + seconds))
     }
     
     /// Skip backward
-    func skipBackward(_ seconds: TimeInterval = 15) {
-        audioPlayer.skipBackward(seconds)
+    func skipBackward(_ seconds: TimeInterval = 10) {
+        seek(to: max(currentTime - seconds, 0))
     }
-    
+
+    // MARK: - Radio Playback
+
+    func playRadio() async {
+        cancelDeferredAutoplay()
+        await execute(radioCoordinator.beginCurrent())
+    }
+
+    func playRadioEpisode(_ key: RadioEpisodeKey) async {
+        cancelDeferredAutoplay()
+        await execute(radioCoordinator.selectEpisode(key))
+    }
+
+    func retryRadio() async {
+        cancelDeferredAutoplay()
+        await execute(radioCoordinator.retry())
+    }
+
+    func setRadioSleepTimer(_ timer: RadioSleepTimer) {
+        radioCoordinator.setSleepTimer(timer)
+    }
+
+    func cancelRadioSleepTimer() {
+        radioCoordinator.setSleepTimer(.off)
+    }
+
+    func execute(_ intent: RadioPlaybackIntent?) async {
+        guard let intent else {
+            if activeMode == .none, let key = radioCoordinator.currentKey {
+                activeMode = .radio
+                activeRadioKey = key
+                currentTime = radioCoordinator.entries.first(where: { $0.key == key })?.positionSeconds ?? 0
+                duration = radioCoordinator.currentEpisode?.durationSeconds ?? 0
+            }
+            rebuildRadioProjection()
+            updateRemoteAvailability()
+            return
+        }
+
+        switch intent {
+        case .pause:
+            audioPlayer.pause()
+            isPlaying = false
+            updateRemoteAvailability()
+
+        case .play(let request):
+            if activeMode == .brief, activePlaybackID != nil {
+                queueCoordinator.updateCurrentPosition(currentTime)
+                queueCoordinator.saveStateNow()
+            }
+
+            if activeMode == .radio,
+               activeRadioKey == request.key,
+               let activePlaybackID,
+               !consumedPlaybackIDs.contains(activePlaybackID) {
+                pendingSeekTime = request.positionSeconds > 0 ? request.positionSeconds : nil
+                if let pendingSeekTime {
+                    audioPlayer.seek(to: pendingSeekTime)
+                    self.pendingSeekTime = nil
+                }
+                audioPlayer.resume()
+                return
+            }
+            if activePlaybackID != nil { audioPlayer.stop() }
+
+            let playbackID = TransportPlaybackID()
+            activePlaybackID = playbackID
+            activeRadioKey = request.key
+            consumedPlaybackIDs.remove(playbackID)
+            activeMode = .radio
+            pendingSeekTime = request.positionSeconds > 0 ? request.positionSeconds : nil
+            currentTime = request.positionSeconds
+            duration = radioCoordinator.currentEpisode?.durationSeconds ?? 0
+            rebuildRadioProjection()
+            updateRemoteAvailability()
+
+            do {
+                let url = preferredRadioURL(for: request.key) ?? request.url
+                try await audioPlayer.play(
+                    id: playbackID,
+                    url: url,
+                    title: request.title,
+                    artist: request.source
+                )
+                audioPlayer.setRate(playbackRate)
+            } catch {
+                guard playbackID == activePlaybackID else { return }
+                let next = radioCoordinator.playbackFailed(
+                    for: request.key,
+                    message: error.localizedDescription,
+                    positionSeconds: currentTime,
+                    duration: duration > 0 ? duration : nil,
+                    connectivity: radioCoordinator.currentConnectivityStatus
+                )
+                await execute(next)
+            }
+        }
+    }
+
+    private func preferredRadioURL(for key: RadioEpisodeKey) -> URL? {
+        guard let path = fetchEpisode(feedID: key.feedID, episodeID: key.episodeID)?.downloadedFilePath,
+              !path.isEmpty,
+              FileManager.default.isReadableFile(atPath: path) else { return nil }
+        return URL(fileURLWithPath: path)
+    }
+
+    private func cancelDeferredAutoplay() {
+        radioCoordinator.cancelPendingColdLaunchAutoplay()
+    }
+
+    private func updateRemoteAvailability() {
+        switch activeMode {
+        case .radio:
+            audioPlayer.applyRemoteCommandAvailability(.radio(canPlayNext: radioCoordinator.canPlayNext))
+        case .brief, .none:
+            audioPlayer.applyRemoteCommandAvailability(
+                .brief(canPlayPrevious: currentIndex > 0, canPlayNext: currentIndex >= 0 && currentIndex < queue.count - 1)
+            )
+        }
+    }
+
     // MARK: - TTS Generation
     
     /// Generate audio for a queue item
@@ -1301,9 +1428,14 @@ final class UnifiedAudioPlayer: ObservableObject {
     // MARK: - Background Handling
     
     private func handleEnterBackground() {
-        // Continue playback in background
-        if isPlaying {
-            // Audio session is already configured for background
+        switch activeMode {
+        case .radio:
+            _ = radioCoordinator.handleBackground(positionSeconds: currentTime, duration: duration > 0 ? duration : nil)
+        case .brief:
+            queueCoordinator.updateCurrentPosition(currentTime)
+            queueCoordinator.saveStateNow()
+        case .none:
+            break
         }
     }
     
@@ -1327,78 +1459,136 @@ final class UnifiedAudioPlayer: ObservableObject {
         currentTime = audioPlayer.currentTime
         duration = audioPlayer.duration
 
-        // Only sync position to QueueCoordinator in Brief queue mode (not Live News streaming)
-        // Periodically sync (every ~5 seconds to reduce writes)
-        if !isStreamingLiveNews && Int(currentTime) % 5 == 0 {
+        if activeMode == .brief, Int(currentTime) % 5 == 0 {
             queueCoordinator.updateCurrentPosition(currentTime)
+        } else if activeMode == .radio, let activeRadioKey {
+            radioCoordinator.recordProgress(
+                for: activeRadioKey,
+                positionSeconds: currentTime,
+                duration: duration > 0 ? duration : nil
+            )
         }
     }
 }
 
 // MARK: - SwiftAudioExService Delegate
 
-extension UnifiedAudioPlayer: @preconcurrency SwiftAudioExServiceDelegate {
-    
-    nonisolated func audioStateChanged(to newState: SwiftAudioPlayerState, from oldState: SwiftAudioPlayerState) {
-        Task { @MainActor in
-            switch newState {
-            case .playing:
-                isPlaying = true
-                if let seekTime = pendingSeekTime, seekTime > 0 {
-                    audioPlayer.seek(to: seekTime)
-                    currentTime = seekTime
-                    pendingSeekTime = nil
-                }
-                startProgressTimer()
-            case .paused:
-                isPlaying = false
-                playbackProgressTimer?.invalidate()
-            case .stopped:
-                isPlaying = false
-                playbackProgressTimer?.invalidate()
-            case .error(let error):
-                isPlaying = false
-                playbackProgressTimer?.invalidate()
-                print("[UnifiedPlayer] Audio error: \(error)")
-            default:
-                break
-            }
-        }
-    }
-    
-    nonisolated func audioProgressUpdated(progress: Float, currentTime: TimeInterval, duration: TimeInterval) {
-        Task { @MainActor in
-            self.currentTime = currentTime
-            self.duration = duration
-        }
-    }
-    
-    nonisolated func audioRateChanged(to rate: Float) {
-        Task { @MainActor in
-            self.playbackRate = rate
-        }
-    }
-    
-    nonisolated func audioDidFinishPlaying(successfully: Bool) {
-        if successfully {
-            Task {
-                await handleTrackFinished()
-            }
+extension UnifiedAudioPlayer: SwiftAudioExServiceDelegate {
+    func audioItemReady(id: TransportPlaybackID, duration: TimeInterval) {
+        guard id == activePlaybackID else { return }
+        self.duration = duration
+        if let seekTime = pendingSeekTime {
+            audioPlayer.seek(to: seekTime)
+            currentTime = seekTime
+            pendingSeekTime = nil
         }
     }
 
-    nonisolated func audioRequestNextTrack() {
-        // Manual skip does NOT auto-remove — only natural completion removes
-        Task {
-            await playNext()
+    func audioStateChanged(id: TransportPlaybackID, to newState: SwiftAudioPlayerState, from oldState: SwiftAudioPlayerState) {
+        guard id == activePlaybackID else { return }
+        switch newState {
+        case .playing:
+            isPlaying = true
+            if activeMode == .radio, let activeRadioKey {
+                radioCoordinator.transportDidStart(for: activeRadioKey)
+            }
+            startProgressTimer()
+        case .paused, .stopped, .error:
+            isPlaying = false
+            playbackProgressTimer?.invalidate()
+        case .idle, .loading:
+            break
+        }
+        updateRemoteAvailability()
+    }
+
+    func audioProgressUpdated(id: TransportPlaybackID, progress: Float, currentTime: TimeInterval, duration: TimeInterval) {
+        guard id == activePlaybackID else { return }
+        self.currentTime = currentTime
+        self.duration = duration
+        switch activeMode {
+        case .radio:
+            guard let key = activeRadioKey else { return }
+            radioCoordinator.recordProgress(for: key, positionSeconds: currentTime, duration: duration > 0 ? duration : nil)
+            if let intent = radioCoordinator.evaluateSleepTimer(
+                at: Date(),
+                positionSeconds: currentTime,
+                duration: duration > 0 ? duration : nil
+            ) {
+                Task { @MainActor in await execute(intent) }
+            }
+        case .brief:
+            queueCoordinator.updateCurrentPosition(currentTime)
+        case .none:
+            break
         }
     }
 
-    nonisolated func audioRequestPreviousTrack() {
-        Task {
-            await playPrevious()
+    func audioDidFinishPlaying(id: TransportPlaybackID, successfully: Bool) {
+        guard id == activePlaybackID, consumedPlaybackIDs.insert(id).inserted else { return }
+        isPlaying = false
+        if activeMode == .radio, let key = activeRadioKey {
+            let intent = successfully
+                ? radioCoordinator.playbackCompleted(for: key, at: Date())
+                : radioCoordinator.playbackFailed(
+                    for: key,
+                    message: "Audio playback failed",
+                    positionSeconds: currentTime,
+                    duration: duration > 0 ? duration : nil,
+                    connectivity: radioCoordinator.currentConnectivityStatus
+                )
+            Task { @MainActor in await execute(intent) }
+        } else if successfully, activeMode == .brief {
+            Task { @MainActor in await handleTrackFinished() }
         }
     }
+
+    func audioInterruptionBegan(id: TransportPlaybackID?) {
+        guard id == nil || id == activePlaybackID else { return }
+        if activeMode == .radio {
+            Task { @MainActor in
+                await execute(radioCoordinator.handleInterruptionBegan(positionSeconds: currentTime, duration: duration > 0 ? duration : nil))
+            }
+        } else if activeMode == .brief {
+            briefInterruptionResumeEligible = isPlaying
+            queueCoordinator.updateCurrentPosition(currentTime)
+            queueCoordinator.saveStateNow()
+            audioPlayer.pause()
+        }
+    }
+
+    func audioInterruptionEnded(id: TransportPlaybackID?, shouldResume: Bool) {
+        guard id == nil || id == activePlaybackID else { return }
+        if activeMode == .radio {
+            Task { @MainActor in await execute(radioCoordinator.handleInterruptionEnded(shouldResume: shouldResume)) }
+        } else if activeMode == .brief {
+            let resumeEligible = briefInterruptionResumeEligible
+            briefInterruptionResumeEligible = false
+            if shouldResume, resumeEligible { audioPlayer.resume() }
+        }
+    }
+
+    func audioRouteWasRemoved(id: TransportPlaybackID?) {
+        guard id == nil || id == activePlaybackID else { return }
+        if activeMode == .radio {
+            Task { @MainActor in
+                await execute(radioCoordinator.handleRouteRemoval(positionSeconds: currentTime, duration: duration > 0 ? duration : nil))
+            }
+        } else if activeMode == .brief {
+            queueCoordinator.updateCurrentPosition(currentTime)
+            queueCoordinator.saveStateNow()
+            audioPlayer.pause()
+            isPlaying = false
+        }
+    }
+
+    func audioRequestPlay() { resume() }
+    func audioRequestPause() { pause() }
+    func audioRequestSeek(to seconds: TimeInterval) { seek(to: seconds) }
+    func audioRequestSkipBackward(seconds: TimeInterval) { skipBackward(seconds) }
+    func audioRequestSkipForward(seconds: TimeInterval) { skipForward(seconds) }
+    func audioRequestNextTrack() { Task { @MainActor in await playNext() } }
+    func audioRequestRate(_ rate: Float) { setRate(rate) }
 }
 
 // MARK: - Convenience Methods
@@ -1440,20 +1630,12 @@ extension UnifiedAudioPlayer {
     
     /// Check if can play next
     var canPlayNext: Bool {
-        if isStreamingLiveNews {
-            return liveNewsStreamIndex < liveNewsStreamQueue.count - 1
-        } else {
-            return currentIndex < queue.count - 1
-        }
+        activeMode == .radio ? radioCoordinator.canPlayNext : currentIndex < queue.count - 1
     }
 
     /// Check if can play previous
     var canPlayPrevious: Bool {
-        if isStreamingLiveNews {
-            return liveNewsStreamIndex > 0
-        } else {
-            return currentIndex > 0
-        }
+        activeMode == .radio ? false : currentIndex > 0
     }
 }
 

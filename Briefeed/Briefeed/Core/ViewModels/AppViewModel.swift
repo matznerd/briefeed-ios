@@ -22,6 +22,11 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var currentArtist: String?
     @Published private(set) var progress: Float = 0
     @Published private(set) var playbackSpeed: Float = 1.0
+    @Published private(set) var activePlaybackMode: ActivePlaybackMode = .none
+    @Published private(set) var radioState: RadioSessionState = .idle
+    @Published private(set) var radioEntries: [RadioQueueEntry] = []
+    @Published private(set) var radioSleepTimer: RadioSleepTimer = .off
+    @Published private(set) var radioSourceFailures: [String: String] = [:]
     
     // Queue State
     @Published private(set) var queueItems: [UnifiedQueueItem] = []
@@ -66,6 +71,12 @@ final class AppViewModel: ObservableObject {
         
         audioPlayerViewModel.$playbackSpeed
             .assign(to: &$playbackSpeed)
+
+        audioPlayerViewModel.$activeMode.assign(to: &$activePlaybackMode)
+        audioPlayerViewModel.$radioState.assign(to: &$radioState)
+        audioPlayerViewModel.$radioEntries.assign(to: &$radioEntries)
+        audioPlayerViewModel.$sleepTimer.assign(to: &$radioSleepTimer)
+        audioPlayerViewModel.$sourceFailures.assign(to: &$radioSourceFailures)
         
         audioPlayerViewModel.$queueItems
             .sink { [weak self] items in
@@ -104,10 +115,28 @@ final class AppViewModel: ObservableObject {
         await audioPlayerViewModel.play(episode: episode)
     }
 
-    /// Stream episode immediately WITHOUT queuing to Brief
-    /// Per PRD: Per-episode "Play Now" in Live News uses streaming mode
-    func streamEpisode(_ episode: RSSEpisode) async {
-        await audioPlayerViewModel.streamEpisode(episode)
+    func playRadio() async {
+        await audioPlayerViewModel.playRadio()
+    }
+
+    func playRadioEpisode(_ key: RadioEpisodeKey) async {
+        await audioPlayerViewModel.playRadioEpisode(key)
+    }
+
+    func retryRadio() async {
+        await audioPlayerViewModel.retryRadio()
+    }
+
+    func refreshRadio() async {
+        await audioPlayerViewModel.refreshRadio()
+    }
+
+    func setRadioSleepTimer(_ timer: RadioSleepTimer) {
+        audioPlayerViewModel.setSleepTimer(timer)
+    }
+
+    func cancelRadioSleepTimer() {
+        audioPlayerViewModel.cancelSleepTimer()
     }
     
     func togglePlayPause() {

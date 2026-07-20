@@ -37,10 +37,12 @@ final class AudioPlayerViewModelV2: ObservableObject {
     @Published private(set) var queueItems: [UnifiedQueueItem] = []
     @Published private(set) var currentQueueIndex: Int = -1
 
-    // Live News streaming state (temporary, not persisted to Brief)
-    @Published private(set) var isStreamingLiveNews: Bool = false
-    @Published private(set) var liveNewsStreamQueue: [UnifiedQueueItem] = []
-    @Published private(set) var liveNewsStreamIndex: Int = -1
+    @Published private(set) var activeMode: ActivePlaybackMode = .none
+    @Published private(set) var radioState: RadioSessionState = .idle
+    @Published private(set) var radioEntries: [RadioQueueEntry] = []
+    @Published private(set) var currentRadioEpisode: RadioEpisodeCandidate?
+    @Published private(set) var sleepTimer: RadioSleepTimer = .off
+    @Published private(set) var sourceFailures: [String: String] = [:]
     
     @Published private(set) var lastError: Error?
     @Published private(set) var generationPhase: GenerationPhase = .idle
@@ -60,14 +62,27 @@ final class AudioPlayerViewModelV2: ObservableObject {
     
     // MARK: - Private Properties
 
-    private let unifiedPlayer = UnifiedAudioPlayer.shared
+    private let unifiedPlayer: UnifiedAudioPlayer
+    private let radioCoordinator: RadioSessionCoordinating
     private let queueCoordinator = QueueCoordinator.shared
+    private let rssService: RSSAudioService
     private var cancellables = Set<AnyCancellable>()
     private var isApplyingPlaybackSpeed = false
     
     // MARK: - Initialization
     
-    init() {
+    convenience init() {
+        self.init(unifiedPlayer: .shared, radioCoordinator: nil, rssService: .shared)
+    }
+
+    init(
+        unifiedPlayer: UnifiedAudioPlayer,
+        radioCoordinator: RadioSessionCoordinating? = nil,
+        rssService: RSSAudioService
+    ) {
+        self.unifiedPlayer = unifiedPlayer
+        self.radioCoordinator = radioCoordinator ?? unifiedPlayer.radioSessionCoordinator
+        self.rssService = rssService
         setupBindings()
         loadSavedState()
     }
@@ -102,26 +117,23 @@ final class AudioPlayerViewModelV2: ObservableObject {
             }
             .store(in: &cancellables)
 
-        unifiedPlayer.$isStreamingLiveNews
-            .sink { [weak self] isStreaming in
-                self?.isStreamingLiveNews = isStreaming
+        unifiedPlayer.$activeMode
+            .sink { [weak self] mode in
+                self?.activeMode = mode
                 self?.refreshNowPlaying()
             }
             .store(in: &cancellables)
 
-        unifiedPlayer.$liveNewsStreamQueue
-            .sink { [weak self] queue in
-                self?.liveNewsStreamQueue = queue
+        radioCoordinator.statePublisher.assign(to: &$radioState)
+        radioCoordinator.entriesPublisher.assign(to: &$radioEntries)
+        radioCoordinator.currentEpisodePublisher
+            .sink { [weak self] episode in
+                self?.currentRadioEpisode = episode
                 self?.refreshNowPlaying()
             }
             .store(in: &cancellables)
-
-        unifiedPlayer.$liveNewsStreamIndex
-            .sink { [weak self] index in
-                self?.liveNewsStreamIndex = index
-                self?.refreshNowPlaying()
-            }
-            .store(in: &cancellables)
+        radioCoordinator.sleepTimerPublisher.assign(to: &$sleepTimer)
+        radioCoordinator.sourceFailuresPublisher.assign(to: &$sourceFailures)
         
         unifiedPlayer.$isGenerating
             .assign(to: &$isGenerating)
@@ -138,7 +150,13 @@ final class AudioPlayerViewModelV2: ObservableObject {
     }
 
     private func refreshNowPlaying() {
-        updateCurrentItemInfo(unifiedPlayer.currentItem)
+        if activeMode == .radio, let episode = currentRadioEpisode {
+            currentTitle = episode.title
+            currentArtist = episode.sourceName
+            currentItemType = .rssEpisode
+        } else {
+            updateCurrentItemInfo(unifiedPlayer.currentItem)
+        }
     }
     
     private func loadSavedState() {
@@ -195,7 +213,11 @@ final class AudioPlayerViewModelV2: ObservableObject {
     }
     
     func play() async {
-        if currentTitle != nil || isStreamingLiveNews {
+        if activeMode == .radio {
+            await unifiedPlayer.playRadio()
+            return
+        }
+        if currentTitle != nil {
             unifiedPlayer.resume()
             return
         }
@@ -523,75 +545,43 @@ final class AudioPlayerViewModelV2: ObservableObject {
     
 }
 
-// MARK: - Live News Support
+// MARK: - Radio Support
 
 extension AudioPlayerViewModelV2 {
-    /// Play Live News episodes immediately WITHOUT queuing to Brief
-    /// Per PRD: "Play Live News" streams immediately without adding to Brief queue
-    func playLiveNewsStream(episodes: [RSSEpisode]) async {
+    func playRadio() async {
         isLoading = true
         lastError = nil
-
-        // CRITICAL: Yield to allow SwiftUI to update UI before heavy work
-        await Task.yield()
-
-        if !episodes.isEmpty {
-            await unifiedPlayer.playLiveNewsStream(episodes: episodes)
-        } else {
-            lastError = NSError(
-                domain: "AudioPlayer",
-                code: 404,
-                userInfo: [NSLocalizedDescriptionKey: "No new episodes available"]
-            )
-        }
-
+        await unifiedPlayer.playRadio()
         isLoading = false
     }
 
-    /// Stop Live News streaming and return to Brief queue mode
-    func stopLiveNewsStream() {
-        unifiedPlayer.stopLiveNewsStream()
-    }
-
-    /// Stream a single episode immediately WITHOUT queuing to Brief
-    /// Per PRD: Per-episode "Play Now" in Live News also streams immediately
-    func streamEpisode(_ episode: RSSEpisode) async {
-        await playLiveNewsStream(episodes: [episode])
-    }
-
-    /// Play latest RSS episodes as "Live News" (legacy - queues to Brief)
-    /// NOTE: Use playLiveNewsStream for immediate streaming per PRD
-    func playLiveNews(from feeds: [RSSFeed]) async {
+    func playRadioEpisode(_ key: RadioEpisodeKey) async {
         isLoading = true
         lastError = nil
-
-        let context = PersistenceController.shared.container.viewContext
-        var episodes: [RSSEpisode] = []
-
-        // Get latest unlistened episode from each feed
-        for feed in feeds {
-            let request: NSFetchRequest<RSSEpisode> = RSSEpisode.fetchRequest()
-            request.predicate = NSPredicate(
-                format: "feed == %@ AND isListened == NO",
-                feed
-            )
-            request.sortDescriptors = [
-                NSSortDescriptor(keyPath: \RSSEpisode.pubDate, ascending: false)
-            ]
-            request.fetchLimit = 1
-
-            if let latestEpisode = try? context.fetch(request).first {
-                episodes.append(latestEpisode)
-            }
-        }
-
-        // Sort by publication date (newest first)
-        episodes.sort { $0.pubDate > $1.pubDate }
-
-        // Stream immediately without queuing (per PRD)
-        await playLiveNewsStream(episodes: episodes)
-
+        await unifiedPlayer.playRadioEpisode(key)
         isLoading = false
+    }
+
+    func retryRadio() async {
+        isLoading = true
+        await unifiedPlayer.retryRadio()
+        isLoading = false
+    }
+
+    func refreshRadio() async {
+        isLoading = true
+        radioCoordinator.refreshStarted(enabledSourceCount: rssService.feeds.filter(\.isEnabled).count)
+        let result = await rssService.refreshAllFeeds()
+        await unifiedPlayer.execute(radioCoordinator.applyRefresh(result))
+        isLoading = false
+    }
+
+    func setSleepTimer(_ timer: RadioSleepTimer) {
+        unifiedPlayer.setRadioSleepTimer(timer)
+    }
+
+    func cancelSleepTimer() {
+        unifiedPlayer.cancelRadioSleepTimer()
     }
 }
 

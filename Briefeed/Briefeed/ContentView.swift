@@ -53,16 +53,14 @@ struct ContentView: View {
                 .accentColor(.briefeedRed)
             }
             
-            // Audio player positioned above the tab bar
-            // Show when Brief queue has items OR when streaming Live News (temporary queue)
-            if audioPlayerViewModel.isStreamingLiveNews || !audioPlayerViewModel.queueItems.isEmpty {
+            if !audioPlayerViewModel.radioEntries.isEmpty || !audioPlayerViewModel.queueItems.isEmpty {
                 VStack(spacing: 0) {
                     Spacer()
                     MiniAudioPlayerV4()
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .animation(
                             .easeInOut(duration: 0.3),
-                            value: audioPlayerViewModel.isStreamingLiveNews || !audioPlayerViewModel.queueItems.isEmpty
+                            value: !audioPlayerViewModel.radioEntries.isEmpty || !audioPlayerViewModel.queueItems.isEmpty
                         )
                         .padding(.bottom, 49) // Height of tab bar
                 }

@@ -175,7 +175,7 @@ struct MiniAudioPlayerV4: View {
                             }
                         }
                     }
-                    .disabled(!viewModel.isStreamingLiveNews && viewModel.queueItems.isEmpty)
+                    .disabled(viewModel.radioEntries.isEmpty && viewModel.queueItems.isEmpty)
                     .accessibilityLabel(viewModel.isPlaying ? "Pause" : "Play")
                     .accessibilityIdentifier(AccessibilityID.MiniPlayer.playPause)
                     

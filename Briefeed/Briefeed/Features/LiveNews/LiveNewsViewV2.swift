@@ -9,7 +9,6 @@ import SwiftUI
 import CoreData
 
 struct LiveNewsViewV2: View {
-    @StateObject private var rssService = RSSAudioService.shared
     @EnvironmentObject var audioPlayerViewModel: AudioPlayerViewModelV2
     @EnvironmentObject var appViewModel: AppViewModel
     @State private var isRefreshing = false
@@ -181,8 +180,9 @@ struct LiveNewsViewV2: View {
         
         Button {
             Task {
-                // Stream episode immediately WITHOUT queuing to Brief (per PRD)
-                await appViewModel.streamEpisode(episode)
+                await appViewModel.playRadioEpisode(
+                    RadioEpisodeKey(feedID: episode.feedId, episodeID: episode.id)
+                )
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             }
         } label: {
@@ -210,35 +210,12 @@ struct LiveNewsViewV2: View {
     
     private func refreshFeeds() async {
         isRefreshing = true
-        await rssService.refreshAllFeeds()
+        await audioPlayerViewModel.refreshRadio()
         isRefreshing = false
     }
     
     private func playAllLiveNews() async {
-        print("🎙️ Play Live News pressed")
-        
-        // Find the latest episode from each enabled feed
-        var episodesToPlay: [RSSEpisode] = []
-        
-        for feed in feeds where feed.isEnabled {
-            if let episodes = feed.episodes?.allObjects as? [RSSEpisode] {
-                // Get the most recent episode that hasn't been listened to
-                if let latestEpisode = episodes
-                    .filter({ !$0.isListened })
-                    .sorted(by: { $0.pubDate > $1.pubDate })
-                    .first {
-                    episodesToPlay.append(latestEpisode)
-                    print("🎙️ Found episode: \(latestEpisode.title) from \(feed.displayName)")
-                }
-            }
-        }
-        
-        print("🎙️ Total episodes to play: \(episodesToPlay.count)")
-
-        // Stream immediately WITHOUT adding to Brief queue (per PRD)
-        if !episodesToPlay.isEmpty {
-            await audioPlayerViewModel.playLiveNewsStream(episodes: episodesToPlay)
-        }
+        await audioPlayerViewModel.playRadio()
     }
     
     private func deleteFeeds(at indexSet: IndexSet) {
@@ -410,8 +387,9 @@ struct EpisodeRowV2: View {
     var body: some View {
         Button {
             Task {
-                // Stream episode immediately WITHOUT queuing to Brief (per PRD)
-                await appViewModel.streamEpisode(episode)
+                await appViewModel.playRadioEpisode(
+                    RadioEpisodeKey(feedID: episode.feedId, episodeID: episode.id)
+                )
             }
         } label: {
             VStack(alignment: .leading, spacing: 4) {

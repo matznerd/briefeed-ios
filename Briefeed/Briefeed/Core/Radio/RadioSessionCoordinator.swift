@@ -35,6 +35,7 @@ protocol RadioSessionCoordinating: AnyObject {
     var sleepTimer: RadioSleepTimer { get }
     var hasPendingColdLaunchAutoplay: Bool { get }
     var canPlayNext: Bool { get }
+    var currentConnectivityStatus: ConnectivityStatus { get }
     var statePublisher: AnyPublisher<RadioSessionState, Never> { get }
     var entriesPublisher: AnyPublisher<[RadioQueueEntry], Never> { get }
     var currentEpisodePublisher: AnyPublisher<RadioEpisodeCandidate?, Never> { get }
@@ -63,6 +64,7 @@ protocol RadioSessionCoordinating: AnyObject {
     func recordProgress(for key: RadioEpisodeKey, positionSeconds: TimeInterval, duration: TimeInterval?)
     func playbackCompleted(for key: RadioEpisodeKey, at: Date) -> RadioPlaybackIntent?
     func playbackFailed(for key: RadioEpisodeKey, message: String, positionSeconds: TimeInterval, duration: TimeInterval?, connectivity: ConnectivityStatus) -> RadioPlaybackIntent?
+    func transportDidStart(for key: RadioEpisodeKey)
     func cancelPendingColdLaunchAutoplay()
 }
 
@@ -91,6 +93,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
     var sleepTimerPublisher: AnyPublisher<RadioSleepTimer, Never> { $sleepTimer.eraseToAnyPublisher() }
     var canPlayNextPublisher: AnyPublisher<Bool, Never> { $canPlayNext.eraseToAnyPublisher() }
     var pendingNetworkIntentPublisher: AnyPublisher<RadioPlaybackIntent, Never> { pendingNetworkIntentSubject.eraseToAnyPublisher() }
+    var currentConnectivityStatus: ConnectivityStatus { connectivityStatus() }
 
     private let store: RadioSessionStoreProtocol
     private let repository: RadioEpisodeRepository
@@ -377,6 +380,14 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         lastProgressBucket = (key, bucket)
         store.saveDebounced(currentSession())
         _ = persistProgress(positionSeconds: sanitizedPosition, duration: duration)
+    }
+
+    func transportDidStart(for key: RadioEpisodeKey) {
+        guard key == currentKey else { return }
+        if let index = entries.firstIndex(where: { $0.key == key }) {
+            entries[index].disposition = .playing
+        }
+        state = .playing
     }
 
     func pauseByUser(positionSeconds: TimeInterval, duration: TimeInterval?) -> RadioPlaybackIntent? {
