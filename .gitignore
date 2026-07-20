@@ -98,3 +98,6 @@ iOSInjectionProject/
 
 # Ignore the Capacitor app folder
 # /briefeed/
+
+# Local Fabled Orca review/runtime artifacts
+Briefeed/.orca/

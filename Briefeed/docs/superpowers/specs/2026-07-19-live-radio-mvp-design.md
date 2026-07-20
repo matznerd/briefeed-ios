@@ -191,9 +191,15 @@ Output:
 
 ### RadioSessionStore
 
-`RadioSessionStore` encodes and decodes `PersistedRadioSession` under a versioned UserDefaults key. Writes are debounced during progress updates and forced on pause, Next, completion, background transition, and termination notification.
+`RadioSessionStore` encodes and decodes `PersistedRadioSession` under a versioned UserDefaults key. Writes are debounced during progress updates and forced on pause, Next, completion, background transition, and termination notification. Every scheduled write captures a monotonically increasing generation. A forced save or clear increments the generation, cancels and invalidates the pending debounce, and writes synchronously before returning; an older callback must compare generations and may never overwrite newer forced state.
 
 Corrupt or unsupported state fails closed by discarding only the Radio snapshot. It must never delete RSS Core Data or the Brief queue.
+
+### RadioServiceContainer
+
+`RadioServiceContainer` is the sole production composition root for Radio. Its lazy main-actor instance constructs and owns one connectivity monitor and one coordinator that receives that exact monitor; `UnifiedAudioPlayer` and the app lifecycle driver resolve their Radio dependencies from this container rather than from `RadioSessionCoordinator.shared`.
+
+In DEBUG fixture mode, a process-local factory override may be installed only before the container is first resolved. App bootstrap clears fixture preferences, installs the fixture container factory, initializes isolated persistence/settings, and only then constructs playback view models. Attempting to install an override after resolution fails immediately. Production and hosted unit-test construction do not depend on fixture types.
 
 ### RSSAudioService
 
@@ -228,6 +234,10 @@ Brief behavior remains delegated to `QueueCoordinator`.
 - Pause, resume, stop, seek, and set rate.
 - Publish player state, progress, completion, interruption, route, and remote-command events.
 - Publish Now Playing metadata.
+
+Each load creates a fresh underlying player and a fresh `TransportPlaybackID`. Listener closures capture that immutable ID; they never read a mutable current ID. The old player is stopped and detached before the replacement becomes active. The transport consumes the first failure or natural-end terminal event per ID and ignores later duplicates; an expected stop used for replacement is never reported as failure or completion.
+
+AVAudioSession interruption and route callbacks publish identity-bound semantic events only. They do not pause or resume the player directly. `UnifiedAudioPlayer` routes them to the active coordinator, which persists first and decides whether to pause or resume.
 
 Its private URL queue, index, `loadQueue`, `playNext`, `playPrevious`, and completion-time auto-advance are removed or made unreachable. High-level coordinators alone decide navigation.
 
@@ -291,14 +301,18 @@ The durable episode key is `(feedID, episodeID)`, not `episodeID` alone.
 Within one refresh:
 
 1. Prefer a non-empty RSS GUID as `episodeID`.
-2. If GUID is absent, derive a deterministic ID from normalized enclosure URL plus publication timestamp.
-3. Never derive an ID from `Date()`.
+2. For identity only, canonicalize a valid HTTP or HTTPS enclosure URL with `URLComponents`: lowercase the scheme and host, remove the fragment and default port, preserve the normalized path, and sort query items by name then value. Playback always uses the publisher's original enclosure URL.
+3. Represent publication time as an integer UTC epoch-second value.
+4. If GUID is absent, require both a parseable publication date and a valid enclosure URL, then derive `episodeID` as the lowercase hexadecimal SHA-256 digest of `canonicalURL + "|" + epochSeconds`.
+5. Reject an item that has neither a non-empty GUID nor both fallback components. Never substitute `Date()` for a missing or malformed publication date.
 
 Within the active Radio session:
 
 - Reject duplicate `RadioEpisodeKey` values.
 - Reject a second entry with the same normalized enclosure URL, even if syndicated by another enabled feed.
 - Preserve the first occurrence according to source priority.
+
+Within each feed, sort candidates by publication date descending, then `episodeID` ascending. Across feeds, sort by `RSSFeed.priority` ascending, then `RSSFeed.id` ascending. These tie-breakers apply to initial construction and every reconciliation pass.
 
 ## Queue Ordering and Reconciliation
 
@@ -330,14 +344,18 @@ This produces a short, source-balanced radio brief instead of allowing one feed 
 
 When a snapshot exists:
 
-1. Resolve each entry by exact `(feedID, episodeID)`.
-2. Drop entries whose feed or episode no longer exists.
-3. Drop entries from disabled feeds.
-4. Drop completed entries.
-5. Drop entries beyond retention.
-6. Preserve the remaining entry order and seconds position.
-7. Preserve `currentKey` when its entry remains eligible.
-8. Append newly eligible episodes after the restored entries.
+1. Require the exact supported schema version. An unreadable snapshot or unsupported version discards only the Radio snapshot and starts from local Core Data.
+2. Reject a snapshot containing more than 200 entries as corrupt.
+3. Resolve each entry by exact `(feedID, episodeID)` and require a valid enclosure URL.
+4. Keep the first occurrence of each key and normalized enclosure URL; drop later duplicates.
+5. Drop entries whose feed or episode no longer exists, whose feed is disabled, that are completed, or that are beyond retention.
+6. Repair a non-finite or negative position to `0`; when duration is known, clamp the position to `0...duration`.
+7. Normalize every persisted `playing` disposition to paused readiness. On cold launch, normalize `failedThisSession` to `pending`, set `playbackFailureCount` to `0`, and clear `lastPlaybackError`.
+8. Preserve the remaining entry order and repaired seconds position.
+9. Preserve `currentKey` only when it resolves to exactly one eligible entry. Otherwise choose the first eligible entry deterministically; an empty session has a nil current key.
+10. Append newly eligible episodes after the restored entries.
+
+Entry-level defects are repaired or dropped individually. Only snapshot decoding failure, unsupported schema, or the 200-entry corruption guard discards the whole Radio snapshot.
 
 The queue is never rebuilt from the beginning merely because a refresh returns no new items.
 
@@ -354,6 +372,17 @@ After a successful or partially successful refresh:
 ### Source Reordering
 
 Changing feed priority does not interrupt the current episode. It reorders only pending, never-started entries after the current entry. Deferred partial entries retain their relative position so a user pressing Next is not immediately returned to the same episode.
+
+### Queue Partitions and Selection
+
+The ordered snapshot is interpreted as four stable partitions:
+
+1. The current entry, when present.
+2. Pending, never-started entries sorted by feed priority, publication date descending, and episode key.
+3. Deferred entries in their saved relative order.
+4. `failedThisSession` entries in their saved relative order.
+
+Reconciliation may reorder only the pending partition. Manual Next moves the current entry to the tail of the deferred partition. Automatic selection chooses the first pending entry, then the first deferred entry. Failed entries are ineligible until their failure budget is explicitly reset. If only failed entries remain, the session is `failed`, not `exhausted`.
 
 ## Playback Semantics
 
@@ -383,6 +412,8 @@ Mark an episode completed when either condition is true:
 
 Completion writes `isListened = true`, `listenedDate = now`, and normalized `lastPosition = 1.0`, then removes the entry from the Radio snapshot. A completed episode is never selected again during its retention lifetime.
 
+Completion must be crash-consistent. First update and successfully save the Core Data episode. Only after that save succeeds may the coordinator remove the Radio entry and persist the updated snapshot. If Core Data save fails, keep the entry and its position in the Radio session, pause automatic advancement, and expose a recoverable persistence error with Retry. Never remove an entry based only on an in-memory completion mutation.
+
 ### Previous Behavior
 
 The mini-player does not include Previous. Back 10 seconds is the fast correction action. The expanded player may expose previous-session navigation only after the Radio coordinator can provide deterministic semantics; it is not required for the first usable build.
@@ -397,9 +428,20 @@ The mini-player does not include Previous. Back 10 seconds is the fast correctio
 ### Playback Speed
 
 - Supported values are `0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0`.
-- Persist the last-used value for both Radio and Brief playback.
-- Clamp a legacy saved value above 3.0 to 3.0 on load.
+- Persist the last-used value for both Radio and Brief playback under the canonical `playbackSpeed` UserDefaults key.
+- When `playbackSpeed` is absent, migrate `rssPlaybackSpeed` once, write the normalized value to `playbackSpeed`, and stop reading the legacy key.
+- Normalize a non-finite saved value to `1.0`; otherwise clamp to `0.5...3.0` and choose the nearest supported value, resolving an exact tie toward the lower value.
 - Remote-command supported rates match the same list.
+
+### Remote Commands and Now Playing Ownership
+
+- `SwiftAudioExService` is the sole registrar for `MPRemoteCommandCenter` and the sole publisher of low-level transport events.
+- `UnifiedAudioPlayer` is the sole semantic router from those events to the active Brief or Radio coordinator.
+- Play, pause, seek, 10-second skip, rate change, and Next are always routed through the active playback mode; no remote callback mutates a second private queue.
+- Radio Previous is disabled. Next is enabled only when the Radio coordinator reports a pending or deferred eligible entry.
+- Preferred forward and backward intervals are both exactly 10 seconds.
+- Supported remote playback rates are exactly the canonical in-app speed list.
+- Command enablement and Now Playing metadata are refreshed after every current-item, playback-state, queue-eligibility, route, and mode transition.
 
 ## Autoplay and Lifecycle State Machine
 
@@ -408,11 +450,13 @@ The mini-player does not include Previous. Back 10 seconds is the fast correctio
 ```text
 idle
 restoring
+refreshing
 readyPaused
 loading
 playing
 pausedByUser
 waitingForNetwork
+noSources
 exhausted
 failed
 ```
@@ -425,18 +469,21 @@ deadline(Date)
 endOfEpisode
 ```
 
+`sourceDegraded` is an orthogonal presentation flag derived from non-empty per-source failures. It may coexist with `playing`, `readyPaused`, or another primary session state and must never replace active playback as the primary state.
+
 ### Cold Launch
 
 1. Load user settings and Core Data.
-2. Restore and reconcile the Radio snapshot using local data only.
-3. If autoplay is enabled and an eligible entry exists, start or resume it immediately.
-4. Begin `refreshIfStale` without blocking playback from local episode metadata.
-5. Reconcile and append after refresh returns.
-6. If no local entry exists, show an updating state while refresh runs.
-7. If refresh produces an entry and autoplay is enabled, start it.
-8. If no entry exists, transition to `exhausted`.
+2. Run local-only `ensureDefaultFeedsExist`; it inserts missing default feed rows but performs no network request.
+3. Restore and reconcile the Radio snapshot using local data only.
+4. If autoplay is enabled and an eligible entry exists, start or resume it immediately.
+5. Begin `refreshIfStale` only after connectivity resolves online, without blocking playback from readable local episode metadata.
+6. Reconcile and append after refresh returns.
+7. If no local entry exists, show an updating/checking-connection state while connectivity or refresh is unresolved.
+8. If refresh produces an entry and autoplay is enabled, start it.
+9. Resolve an empty session using the state precedence defined below; do not assume it is exhausted.
 
-Autoplay is off by default and is exposed as a clear Radio setting. It runs once per process cold launch, not every time the scene becomes active or the Radio tab appears.
+Autoplay is off by default and is exposed as a clear Radio setting. Preserve the existing canonical `autoPlayLiveNewsOnOpen` UserDefaults key while renaming its visible setting to Radio autoplay. It runs once per process cold launch, not every time the scene becomes active or the Radio tab appears. If no local episode exists, the one cold-launch opportunity may remain pending through the first connectivity-resolved refresh and start the first newly eligible episode; that refresh or a terminal empty result consumes it. Later foreground, poll, and manual refreshes never autoplay.
 
 ### Foreground Return
 
@@ -464,18 +511,34 @@ Autoplay is off by default and is exposed as a clear Radio setting. It runs once
 ### Feed Refresh Failure
 
 - Each source produces an independent success or failure result.
+- A fresh source that requires no request reports `skippedFresh(lastSuccessfulRefresh:)`; it counts as successful-source evidence because it proves a prior successful refresh. A source without a prior successful timestamp cannot report `skippedFresh`.
 - Failure of one source does not fail the whole refresh.
 - Existing queued entries from that source remain playable.
 - The Radio screen shows a source-level retry affordance and last-success context.
 - Successful sources can still replenish the queue.
 
+### Refresh Cadence and Staleness
+
+- Hourly sources become stale 30 minutes after their last successful refresh.
+- Daily sources become stale 6 hours after their last successful refresh.
+- On cold launch and every foreground return, evaluate `refreshIfStale`.
+- While the app remains active, one authoritative 15-minute poll invokes only `refreshIfStale`; it does not force a network request for fresh sources.
+- Manual Refresh ignores the stale threshold.
+- No background task is added for this MVP.
+- Remove the duplicate app and RSS-service refresh timers and update `RSSFeed.isStale` and `checkInterval` to use this single policy.
+
 ### Episode Playback Failure
 
+- `ConnectivityMonitoring` is the injectable connectivity interface. `RadioNetworkMonitor`, backed by `NWPathMonitor`, is the production implementation.
+- Connectivity begins as `unknown`, not optimistically online. While unknown, readable local files may play, but remote refresh and remote enclosure loads wait and consume no attempt. The first online or offline path update resolves the pending action. With no local entry, `unknown` presents the nonterminal refreshing/checking-connection state and can never resolve to exhausted.
+- Each episode receives one initial online load and one online retry per failure cycle.
+- Going offline consumes no attempt. Connectivity restoration uses the remaining attempt budget.
+- Only an explicit Retry action, a successful refresh for that episode's source, or a cold launch resets the failure cycle. A failed manual refresh does not reset it.
 - If online, retry opening the current stream once after a short delay.
 - After the retry fails, preserve its position, mark it `failedThisSession`, and advance.
 - Do not mark it completed.
 - Do not retry the same failed entry again during the same uninterrupted queue pass.
-- A manual source refresh or later cold launch normalizes `failedThisSession` back to `pending`, clears its transient error count, and allows one new bounded attempt.
+- A successful manual source refresh or later cold launch normalizes affected `failedThisSession` entries back to `pending`, clears their transient error count, and allows one new bounded attempt.
 - If every remaining entry fails, stop in `failed` with a clear Retry action.
 
 ### Offline
@@ -496,7 +559,16 @@ Autoplay is off by default and is exposed as a clear Radio setting. It runs once
 
 ### Empty Queue
 
-When no eligible entry remains:
+Empty-state precedence is evaluated in this exact order:
+
+1. Existing active or buffered playback remains the primary state; source failures appear as `sourceDegraded` without interrupting it.
+2. No enabled feeds produces `noSources` with a Manage Sources action.
+3. No playable entry while offline produces `waitingForNetwork`.
+4. No playable entry while any refresh is active produces `refreshing`.
+5. No playable entry after every attempted source failed produces `failed`.
+6. `exhausted` is allowed only after at least one enabled source refresh succeeded or returned `skippedFresh(lastSuccessfulRefresh:)`, and produced no eligible episode.
+
+Only in the final case:
 
 - Stop automatic advancement.
 - Show `You're caught up` in the player.
@@ -526,6 +598,7 @@ Behavior:
 - At a deadline, pause playback once, persist position, and clear the timer.
 - Deadline expiration never marks the episode complete.
 - End of Episode allows the current episode to finish, suppresses auto-advance, persists the next cursor, and pauses.
+- If the user presses Next while End of Episode is armed, cancel that timer, defer the current episode normally, and start the next eligible episode. The timer does not carry forward unless the user sets it again.
 - Canceling the timer has no playback side effect.
 - The timer survives ordinary foreground/background transitions by storing an in-memory deadline and checking it on progress and lifecycle events.
 - The timer does not survive process termination or a new cold launch.
@@ -627,8 +700,19 @@ Briefeed/skills/app-testing/
   config.sh
   scripts/build-install.sh
   scripts/radio-fixtures.sh
+  scripts/run-radio.sh
   scripts/radio-smoke.sh
 ```
+
+The single lane entry command is:
+
+```bash
+bash Briefeed/skills/app-testing/scripts/run-radio.sh <lane-key> <unit|ui|smoke>
+```
+
+`run-radio.sh` exports an absolute `AGENT_SIM_CONFIG`, acquires a per-lane adapter lock before claim resolution or cloning, runs the shared `sim-doctor.sh --gc` before allocation, and uses `sim-golden.sh clone <lane-key>` only when the exact lane has no valid recorded device. It reads the lane claim at `~/.local/state/briefeed-agent-simulators/<lane-key>.env`, verifies that recorded `SIM_UUID` exists, recorded `SIM_NAME` equals the device's actual name and has the fleet prefix, `sim_claims_for_uuid` returns exactly that one claim file, and the UUID is not protected. It then acquires `sim_use_lock "$SIM_UUID" "$$" "briefeed-<mode>-<lane-key>"` and runs all `xcodebuild`, `simctl install`, launch, log, screenshot, and UI commands with `platform=iOS Simulator,id=$SIM_UUID` or the exact UUID argument.
+
+An `EXIT` trap shuts down only the recorded lane UUID and touches that lane's lease while the per-device use lock is still held, then releases the device lock and per-lane adapter lock. The adapter keeps the shutdown clone and its claim for safe reuse; it never runs broad shutdown, erase, or delete commands. A malformed or multiply-owned claim, name mismatch, fleet-prefix mismatch, protected UUID, live use lock, full fleet, or clone exit `75` is a routing or capacity failure and exits `75` without running product tests.
 
 Adapter rules:
 
@@ -639,7 +723,7 @@ Adapter rules:
 - Never select the first available iPhone.
 - Never use the protected human simulator.
 - Never shut down or erase a simulator the lane did not create.
-- Use recorded UUIDs, per-device locks, bounded waits, and fixed DerivedData paths.
+- Use the exact lane's recorded UUID, the shared per-device lock, bounded waits, and lane-specific fixed DerivedData paths under `/tmp/briefeed-radio-<lane-key>-derived-data`.
 - Exit 75 means capacity or routing failure, not a product test failure.
 - Run simulator-free compile and analysis gates before claiming a simulator.
 - Release the simulator promptly after a lane finishes.
@@ -653,6 +737,10 @@ Radio tests must not depend on live publisher feeds. The fixture service provide
 - Small local audio files long enough to verify time advancement, seeking, completion, and transition latency.
 - Success, delayed response, HTTP failure, invalid media, and offline conditions.
 - Launch arguments that disable automatic production startup and select an isolated test store.
+
+The DEBUG fixture definition supplies initial connectivity and scripted post-restore coordinator actions for partial, completed, offline, refreshing, all-failed, degraded, no-sources, and exhausted states. It injects a fixture connectivity monitor before coordinator construction and drives only public production transition methods; no scenario reaches a publisher feed or assigns coordinator internals directly.
+
+Fixture reset is deliberately narrow. Reset deletes only the isolated `Briefeed-RadioUITests.sqlite` store and its WAL/SHM, removes `briefeed_radio_session_v1`, `playbackSpeed`, `rssPlaybackSpeed`, `autoPlayLiveNewsOnOpen`, and `rssLastPlayedEpisodeId`, then establishes autoplay Off and speed `1.0`. It never clears the whole defaults domain. Preference reset runs during app bootstrap before any settings, session-store, persistence, view-model, or coordinator singleton is initialized; the current eager `BriefeedApp` stored-property initializers are removed and initialized in the body only after preflight. Core Data reset then occurs inside the isolated persistence-controller initialization. A launch without reset preserves the isolated store and those values so relaunch tests exercise real restoration. One cross-scenario test reuses a claimed lane and proves reset prevents state bleed while no-reset preserves the active scenario.
 
 ## Verification Strategy
 
@@ -714,7 +802,7 @@ Simulator success is insufficient for:
 - Sleep timer expiration while locked.
 - Real power, thermal, and buffering behavior.
 
-These checks are mandatory before release-candidate signoff.
+These checks are mandatory before distribution-candidate signoff.
 
 ## Shortest Sequence to a Usable Build
 
@@ -740,6 +828,8 @@ Automation may:
 - Build, analyze, test, archive, and export when signing is available.
 - Inspect bundle identity, version, entitlements, packaged resources, and archive validity.
 - Prepare release notes and a TestFlight checklist.
+
+A green unsigned generic build is implementation evidence only. The build may be called a distribution candidate only after the physical-device checklist passes and a fresh signed archive/export is validated. If device access, signing, provisioning, or export configuration is unavailable, the receipt must say `implementation verified; distribution candidate blocked` and leave the release gate open.
 
 The release audit must treat API values substituted into the application `Info.plist` as extractable public client configuration. Shipping credentials must be removed, restricted to the bundle and allowed APIs where the provider supports it, or explicitly accepted as non-secret client keys before archive approval.
 

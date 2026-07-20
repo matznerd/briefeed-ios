@@ -1,6 +1,6 @@
 # Briefeed iOS App - Refactoring PRD v2.0
 
-> **Live Radio MVP focus (July 19, 2026):** The current product priority is the independently shippable Live Radio experience specified in [`docs/superpowers/specs/2026-07-19-live-radio-mvp-design.md`](superpowers/specs/2026-07-19-live-radio-mvp-design.md). That specification supersedes this document's temporary, non-persisted Live News playback behavior and its broader phase ordering for the Radio slice. Brief, Feed, article summarization, and TTS requirements below remain preserved but are not prerequisites for the Radio MVP.
+> **Live Radio MVP focus (July 19, 2026):** The current product priority is the independently shippable Live Radio experience specified in [`docs/superpowers/specs/2026-07-19-live-radio-mvp-design.md`](superpowers/specs/2026-07-19-live-radio-mvp-design.md) and sequenced in the implementation-ready [`docs/superpowers/plans/2026-07-19-live-radio-mvp.md`](superpowers/plans/2026-07-19-live-radio-mvp.md). Those documents supersede this PRD's temporary, non-persisted Live News playback behavior and broader phase ordering for the Radio slice. The Radio design and implementation plan are complete; product implementation has not begun. Brief, Feed, article summarization, and TTS requirements below remain preserved but are not prerequisites for the Radio MVP.
 
 **Date:** December 17, 2025
 **Version:** 2.1 - All Requirements Finalized
