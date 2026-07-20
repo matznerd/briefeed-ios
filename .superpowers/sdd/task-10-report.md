@@ -60,3 +60,24 @@ The UI tests and requested screenshot matrix could not run because the shared si
 Focused tests were added for source reconciliation, current-source removal, pending reorder/removal, no-source transition, repository and snapshot-save failures, degraded-state presentation, and playback accessibility labeling. The Settings UI test also verifies the source-management destination.
 
 RED was captured before production changes: the new tests failed on the missing presentation and reconciliation APIs. The earlier Task 10 build-for-testing remains green at `c92b7ed`. A final global `make radio-compile` is currently blocked only by concurrent Task 9 lifecycle work (`BriefeedApp.swift` lifecycle callback signatures and `RadioAppLifecycleTests.swift`); no Task 10 compile diagnostics were reported. Task-scoped static gates and `git diff --check` pass.
+
+## Second Review Repair
+
+- Radio source management now retains episode-detail navigation while exposing separate enablement toggles, drag reordering, swipe deletion, and the add-source flow.
+- Deleting a source uses the same Core Data save/rollback handling as toggle and reorder. A successful deletion immediately reconciles the local Radio session, removes deleted current or pending episodes, persists the snapshot, and pauses stale transport when the current source was deleted.
+- `FeedDetailsViewV2` still presents its existing sheet experience; its list content is minimally extracted for push navigation from Radio source management.
+- `AddRSSFeedViewV2` now accepts an optional async completion callback with a default of `nil`, so the existing Live News caller is unchanged. Radio callers reconcile after `RSSAudioService.addFeed` has saved, loaded, and refreshed the new source.
+- The add workflow has a small injected async seam. Focused tests prove callback ordering without network traffic and prove adding the first eligible source transitions `noSources` to `readyPaused` with a current episode without another refresh.
+
+Strict TDD evidence:
+
+```text
+RED: make radio-compile
+RadioSourceConfigurationTests.swift: cannot find 'AddRSSFeedWorkflow' in scope
+** TEST BUILD FAILED **
+
+GREEN: make radio-compile
+** TEST BUILD SUCCEEDED **
+```
+
+Additional focused coverage exercises deletion of the playing current source, deletion of a pending source, callback suppression after add failure, and UI presence of both source details and swipe Delete affordances. Simulator execution remains deferred to the fleet-safe runtime pass.

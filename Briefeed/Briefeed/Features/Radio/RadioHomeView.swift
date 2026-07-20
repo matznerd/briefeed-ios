@@ -74,7 +74,11 @@ struct RadioHomeView: View {
                 await audioPlayerViewModel.refreshRadio()
             }
             .sheet(isPresented: $showingAddSource) {
-                AddRSSFeedViewV2()
+                AddRSSFeedViewV2 {
+                    await audioPlayerViewModel.radioSourceConfigurationDidChange(
+                        enabledSourceCount: RSSAudioService.shared.enabledFeedCount
+                    )
+                }
             }
         }
     }
@@ -334,6 +338,7 @@ struct RadioSourceManagementView: View {
                 sourceRow(feed)
             }
             .onMove(perform: moveSources)
+            .onDelete(perform: deleteSources)
 
             Button {
                 showingAddSource = true
@@ -354,7 +359,11 @@ struct RadioSourceManagementView: View {
             }
         }
         .sheet(isPresented: $showingAddSource) {
-            AddRSSFeedViewV2()
+            AddRSSFeedViewV2 {
+                await audioPlayerViewModel.radioSourceConfigurationDidChange(
+                    enabledSourceCount: RSSAudioService.shared.enabledFeedCount
+                )
+            }
         }
         .alert("Could Not Save Sources", isPresented: Binding(
             get: { saveErrorMessage != nil },
@@ -369,23 +378,43 @@ struct RadioSourceManagementView: View {
     }
 
     private func sourceRow(_ feed: RSSFeed) -> some View {
-        Toggle(isOn: Binding(
-            get: { feed.isEnabled },
-            set: { isEnabled in
-                feed.isEnabled = isEnabled
-                saveSources()
+        HStack(spacing: 12) {
+            NavigationLink {
+                FeedDetailsContentViewV2(feed: feed)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(feed.displayName)
+                        .lineLimit(1)
+                    Text(feed.updateFrequencyEnum.displayName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-        )) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(feed.displayName)
-                    .lineLimit(1)
-                Text(feed.updateFrequencyEnum.displayName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            .accessibilityIdentifier(AccessibilityID.Radio.sourceDetail)
+
+            Toggle("Enable \(feed.displayName)", isOn: Binding(
+                get: { feed.isEnabled },
+                set: { isEnabled in
+                    feed.isEnabled = isEnabled
+                    saveSources()
+                }
+            ))
+            .labelsHidden()
+            .accessibilityValue(feed.isEnabled ? "Enabled" : "Disabled")
         }
-        .accessibilityLabel(feed.displayName)
-        .accessibilityValue(feed.isEnabled ? "Enabled" : "Disabled")
+    }
+
+    private func deleteSources(at offsets: IndexSet) {
+        let deletedFeeds = offsets.compactMap { index in
+            feeds.indices.contains(index) ? feeds[index] : nil
+        }
+        let deletedEnabledCount = deletedFeeds.lazy.filter(\.isEnabled).count
+        let enabledSourceCount = max(0, feeds.lazy.filter(\.isEnabled).count - deletedEnabledCount)
+        for feed in deletedFeeds {
+            context.delete(feed)
+        }
+        saveSources(enabledSourceCount: enabledSourceCount)
     }
 
     private func moveSources(from offsets: IndexSet, to destination: Int) {
@@ -397,13 +426,15 @@ struct RadioSourceManagementView: View {
         saveSources()
     }
 
-    private func saveSources() {
+    private func saveSources(enabledSourceCount: Int? = nil) {
+        let reconciledEnabledCount = enabledSourceCount ?? feeds.lazy.filter {
+            !$0.isDeleted && $0.isEnabled
+        }.count
         do {
             try context.save()
-            let enabledSourceCount = feeds.filter(\.isEnabled).count
             Task {
                 await audioPlayerViewModel.radioSourceConfigurationDidChange(
-                    enabledSourceCount: enabledSourceCount
+                    enabledSourceCount: reconciledEnabledCount
                 )
             }
         } catch {

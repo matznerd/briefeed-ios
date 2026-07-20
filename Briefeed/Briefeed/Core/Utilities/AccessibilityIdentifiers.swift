@@ -29,6 +29,8 @@ enum AccessibilityID {
         static let addSource = "radio.addSource"
         static let manageSources = "radio.manageSources"
         static let sourceList = "radio.sourceList"
+        static let sourceDetail = "radio.sourceDetail"
+        static let sourceDetails = "radio.sourceDetails"
         static let sourceFailures = "radio.sourceFailures"
     }
 

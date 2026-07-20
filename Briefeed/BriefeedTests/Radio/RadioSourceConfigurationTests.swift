@@ -114,6 +114,96 @@ struct RadioSourceConfigurationTests {
         #expect(store.savedNow == nil)
     }
 
+    @Test func deletingPlayingCurrentRemovesItAndPausesOnNextEligibleEpisode() async {
+        let deleted = candidate("deleted", priority: 0)
+        let next = candidate("next", priority: 1)
+        let store = FakeRadioSessionStore(snapshot: session([entry(deleted.key), entry(next.key)], current: deleted.key))
+        let repository = FakeRadioEpisodeRepository(candidates: [deleted, next])
+        let coordinator = makeCoordinator(store: store, repository: repository)
+        _ = await coordinator.restore(autoplayEnabled: false)
+        coordinator.setPlaybackStateForTesting(.playing)
+
+        repository.values = [next]
+        let intent = coordinator.sourceConfigurationDidChange(enabledSourceCount: 1)
+
+        #expect(intent == .pause)
+        #expect(coordinator.currentKey == next.key)
+        #expect(coordinator.entries.map(\.key) == [next.key])
+        #expect(coordinator.state == .readyPaused)
+        #expect(store.savedNow?.currentKey == next.key)
+    }
+
+    @Test func deletingPendingSourceRemovesItWithoutInterruptingCurrent() async {
+        let current = candidate("current", priority: 0)
+        let deleted = candidate("deleted", priority: 1)
+        let remaining = candidate("remaining", priority: 2)
+        let store = FakeRadioSessionStore(snapshot: session(
+            [entry(current.key), entry(deleted.key), entry(remaining.key)],
+            current: current.key
+        ))
+        let repository = FakeRadioEpisodeRepository(candidates: [current, deleted, remaining])
+        let coordinator = makeCoordinator(store: store, repository: repository)
+        _ = await coordinator.restore(autoplayEnabled: false)
+        coordinator.setPlaybackStateForTesting(.playing)
+
+        repository.values = [current, remaining]
+        let intent = coordinator.sourceConfigurationDidChange(enabledSourceCount: 2)
+
+        #expect(intent == nil)
+        #expect(coordinator.currentKey == current.key)
+        #expect(coordinator.entries.map(\.key) == [current.key, remaining.key])
+        #expect(coordinator.state == .playing)
+        #expect(store.savedNow?.entries.map(\.key) == [current.key, remaining.key])
+    }
+
+    @Test func successfulAddWorkflowReconcilesFirstSourceWithoutAnotherRefresh() async throws {
+        let added = candidate("added", priority: 0)
+        let store = FakeRadioSessionStore(snapshot: session([], current: nil))
+        let repository = FakeRadioEpisodeRepository(candidates: [])
+        let coordinator = makeCoordinator(store: store, repository: repository)
+        _ = await coordinator.restore(autoplayEnabled: false)
+        #expect(coordinator.state == .noSources)
+
+        let workflow = AddRSSFeedWorkflow { urlString in
+            #expect(urlString == "https://example.com/feed.xml")
+            repository.values = [added]
+        }
+        var callbackCount = 0
+
+        try await workflow.perform(
+            urlString: "https://example.com/feed.xml",
+            onAdded: {
+                callbackCount += 1
+                _ = coordinator.sourceConfigurationDidChange(enabledSourceCount: 1)
+            }
+        )
+
+        #expect(callbackCount == 1)
+        #expect(coordinator.currentKey == added.key)
+        #expect(coordinator.entries.map(\.key) == [added.key])
+        #expect(coordinator.state == .readyPaused)
+        #expect(store.savedNow?.currentKey == added.key)
+    }
+
+    @Test func failedAddWorkflowDoesNotInvokeCallback() async {
+        let workflow = AddRSSFeedWorkflow { _ in
+            throw SourceConfigurationTestError.failed
+        }
+        var callbackInvoked = false
+
+        do {
+            try await workflow.perform(
+                urlString: "https://example.com/feed.xml",
+                onAdded: { callbackInvoked = true }
+            )
+            Issue.record("Expected add workflow to throw")
+        } catch {
+            #expect(error is SourceConfigurationTestError)
+        }
+
+        #expect(!callbackInvoked)
+    }
+
     private func makeCoordinator(
         store: FakeRadioSessionStore,
         repository: FakeRadioEpisodeRepository

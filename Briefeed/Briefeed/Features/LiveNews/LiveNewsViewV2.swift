@@ -343,13 +343,28 @@ struct FeedRowV2: View {
 struct FeedDetailsViewV2: View {
     let feed: RSSFeed
     @Environment(\.dismiss) var dismiss
-    @EnvironmentObject var appViewModel: AppViewModel
-    
+
+    var body: some View {
+        NavigationStack {
+            FeedDetailsContentViewV2(feed: feed)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") {
+                            dismiss()
+                        }
+                    }
+                }
+        }
+    }
+}
+
+struct FeedDetailsContentViewV2: View {
+    let feed: RSSFeed
     @FetchRequest private var episodes: FetchedResults<RSSEpisode>
-    
+
     init(feed: RSSFeed) {
         self.feed = feed
-        
+
         self._episodes = FetchRequest(
             entity: RSSEpisode.entity(),
             sortDescriptors: [NSSortDescriptor(keyPath: \RSSEpisode.pubDate, ascending: false)],
@@ -358,24 +373,16 @@ struct FeedDetailsViewV2: View {
     }
     
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    ForEach(episodes) { episode in
-                        EpisodeRowV2(episode: episode)
-                    }
-                }
-            }
-            .navigationTitle(feed.displayName)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        dismiss()
-                    }
+        List {
+            Section {
+                ForEach(episodes) { episode in
+                    EpisodeRowV2(episode: episode)
                 }
             }
         }
+        .navigationTitle(feed.displayName)
+        .navigationBarTitleDisplayMode(.inline)
+        .accessibilityIdentifier(AccessibilityID.Radio.sourceDetails)
     }
 }
 
@@ -424,12 +431,41 @@ struct EpisodeRowV2: View {
 }
 
 // MARK: - Add RSS Feed View
+struct AddRSSFeedWorkflow {
+    private let addFeed: @MainActor (String) async throws -> Void
+
+    init(addFeed: @escaping @MainActor (String) async throws -> Void = { urlString in
+        try await RSSAudioService.shared.addFeed(from: urlString)
+    }) {
+        self.addFeed = addFeed
+    }
+
+    @MainActor
+    func perform(
+        urlString: String,
+        onAdded: (@MainActor () async -> Void)?
+    ) async throws {
+        try await addFeed(urlString)
+        await onAdded?()
+    }
+}
+
 struct AddRSSFeedViewV2: View {
     @State private var feedURL = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
     @Environment(\.dismiss) var dismiss
-    
+    private let onAdded: (@MainActor () async -> Void)?
+    private let workflow: AddRSSFeedWorkflow
+
+    init(
+        onAdded: (@MainActor () async -> Void)? = nil,
+        workflow: AddRSSFeedWorkflow = AddRSSFeedWorkflow()
+    ) {
+        self.onAdded = onAdded
+        self.workflow = workflow
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -486,7 +522,7 @@ struct AddRSSFeedViewV2: View {
         errorMessage = nil
         
         do {
-            try await RSSAudioService.shared.addFeed(from: feedURL)
+            try await workflow.perform(urlString: feedURL, onAdded: onAdded)
             dismiss()
         } catch {
             errorMessage = "Failed to add feed: \(error.localizedDescription)"

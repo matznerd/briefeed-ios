@@ -83,4 +83,21 @@ final class RadioUITests: XCTestCase {
         sourceSettings.tap()
         XCTAssertTrue(app.navigationBars["Radio Sources"].waitForExistence(timeout: 3))
     }
+
+    @MainActor
+    func testRadioSourceManagementPreservesDetailsAndDeleteAffordances() throws {
+        app.launch()
+        app.buttons["radio.manageSources"].tap()
+        XCTAssertTrue(app.navigationBars["Radio Sources"].waitForExistence(timeout: 3))
+
+        let source = app.buttons["radio.sourceDetail"].firstMatch
+        XCTAssertTrue(source.waitForExistence(timeout: 3))
+        source.swipeLeft()
+        XCTAssertTrue(app.buttons["Delete"].waitForExistence(timeout: 3))
+        source.swipeRight()
+
+        source.tap()
+        let details = app.descendants(matching: .any)["radio.sourceDetails"]
+        XCTAssertTrue(details.waitForExistence(timeout: 3))
+    }
 }
