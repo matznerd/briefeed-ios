@@ -113,6 +113,32 @@ struct RSSRefreshPolicyTests {
         #expect(ids.count == 10)
     }
 
+    @Test @MainActor func failedDefaultFeedSaveLeavesNoDirtyRowsAndRetries() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let context = persistence.container.viewContext
+        var saveAttempts = 0
+        let service = RSSAudioService(
+            viewContext: context,
+            dataLoader: { _ in Data() },
+            saveContext: {
+                saveAttempts += 1
+                if saveAttempts == 1 { throw SaveError.denied }
+                try context.save()
+            }
+        )
+
+        let firstSaved = await service.ensureDefaultFeedsExist()
+        let request: NSFetchRequest<RSSFeed> = RSSFeed.fetchRequest()
+        #expect(!firstSaved)
+        #expect(try context.count(for: request) == 0)
+        #expect(!context.hasChanges)
+
+        let secondSaved = await service.ensureDefaultFeedsExist()
+        #expect(secondSaved)
+        #expect(try context.count(for: request) == 9)
+        #expect(!context.hasChanges)
+    }
+
     private enum SaveError: Error { case denied }
 
     @MainActor private func makeFeed(in context: NSManagedObjectContext, id: String, lastFetchDate: Date? = nil) -> RSSFeed {

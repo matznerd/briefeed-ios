@@ -66,14 +66,23 @@ class RSSAudioService: NSObject, ObservableObject {
     // MARK: - Public Methods
     
     /// Inserts default feed rows only. Network refresh is owned by explicit refresh calls.
-    func ensureDefaultFeedsExist() async {
+    @discardableResult
+    func ensureDefaultFeedsExist() async -> Bool {
         do {
+            let existingDefaultIDs = try Self.existingDefaultFeedIDs(in: viewContext)
             if try Self.insertMissingDefaultFeeds(in: viewContext) {
-                try saveContext()
+                do {
+                    try saveContext()
+                } catch {
+                    Self.discardNewDefaultFeeds(in: viewContext, preserving: existingDefaultIDs)
+                    throw error
+                }
                 loadFeeds()
             }
+            return true
         } catch {
             print("Error creating default feeds: \(error)")
+            return false
         }
     }
 
@@ -94,6 +103,22 @@ class RSSAudioService: NSObject, ObservableObject {
             inserted = true
         }
         return inserted
+    }
+
+    private static func existingDefaultFeedIDs(in context: NSManagedObjectContext) throws -> Set<String> {
+        let request: NSFetchRequest<RSSFeed> = RSSFeed.fetchRequest()
+        let defaults = Set(defaultFeedsConfig.map(\.id))
+        return Set(try context.fetch(request).map(\.id).filter(defaults.contains))
+    }
+
+    private static func discardNewDefaultFeeds(in context: NSManagedObjectContext, preserving existingIDs: Set<String>) {
+        let request: NSFetchRequest<RSSFeed> = RSSFeed.fetchRequest()
+        let defaultIDs = Set(defaultFeedsConfig.map(\.id))
+        guard let feeds = try? context.fetch(request) else { return }
+        for feed in feeds where defaultIDs.contains(feed.id) && !existingIDs.contains(feed.id) {
+            context.delete(feed)
+        }
+        context.processPendingChanges()
     }
     
     @discardableResult
