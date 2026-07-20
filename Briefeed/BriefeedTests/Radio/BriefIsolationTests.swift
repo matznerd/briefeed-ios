@@ -78,6 +78,31 @@ struct BriefIsolationTests {
 
         #expect(!events.values.contains("resume"))
     }
+
+    @Test func viewModelAndAppDefaultSkipsAreTenSeconds() {
+        let brief = FakeBriefQueueCoordinator()
+        let transport = SpyAudioTransport()
+        let radio = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(),
+            repository: RecordingRadioRepository(candidates: []),
+            connectivityStatus: { .online }
+        )
+        let context = PersistenceController(inMemory: true).container.viewContext
+        let player = UnifiedAudioPlayer(
+            audioPlayer: transport,
+            queueCoordinator: brief,
+            radioCoordinator: radio,
+            context: context
+        )
+        let rss = RSSAudioService(viewContext: context, dataLoader: { _ in Data() })
+        let viewModel = AudioPlayerViewModelV2(unifiedPlayer: player, radioCoordinator: radio, rssService: rss)
+        let appViewModel = AppViewModel(audioPlayerViewModel: viewModel)
+
+        appViewModel.skipForward()
+        appViewModel.skipBackward()
+
+        #expect(transport.seeks == [10, 0])
+    }
 }
 
 @MainActor

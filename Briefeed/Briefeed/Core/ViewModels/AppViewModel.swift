@@ -152,11 +152,11 @@ final class AppViewModel: ObservableObject {
     }
     
     func skipForward() {
-        audioPlayerViewModel.skipForward()
+        audioPlayerViewModel.skipForward(10)
     }
     
     func skipBackward() {
-        audioPlayerViewModel.skipBackward()
+        audioPlayerViewModel.skipBackward(10)
     }
     
     func setSpeed(_ speed: Float) {

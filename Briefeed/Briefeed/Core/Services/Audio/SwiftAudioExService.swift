@@ -128,6 +128,8 @@ final class SwiftAudioExService: NSObject, AudioPlaybackTransporting {
     }
 
     func play(id: TransportPlaybackID, url: URL, title: String?, artist: String?) async throws {
+        detachActivePlayer(expectStop: true)
+
         if url.isFileURL, !FileManager.default.fileExists(atPath: url.path) {
             throw NSError(
                 domain: "SwiftAudioEx",
@@ -136,7 +138,6 @@ final class SwiftAudioExService: NSObject, AudioPlaybackTransporting {
             )
         }
 
-        detachActivePlayer(expectStop: true)
         consumedTerminalIDs.remove(id)
         expectedStopIDs.remove(id)
         readyIDs.remove(id)
@@ -288,6 +289,12 @@ final class SwiftAudioExService: NSObject, AudioPlaybackTransporting {
         expectedStopIDs.insert(id)
     }
 
+    func installActivePlaybackForTesting(id: TransportPlaybackID) {
+        detachActivePlayer(expectStop: true)
+        player = AudioPlayer()
+        activePlaybackID = id
+    }
+
     private func consumeTerminal(id: TransportPlaybackID, successfully: Bool, error: Error?) {
         guard !expectedStopIDs.contains(id) else {
             consumedTerminalIDs.insert(id)
@@ -380,16 +387,16 @@ final class SwiftAudioExService: NSObject, AudioPlaybackTransporting {
         NotificationCenter.default.addObserver(self, selector: #selector(handleRouteChange), name: AVAudioSession.routeChangeNotification, object: nil)
     }
 
-    @objc private func handleInterruption(_ notification: Notification) {
+    @objc nonisolated private func handleInterruption(_ notification: Notification) {
         guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+        let rawOptions = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
         switch type {
         case .began:
-            delegate?.audioInterruptionBegan(id: activePlaybackID)
+            enqueueInterruption(began: true, shouldResume: false)
         case .ended:
-            let rawOptions = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
-            delegate?.audioInterruptionEnded(
-                id: activePlaybackID,
+            enqueueInterruption(
+                began: false,
                 shouldResume: AVAudioSession.InterruptionOptions(rawValue: rawOptions).contains(.shouldResume)
             )
         @unknown default:
@@ -397,10 +404,36 @@ final class SwiftAudioExService: NSObject, AudioPlaybackTransporting {
         }
     }
 
-    @objc private func handleRouteChange(_ notification: Notification) {
+    @objc nonisolated private func handleRouteChange(_ notification: Notification) {
         guard let raw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
               AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable else { return }
-        delegate?.audioRouteWasRemoved(id: activePlaybackID)
+        enqueueRouteRemoval()
+    }
+
+    nonisolated func deliverInterruptionForTesting(began: Bool, shouldResume: Bool) {
+        enqueueInterruption(began: began, shouldResume: shouldResume)
+    }
+
+    nonisolated func deliverRouteRemovalForTesting() {
+        enqueueRouteRemoval()
+    }
+
+    nonisolated private func enqueueInterruption(began: Bool, shouldResume: Bool) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if began {
+                delegate?.audioInterruptionBegan(id: activePlaybackID)
+            } else {
+                delegate?.audioInterruptionEnded(id: activePlaybackID, shouldResume: shouldResume)
+            }
+        }
+    }
+
+    nonisolated private func enqueueRouteRemoval() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            delegate?.audioRouteWasRemoved(id: activePlaybackID)
+        }
     }
 
     private func updateNowPlayingInfo(clear: Bool = false) {

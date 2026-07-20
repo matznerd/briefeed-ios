@@ -10,4 +10,5 @@ Task 4: complete (commits 6747586..8e55f65, review clean; simulator runtime proo
 Task 5: complete (commits 8e55f65..db5db93, review clean; hosted tests deferred by simulator safety gate)
 Task 6: complete (commits db5db93..47d444b, review clean; compile green; hosted runtime deferred by simulator safety gate)
 Tasks 7-8: complete (commits ec5195c..HEAD; compile green; hosted runtime deferred by critical simulator safety gate)
+Tasks 7-8 review repair: complete (fresh-ID retry, stale async callback guards, 10-second defaults, replacement teardown, main-actor notification hop; compile green)
 Task 10: implementation complete pending review (compile green; static gates pass; runtime UI and visual evidence deferred by critical simulator safety gate and Task 12 fixtures)

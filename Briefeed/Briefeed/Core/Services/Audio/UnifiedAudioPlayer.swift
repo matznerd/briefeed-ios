@@ -280,6 +280,11 @@ final class UnifiedAudioPlayer: ObservableObject {
     private var consumedPlaybackIDs = Set<TransportPlaybackID>()
     private var briefInterruptionResumeEligible = false
 
+    private struct RadioEventContext: Equatable {
+        let playbackID: TransportPlaybackID
+        let key: RadioEpisodeKey
+    }
+
     /// Cache of Article/Episode Core Data objects by ID for queue rebuilding
     private var articleCache: [UUID: Article] = [:]
     private var episodeCache: [String: RSSEpisode] = [:]
@@ -899,6 +904,12 @@ final class UnifiedAudioPlayer: ObservableObject {
                 audioPlayer.setRate(playbackRate)
             } catch {
                 guard playbackID == activePlaybackID else { return }
+                audioPlayer.stop()
+                activePlaybackID = nil
+                activeRadioKey = nil
+                pendingSeekTime = nil
+                isPlaying = false
+                consumedPlaybackIDs.remove(playbackID)
                 let next = radioCoordinator.playbackFailed(
                     for: request.key,
                     message: error.localizedDescription,
@@ -920,6 +931,31 @@ final class UnifiedAudioPlayer: ObservableObject {
 
     private func cancelDeferredAutoplay() {
         radioCoordinator.cancelPendingColdLaunchAutoplay()
+    }
+
+    private func radioEventContext(callbackID: TransportPlaybackID?) -> RadioEventContext? {
+        guard activeMode == .radio,
+              let playbackID = activePlaybackID,
+              let key = activeRadioKey,
+              callbackID == nil || callbackID == playbackID else { return nil }
+        return RadioEventContext(playbackID: playbackID, key: key)
+    }
+
+    private func isCurrent(_ context: RadioEventContext) -> Bool {
+        activeMode == .radio
+            && activePlaybackID == context.playbackID
+            && activeRadioKey == context.key
+    }
+
+    private func scheduleRadioEvent(
+        _ context: RadioEventContext,
+        operation: @escaping @MainActor (RadioSessionCoordinating) -> RadioPlaybackIntent?
+    ) {
+        Task { @MainActor [weak self] in
+            guard let self, self.isCurrent(context) else { return }
+            let intent = operation(self.radioCoordinator)
+            await self.execute(intent)
+        }
     }
 
     private func updateRemoteAvailability() {
@@ -1448,9 +1484,9 @@ final class UnifiedAudioPlayer: ObservableObject {
     
     private func startProgressTimer() {
         playbackProgressTimer?.invalidate()
-        playbackProgressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            Task { @MainActor in
-                self.updateProgress()
+        playbackProgressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateProgress()
             }
         }
     }
@@ -1515,7 +1551,8 @@ extension UnifiedAudioPlayer: SwiftAudioExServiceDelegate {
                 positionSeconds: currentTime,
                 duration: duration > 0 ? duration : nil
             ) {
-                Task { @MainActor in await execute(intent) }
+                guard let context = radioEventContext(callbackID: id) else { return }
+                scheduleRadioEvent(context) { _ in intent }
             }
         case .brief:
             queueCoordinator.updateCurrentPosition(currentTime)
@@ -1527,27 +1564,36 @@ extension UnifiedAudioPlayer: SwiftAudioExServiceDelegate {
     func audioDidFinishPlaying(id: TransportPlaybackID, successfully: Bool) {
         guard id == activePlaybackID, consumedPlaybackIDs.insert(id).inserted else { return }
         isPlaying = false
-        if activeMode == .radio, let key = activeRadioKey {
-            let intent = successfully
-                ? radioCoordinator.playbackCompleted(for: key, at: Date())
-                : radioCoordinator.playbackFailed(
-                    for: key,
-                    message: "Audio playback failed",
-                    positionSeconds: currentTime,
-                    duration: duration > 0 ? duration : nil,
-                    connectivity: radioCoordinator.currentConnectivityStatus
-                )
-            Task { @MainActor in await execute(intent) }
+        if let context = radioEventContext(callbackID: id) {
+            let completedAt = Date()
+            let position = currentTime
+            let knownDuration = duration > 0 ? duration : nil
+            scheduleRadioEvent(context) { coordinator in
+                successfully
+                    ? coordinator.playbackCompleted(for: context.key, at: completedAt)
+                    : coordinator.playbackFailed(
+                        for: context.key,
+                        message: "Audio playback failed",
+                        positionSeconds: position,
+                        duration: knownDuration,
+                        connectivity: coordinator.currentConnectivityStatus
+                    )
+            }
         } else if successfully, activeMode == .brief {
-            Task { @MainActor in await handleTrackFinished() }
+            Task { @MainActor [weak self] in
+                guard let self, self.activeMode == .brief, self.activePlaybackID == id else { return }
+                await self.handleTrackFinished()
+            }
         }
     }
 
     func audioInterruptionBegan(id: TransportPlaybackID?) {
         guard id == nil || id == activePlaybackID else { return }
-        if activeMode == .radio {
-            Task { @MainActor in
-                await execute(radioCoordinator.handleInterruptionBegan(positionSeconds: currentTime, duration: duration > 0 ? duration : nil))
+        if let context = radioEventContext(callbackID: id) {
+            let position = currentTime
+            let knownDuration = duration > 0 ? duration : nil
+            scheduleRadioEvent(context) { coordinator in
+                coordinator.handleInterruptionBegan(positionSeconds: position, duration: knownDuration)
             }
         } else if activeMode == .brief {
             briefInterruptionResumeEligible = isPlaying
@@ -1559,8 +1605,10 @@ extension UnifiedAudioPlayer: SwiftAudioExServiceDelegate {
 
     func audioInterruptionEnded(id: TransportPlaybackID?, shouldResume: Bool) {
         guard id == nil || id == activePlaybackID else { return }
-        if activeMode == .radio {
-            Task { @MainActor in await execute(radioCoordinator.handleInterruptionEnded(shouldResume: shouldResume)) }
+        if let context = radioEventContext(callbackID: id) {
+            scheduleRadioEvent(context) { coordinator in
+                coordinator.handleInterruptionEnded(shouldResume: shouldResume)
+            }
         } else if activeMode == .brief {
             let resumeEligible = briefInterruptionResumeEligible
             briefInterruptionResumeEligible = false
@@ -1570,9 +1618,11 @@ extension UnifiedAudioPlayer: SwiftAudioExServiceDelegate {
 
     func audioRouteWasRemoved(id: TransportPlaybackID?) {
         guard id == nil || id == activePlaybackID else { return }
-        if activeMode == .radio {
-            Task { @MainActor in
-                await execute(radioCoordinator.handleRouteRemoval(positionSeconds: currentTime, duration: duration > 0 ? duration : nil))
+        if let context = radioEventContext(callbackID: id) {
+            let position = currentTime
+            let knownDuration = duration > 0 ? duration : nil
+            scheduleRadioEvent(context) { coordinator in
+                coordinator.handleRouteRemoval(positionSeconds: position, duration: knownDuration)
             }
         } else if activeMode == .brief {
             queueCoordinator.updateCurrentPosition(currentTime)

@@ -244,11 +244,11 @@ final class AudioPlayerViewModelV2: ObservableObject {
         unifiedPlayer.stop()
     }
     
-    func skipForward(_ seconds: TimeInterval = 30) {
+    func skipForward(_ seconds: TimeInterval = 10) {
         unifiedPlayer.skipForward(seconds)
     }
     
-    func skipBackward(_ seconds: TimeInterval = 15) {
+    func skipBackward(_ seconds: TimeInterval = 10) {
         unifiedPlayer.skipBackward(seconds)
     }
     

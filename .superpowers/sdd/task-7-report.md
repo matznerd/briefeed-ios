@@ -25,3 +25,11 @@
 - `bash skills/app-testing/scripts/run-radio.sh radio-transport unit` stopped at the current fleet safety preflight: host pressure was critical (`swap_free=818MB`, load 76) and Simulator.app was open. It did not claim, boot, reuse, stop, or override a simulator.
 - Removal gates found no private transport queue/navigation methods and no low-level queue navigation call sites.
 - `git diff --check` passed.
+
+## Review Repair
+
+- Replacement now detaches the old SwiftAudioEx player before local-file validation, so a rejected replacement cannot leave stale playback active.
+- AVAudioSession notification selectors are nonisolated and enqueue all delegate/state access onto the main actor.
+- Unified progress timing now weakly captures the player, and default transport skips resolve explicitly to 10 seconds through both view-model layers.
+- Added regression coverage for rejected local replacement and off-main interruption/route delivery.
+- Fresh `make radio-compile` passed with `TEST BUILD SUCCEEDED`; the hosted unit lane was safely refused because Simulator.app remained open after the fleet-prescribed hide step.
