@@ -360,9 +360,9 @@ struct MiniAudioPlayerV4: View {
                     }
                 }
                 .frame(width: 36, height: 36)
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
             }
-            .frame(width: 44, height: 44)
             .buttonStyle(.plain)
             .accessibilityLabel("Open player")
             .accessibilityIdentifier(AccessibilityID.MiniPlayer.expand)
@@ -381,8 +381,9 @@ struct MiniAudioPlayerV4: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                 }
-                .frame(minHeight: 44)
                 .buttonStyle(.plain)
                 .accessibilityIdentifier(AccessibilityID.MiniPlayer.title)
 

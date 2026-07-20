@@ -94,3 +94,29 @@ SIMULATOR_APP=open
 NEXT: sim-gui.sh hide
 make: *** [radio-unit] Error 1
 ```
+
+## Brief Interoperability Re-review
+
+The second review found three Brief-to-Radio handoff defects. New behavioral coverage now requires restored Brief presentation and pre-play ten-second seeks to originate at `BriefQueueCoordinating.currentPosition`, requires both direct and remote Play to load the effective current item through one async entry point, and requires final Brief removal to release stale transport ownership so an available restored Radio episode immediately becomes effective. A deterministic injected completion delay keeps the completion regression free of arbitrary sleeps. The expand and title hit regions also now place their 44-point frame and `contentShape` inside each Button label.
+
+RED:
+
+```text
+make radio-compile
+RadioPlayerPresentationTests.swift: UnifiedAudioPlayer has no member 'beginEffectiveCurrent'
+RadioPlayerPresentationTests.swift: extra argument 'briefCompletionDelay' in call
+** TEST BUILD FAILED **
+REREVIEW_RED_EXIT=2
+```
+
+GREEN:
+
+```text
+make radio-compile
+** TEST BUILD SUCCEEDED **
+REREVIEW_GREEN1_EXIT=0
+```
+
+The final scoped diff was compiled again immediately before landing and also completed with `** TEST BUILD SUCCEEDED **`.
+
+The focused runtime lane was requested again through the safe fleet adapter and remained blocked before simulator ownership because `SIMULATOR_APP=open`. No override or GUI mutation was attempted.

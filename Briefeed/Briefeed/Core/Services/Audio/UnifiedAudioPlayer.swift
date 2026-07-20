@@ -224,6 +224,7 @@ final class UnifiedAudioPlayer: ObservableObject {
     private let pipelineTimer = PipelineTimer.shared
     private let context: NSManagedObjectContext
     private let persistPlaybackRate: @MainActor (Float) -> Void
+    private let briefCompletionDelay: @MainActor () async -> Void
 
     var radioSessionCoordinator: RadioSessionCoordinating { radioCoordinator }
 
@@ -261,7 +262,7 @@ final class UnifiedAudioPlayer: ObservableObject {
     }
 
     var presentationPosition: TimeInterval {
-        effectivePlaybackMode == .radio ? radioControlPosition : finiteNonnegative(currentTime)
+        effectiveControlPosition
     }
 
     var presentationDuration: TimeInterval {
@@ -324,6 +325,9 @@ final class UnifiedAudioPlayer: ObservableObject {
         context: NSManagedObjectContext,
         persistPlaybackRate: @escaping @MainActor (Float) -> Void = {
             UserDefaultsManager.shared.playbackSpeed = $0
+        },
+        briefCompletionDelay: @escaping @MainActor () async -> Void = {
+            try? await Task.sleep(for: .milliseconds(500))
         }
     ) {
         self.audioPlayer = audioPlayer
@@ -331,6 +335,7 @@ final class UnifiedAudioPlayer: ObservableObject {
         self.radioCoordinator = radioCoordinator
         self.context = context
         self.persistPlaybackRate = persistPlaybackRate
+        self.briefCompletionDelay = briefCompletionDelay
         setupAudioPlayer()
         setupQueueCoordinatorBindings()
         setupRadioBindings()
@@ -703,8 +708,8 @@ final class UnifiedAudioPlayer: ObservableObject {
             // Bookmarked items stay in queue — just advance
             await playNext()
         } else {
-            // Wait 500ms so user sees the "listened" state before the fling
-            try? await Task.sleep(for: .milliseconds(500))
+            // Briefly leave the completed state visible before removing the row.
+            await briefCompletionDelay()
 
             // Guard: verify state hasn't changed during the delay
             guard currentIndex == finishedIndex,
@@ -724,10 +729,14 @@ final class UnifiedAudioPlayer: ObservableObject {
             if currentIndex >= 0 && currentIndex < queueCoordinator.queue.count {
                 await play(at: currentIndex)
             } else {
+                activeMode = .none
+                activePlaybackID = nil
+                activeRadioKey = nil
                 isPlaying = false
                 currentTime = 0
                 duration = 0
                 pendingSeekTime = nil
+                updateRemoteAvailability()
             }
         }
     }
@@ -768,12 +777,27 @@ final class UnifiedAudioPlayer: ObservableObject {
     
     /// Resume playback
     func resume() {
+        Task { @MainActor in await beginEffectiveCurrent() }
+    }
+
+    /// Starts the logical current item, loading it first when a restored session
+    /// has no active transport item yet.
+    func beginEffectiveCurrent() async {
         cancelDeferredAutoplay()
-        if effectivePlaybackMode == .radio {
-            Task { @MainActor in await execute(radioCoordinator.beginCurrent()) }
-        } else {
-            audioPlayer.resume()
-            isPlaying = true
+        switch effectivePlaybackMode {
+        case .radio:
+            await execute(radioCoordinator.beginCurrent())
+        case .brief:
+            if activeMode == .brief, activePlaybackID != nil {
+                audioPlayer.resume()
+                isPlaying = true
+            } else {
+                let index = currentIndex >= 0 ? currentIndex : 0
+                guard queue.indices.contains(index) else { return }
+                await play(at: index)
+            }
+        case .none:
+            break
         }
     }
     
@@ -822,14 +846,14 @@ final class UnifiedAudioPlayer: ObservableObject {
     
     /// Skip forward
     func skipForward(_ seconds: TimeInterval = 10) {
-        let position = effectivePlaybackMode == .radio ? radioControlPosition : currentTime
+        let position = effectiveControlPosition
         let knownDuration = effectivePlaybackMode == .radio ? (radioControlDuration ?? 0) : duration
         seek(to: min(position + seconds, knownDuration > 0 ? knownDuration : position + seconds))
     }
     
     /// Skip backward
     func skipBackward(_ seconds: TimeInterval = 10) {
-        let position = effectivePlaybackMode == .radio ? radioControlPosition : currentTime
+        let position = effectiveControlPosition
         seek(to: max(position - seconds, 0))
     }
 
@@ -1558,6 +1582,17 @@ final class UnifiedAudioPlayer: ObservableObject {
         )
     }
 
+    private var effectiveControlPosition: TimeInterval {
+        switch effectivePlaybackMode {
+        case .radio:
+            return radioControlPosition
+        case .brief where activeMode == .none:
+            return finiteNonnegative(queueCoordinator.currentPosition)
+        case .brief, .none:
+            return finiteNonnegative(currentTime)
+        }
+    }
+
     private var radioControlDuration: TimeInterval? {
         let candidate = activeMode == .radio && duration.isFinite && duration > 0
             ? duration
@@ -1719,7 +1754,7 @@ extension UnifiedAudioPlayer: SwiftAudioExServiceDelegate {
         }
     }
 
-    func audioRequestPlay() { resume() }
+    func audioRequestPlay() { Task { @MainActor in await beginEffectiveCurrent() } }
     func audioRequestPause() { pause() }
     func audioRequestSeek(to seconds: TimeInterval) { seek(to: seconds) }
     func audioRequestSkipBackward(seconds: TimeInterval) { skipBackward(seconds) }

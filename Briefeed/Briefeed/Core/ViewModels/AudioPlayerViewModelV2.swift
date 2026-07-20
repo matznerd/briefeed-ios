@@ -262,45 +262,17 @@ final class AudioPlayerViewModelV2: ObservableObject {
     func togglePlayPause() {
         if isPlaying {
             unifiedPlayer.pause()
-        } else if activeMode == .none {
-            Task { await play() }
         } else {
-            unifiedPlayer.resume()
+            Task { await play() }
         }
     }
     
     func play() async {
-        if effectivePlaybackMode == .radio {
-            await unifiedPlayer.playRadio()
-            return
-        }
-        if activeMode == .none {
-            let indexToPlay = currentQueueIndex >= 0 ? currentQueueIndex : 0
-            guard indexToPlay >= 0, indexToPlay < queueItems.count else { return }
-            isLoading = true
-            lastError = nil
-            await Task.yield()
-            defer { isLoading = false }
-            await unifiedPlayer.play(at: indexToPlay)
-            return
-        }
-        if currentTitle != nil {
-            unifiedPlayer.resume()
-            return
-        }
-
-        let indexToPlay = currentQueueIndex >= 0 ? currentQueueIndex : 0
-        guard indexToPlay >= 0, indexToPlay < queueItems.count else {
-            unifiedPlayer.resume()
-            return
-        }
-
         isLoading = true
         lastError = nil
         await Task.yield()
         defer { isLoading = false }
-
-        await unifiedPlayer.play(at: indexToPlay)
+        await unifiedPlayer.beginEffectiveCurrent()
     }
     
     func pause() {

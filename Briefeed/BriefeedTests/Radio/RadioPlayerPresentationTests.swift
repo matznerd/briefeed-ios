@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Testing
 @testable import Briefeed
 
@@ -209,6 +210,79 @@ struct RadioPlayerPresentationTests {
         #expect(!transportEvents.contains("resume"))
     }
 
+    @Test func restoredBriefPositionDrivesPresentationAndPreplayTenSecondSeeks() async {
+        let setup = await makeBriefOnlyPlayer(position: 52)
+
+        #expect(setup.player.activeMode == .none)
+        #expect(setup.player.presentationPosition == 52)
+        #expect(setup.viewModel.playerPresentation.position == 52)
+
+        setup.player.skipForward()
+        #expect(setup.brief.currentPosition == 62)
+        #expect(setup.player.presentationPosition == 62)
+        #expect(setup.transport.seeks.isEmpty)
+
+        setup.player.skipBackward()
+        #expect(setup.brief.currentPosition == 52)
+        #expect(setup.player.presentationPosition == 52)
+    }
+
+    @Test func directAndRemoteBeginLoadAnEffectiveBriefInsteadOfResumingEmptyTransport() async throws {
+        let direct = await makeBriefOnlyPlayer(position: 18)
+        await direct.player.beginEffectiveCurrent()
+        #expect(try #require(direct.transport.loads.last?.1).absoluteString == "https://example.com/brief.mp3")
+        direct.player.audioItemReady(id: try #require(direct.transport.lastPlaybackID), duration: 300)
+        #expect(direct.transport.seeks.last == 18)
+
+        let remote = await makeBriefOnlyPlayer(position: 24)
+        remote.player.audioRequestPlay()
+        for _ in 0..<10 { await Task.yield() }
+        #expect(try #require(remote.transport.loads.last?.1).absoluteString == "https://example.com/brief.mp3")
+    }
+
+    @Test func finalBriefCompletionReleasesTransportSoRestoredRadioBecomesEffective() async throws {
+        let episode = candidate("radio", title: "Radio episode")
+        let radio = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(snapshot: PersistedRadioSession(
+                schemaVersion: PersistedRadioSession.schemaVersion,
+                entries: [RadioQueueEntry(
+                    key: episode.key,
+                    positionSeconds: 31,
+                    disposition: .pending,
+                    playbackFailureCount: 0,
+                    lastPlaybackError: nil
+                )],
+                currentKey: episode.key,
+                savedAt: .now
+            )),
+            repository: RecordingRadioRepository(candidates: [episode]),
+            connectivityStatus: { .online }
+        )
+        _ = await radio.restore(autoplayEnabled: false)
+        let brief = RemovingBriefQueueCoordinator(item: briefItem)
+        let transport = SpyAudioTransport()
+        let context = PersistenceController(inMemory: true).container.viewContext
+        let player = UnifiedAudioPlayer(
+            audioPlayer: transport,
+            queueCoordinator: brief,
+            radioCoordinator: radio,
+            context: context,
+            persistPlaybackRate: { _ in },
+            briefCompletionDelay: {}
+        )
+        await Task.yield()
+        await player.play(at: 0)
+        let playbackID = try #require(transport.lastPlaybackID)
+
+        player.audioDidFinishPlaying(id: playbackID, successfully: true)
+        for _ in 0..<10 { await Task.yield() }
+
+        #expect(brief.queue.isEmpty)
+        #expect(player.activeMode == .none)
+        #expect(player.effectivePlaybackMode == .radio)
+        #expect(player.presentationPosition == 31)
+    }
+
     @Test func unavailableSurfaceExposesNoPlaybackOrSeekActions() async {
         let radio = RadioSessionCoordinator(
             store: FakeRadioSessionStore(),
@@ -305,6 +379,39 @@ struct RadioPlayerPresentationTests {
         return (viewModel, player, radio, repository, brief, transport)
     }
 
+    private func makeBriefOnlyPlayer(position: TimeInterval) async -> (
+        viewModel: AudioPlayerViewModelV2,
+        player: UnifiedAudioPlayer,
+        brief: FakeBriefQueueCoordinator,
+        transport: SpyAudioTransport
+    ) {
+        let radio = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(),
+            repository: RecordingRadioRepository(candidates: []),
+            connectivityStatus: { .online }
+        )
+        let brief = FakeBriefQueueCoordinator(currentPosition: position)
+        let transport = SpyAudioTransport()
+        let context = PersistenceController(inMemory: true).container.viewContext
+        let player = UnifiedAudioPlayer(
+            audioPlayer: transport,
+            queueCoordinator: brief,
+            radioCoordinator: radio,
+            context: context,
+            persistPlaybackRate: { _ in }
+        )
+        let viewModel = AudioPlayerViewModelV2(
+            unifiedPlayer: player,
+            radioCoordinator: radio,
+            rssService: RSSAudioService(viewContext: context, dataLoader: { _ in Data() }),
+            playbackSpeedLoad: { 1 }
+        )
+        brief.queue = [briefItem]
+        brief.currentIndex = 0
+        await Task.yield()
+        return (viewModel, player, brief, transport)
+    }
+
     private func candidate(_ id: String, title: String) -> RadioEpisodeCandidate {
         RadioEpisodeCandidate(
             key: .init(feedID: "npr", episodeID: id),
@@ -338,4 +445,44 @@ struct RadioPlayerPresentationTests {
             isListened: false
         )
     }
+}
+
+@MainActor
+private final class RemovingBriefQueueCoordinator: BriefQueueCoordinating {
+    var queue: [QueueItem] { didSet { queueSubject.send(queue) } }
+    var currentIndex: Int { didSet { indexSubject.send(currentIndex) } }
+    var currentPosition: TimeInterval = 0
+    var currentItem: QueueItem? {
+        guard currentIndex >= 0, currentIndex < queue.count else { return nil }
+        return queue[currentIndex]
+    }
+    var itemCount: Int { queue.count }
+    private let queueSubject: CurrentValueSubject<[QueueItem], Never>
+    private let indexSubject: CurrentValueSubject<Int, Never>
+    var queuePublisher: AnyPublisher<[QueueItem], Never> { queueSubject.eraseToAnyPublisher() }
+    var currentIndexPublisher: AnyPublisher<Int, Never> { indexSubject.eraseToAnyPublisher() }
+
+    init(item: QueueItem) {
+        queue = [item]
+        currentIndex = 0
+        queueSubject = CurrentValueSubject([item])
+        indexSubject = CurrentValueSubject(0)
+    }
+
+    func addArticle(_ article: Article, playNow: Bool, playNext: Bool) {}
+    func addEpisode(_ episode: RSSEpisode, playNow: Bool, playNext: Bool) {}
+    func removeItem(at index: Int) {}
+    func clearQueue() { queue = []; currentIndex = -1 }
+    func setCurrentIndex(_ index: Int) { currentIndex = index }
+    func updateCurrentPosition(_ position: TimeInterval) { currentPosition = position }
+    func markCurrentAsListened() {}
+    func updateCachedAudioURL(for itemID: UUID, url: URL?) {}
+    func markItemFailed(for itemID: UUID, error: String) {}
+    func autoRemoveIfListened(at index: Int) -> UUID? {
+        guard queue.indices.contains(index) else { return nil }
+        let id = queue.remove(at: index).id
+        currentIndex = queue.isEmpty ? -1 : min(index, queue.count - 1)
+        return id
+    }
+    func saveStateNow() {}
 }
