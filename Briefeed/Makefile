@@ -9,7 +9,7 @@
 #   make clean         - Clean build artifacts
 #   make install-tools - Install agent development tools
 
-.PHONY: build test test-ui test-unit run clean install-tools lint help screenshot ui-tree tap
+.PHONY: build test test-ui test-unit run clean install-tools lint help screenshot ui-tree tap radio-compile radio-golden radio-unit radio-ui radio-smoke sim-doctor sim-status
 
 # ┌─────────────────────────────────────────────┐
 # │  PROJECT CONFIGURATION                       │
@@ -155,3 +155,28 @@ lint:
 	else \
 		echo "SwiftLint not installed. Run: brew install swiftlint"; \
 	fi
+
+APP_TEST_ENGINE := $(HOME)/ericode/skills/app-testing/scripts
+RADIO_SIM_CONFIG := $(CURDIR)/skills/app-testing/config.sh
+
+radio-compile:
+	xcodebuild build-for-testing -project Briefeed.xcodeproj -scheme Briefeed -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/briefeed-radio-compile CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO
+
+radio-golden:
+	AGENT_SIM_CONFIG=$(RADIO_SIM_CONFIG) bash $(APP_TEST_ENGINE)/sim-doctor.sh --gc
+	AGENT_SIM_CONFIG=$(RADIO_SIM_CONFIG) bash $(APP_TEST_ENGINE)/sim-golden.sh refresh
+
+radio-unit:
+	bash skills/app-testing/scripts/run-radio.sh radio-unit unit
+
+radio-ui:
+	bash skills/app-testing/scripts/run-radio.sh radio-ui ui
+
+radio-smoke:
+	bash skills/app-testing/scripts/run-radio.sh radio-smoke smoke
+
+sim-doctor:
+	AGENT_SIM_CONFIG=$(RADIO_SIM_CONFIG) bash $(APP_TEST_ENGINE)/sim-doctor.sh --gc
+
+sim-status:
+	bash $(APP_TEST_ENGINE)/sim-status.sh

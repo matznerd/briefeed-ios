@@ -8,7 +8,15 @@
 import CoreData
 
 struct PersistenceController {
-    static let shared = PersistenceController()
+    static let shared: PersistenceController = {
+        let storeURL = AppRuntime.radioFixtureScenario == nil
+            ? nil
+            : Self.applicationSupportStoreURL(named: "Briefeed-RadioUITests.sqlite")
+        return PersistenceController(
+            storeURL: storeURL,
+            resetStore: AppRuntime.shouldResetRadioFixtureStore
+        )
+    }()
 
     @MainActor
     static let preview: PersistenceController = {
@@ -73,17 +81,18 @@ struct PersistenceController {
 
     var container: NSPersistentContainer
 
-    init(inMemory: Bool = false) {
+    init(inMemory: Bool = false, storeURL: URL? = nil, resetStore: Bool = false) {
         container = NSPersistentContainer(name: "Briefeed")
         if inMemory {
             container.persistentStoreDescriptions.first!.url = URL(fileURLWithPath: "/dev/null")
+        } else if let storeURL {
+            container.persistentStoreDescriptions.first!.url = storeURL
+            if resetStore {
+                Self.removeStoreFiles(at: storeURL)
+            }
         }
-        
-        // Enable automatic lightweight migration
-        if let description = container.persistentStoreDescriptions.first {
-            description.setOption(true as NSNumber, forKey: NSMigratePersistentStoresAutomaticallyOption)
-            description.setOption(true as NSNumber, forKey: NSInferMappingModelAutomaticallyOption)
-        }
+
+        Self.configureMigration(for: container)
         
         // Load the persistent stores
         var loadError: NSError?
@@ -103,13 +112,7 @@ struct PersistenceController {
                 if let storeURL = container.persistentStoreDescriptions.first?.url {
                     do {
                         // Remove the existing store
-                        try FileManager.default.removeItem(at: storeURL)
-                        
-                        // Also remove journal files
-                        let walURL = storeURL.appendingPathExtension("sqlite-wal")
-                        let shmURL = storeURL.appendingPathExtension("sqlite-shm")
-                        try? FileManager.default.removeItem(at: walURL)
-                        try? FileManager.default.removeItem(at: shmURL)
+                        Self.removeStoreFiles(at: storeURL)
                         
                         print("✅ Removed old store, recreating...")
                         
@@ -117,7 +120,10 @@ struct PersistenceController {
                         let newContainer = NSPersistentContainer(name: "Briefeed")
                         if inMemory {
                             newContainer.persistentStoreDescriptions.first!.url = URL(fileURLWithPath: "/dev/null")
+                        } else {
+                            newContainer.persistentStoreDescriptions.first!.url = storeURL
                         }
+                        Self.configureMigration(for: newContainer)
                         
                         newContainer.loadPersistentStores { _, retryError in
                             if let retryError = retryError {
@@ -141,5 +147,30 @@ struct PersistenceController {
         }
         
         container.viewContext.automaticallyMergesChangesFromParent = true
+    }
+
+    private static func applicationSupportStoreURL(named name: String) -> URL {
+        let directory = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        )[0]
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent(name)
+    }
+
+    private static func configureMigration(for container: NSPersistentContainer) {
+        guard let description = container.persistentStoreDescriptions.first else { return }
+        description.setOption(true as NSNumber, forKey: NSMigratePersistentStoresAutomaticallyOption)
+        description.setOption(true as NSNumber, forKey: NSInferMappingModelAutomaticallyOption)
+    }
+
+    private static func removeStoreFiles(at storeURL: URL) {
+        for url in [
+            storeURL,
+            URL(fileURLWithPath: storeURL.path + "-wal"),
+            URL(fileURLWithPath: storeURL.path + "-shm")
+        ] {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 }
