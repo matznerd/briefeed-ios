@@ -118,6 +118,38 @@ struct RadioRuntimeTests {
         #expect(runtime.radioFixtureScenario == nil)
         #expect(!runtime.usesIsolatedRadioStore)
     }
+
+    @Test func existingHostedTestOverrideStillSkipsStartup() {
+        let runtime = AppRuntime.Configuration(
+            arguments: ["Briefeed"],
+            environment: ["BRIEFEED_FORCE_HOSTED_XCTEST": "1"]
+        )
+        #expect(runtime.shouldSkipAutomaticStartupWork)
+    }
+
+    @Test func resettingExplicitStoreRemovesPreviouslySavedObjects() throws {
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Briefeed-RadioRuntime-\(UUID().uuidString).sqlite")
+        defer {
+            for url in [
+                storeURL,
+                URL(fileURLWithPath: storeURL.path + "-wal"),
+                URL(fileURLWithPath: storeURL.path + "-shm")
+            ] {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+
+        let initial = PersistenceController(storeURL: storeURL)
+        let feed = Feed(context: initial.container.viewContext)
+        feed.id = UUID()
+        feed.name = "sentinel"
+        try initial.container.viewContext.save()
+
+        let reset = PersistenceController(storeURL: storeURL, resetStore: true)
+        let request = Feed.fetchRequest()
+        #expect(try reset.container.viewContext.count(for: request) == 0)
+    }
 }
 ```
 
@@ -167,20 +199,35 @@ extension AppRuntime {
 
         var usesIsolatedRadioStore: Bool { radioFixtureScenario != nil }
 
+        var isHostedXCTestEnvironment: Bool {
+            environment["BRIEFEED_FORCE_HOSTED_XCTEST"] == "1"
+                || environment["XCTestConfigurationFilePath"] != nil
+        }
+
         var shouldSkipAutomaticStartupWork: Bool {
             usesIsolatedRadioStore
                 || environment["BRIEFEED_DISABLE_AUTOMATIC_STARTUP"] == "1"
-                || environment["XCTestConfigurationFilePath"] != nil
+                || isHostedXCTestEnvironment
         }
     }
 
     static let configuration = Configuration()
+    static var isHostedXCTest: Bool {
+        configuration.isHostedXCTestEnvironment
+            || Bundle.allBundles.contains { bundle in
+                let path = bundle.bundlePath
+                return path.hasSuffix(".xctest") && !path.contains("UITests")
+            }
+    }
     static var radioFixtureScenario: String? { configuration.radioFixtureScenario }
     static var shouldResetRadioFixtureStore: Bool { configuration.shouldResetRadioFixtureStore }
+    static var shouldSkipAutomaticStartupWork: Bool {
+        configuration.shouldSkipAutomaticStartupWork || isHostedXCTest
+    }
 }
 ```
 
-Change `PersistenceController` to accept an explicit store URL and delete only that store plus its WAL/SHM when `resetStore` is true. Initialize `shared` with `Briefeed-RadioUITests.sqlite` under Application Support only when `AppRuntime.radioFixtureScenario != nil`; production continues using `Briefeed.sqlite` unchanged.
+Change `PersistenceController` to accept an explicit store URL and delete only that store plus its `-wal`/`-shm` siblings when `resetStore` is true. Initialize `shared` with `Briefeed-RadioUITests.sqlite` under Application Support only when `AppRuntime.radioFixtureScenario != nil`; production continues using `Briefeed.sqlite` unchanged. Preserve the existing loaded-unit-test-bundle fallback and `BRIEFEED_FORCE_HOSTED_XCTEST` behavior.
 
 - [ ] **Step 4: Add the thin fleet adapter**
 
