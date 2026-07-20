@@ -1,6 +1,11 @@
 import CoreData
 import SwiftUI
 
+enum RadioFailureRecoveryAction: Equatable {
+    case refreshSources
+    case retryPlayback
+}
+
 enum RadioHomePresentation {
     static func showsDegradedBanner(
         state: RadioSessionState,
@@ -22,6 +27,15 @@ enum RadioHomePresentation {
         isPlaying: Bool
     ) -> String {
         activeMode == .radio && isPlaying ? "Pause Radio" : "Play Radio"
+    }
+
+    static func failureRecovery(for failure: RadioFailure) -> RadioFailureRecoveryAction {
+        switch failure {
+        case .allSourcesUnavailable:
+            .refreshSources
+        case .playback, .persistence:
+            .retryPlayback
+        }
     }
 }
 
@@ -81,6 +95,13 @@ struct RadioHomeView: View {
                 }
             }
         }
+        #if DEBUG
+        .overlay(alignment: .topLeading) {
+            if AppRuntime.radioFixtureScenario != nil {
+                RadioFixtureDiagnosticsAccessibilityView()
+            }
+        }
+        #endif
     }
 
     private var isRadioActivelyPlaying: Bool {
@@ -216,14 +237,22 @@ struct RadioHomeView: View {
             }
 
         case .failed(let failure):
+            let recovery = RadioHomePresentation.failureRecovery(for: failure)
             stateMessage(
                 icon: "exclamationmark.triangle",
                 title: "Radio needs attention",
                 detail: failureMessage(failure),
-                actionTitle: "Retry",
-                actionID: AccessibilityID.Radio.retry
+                actionTitle: recovery == .refreshSources ? "Refresh" : "Retry",
+                actionID: recovery == .refreshSources
+                    ? AccessibilityID.Radio.refresh
+                    : AccessibilityID.Radio.retry
             ) {
-                await audioPlayerViewModel.retryRadio()
+                switch recovery {
+                case .refreshSources:
+                    await audioPlayerViewModel.refreshRadio()
+                case .retryPlayback:
+                    await audioPlayerViewModel.retryRadio()
+                }
             }
         }
     }
@@ -316,6 +345,22 @@ struct RadioHomeView: View {
         }
     }
 }
+
+#if DEBUG
+private struct RadioFixtureDiagnosticsAccessibilityView: View {
+    @ObservedObject private var diagnostics = RadioFixtureDiagnostics.shared
+
+    var body: some View {
+        Rectangle()
+            .fill(.clear)
+            .frame(width: 1, height: 1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Radio fixture diagnostics")
+            .accessibilityValue(diagnostics.accessibilityValue)
+            .accessibilityIdentifier(AccessibilityID.Radio.fixtureDiagnostics)
+    }
+}
+#endif
 
 struct RadioSourceManagementView: View {
     @EnvironmentObject private var audioPlayerViewModel: AudioPlayerViewModelV2

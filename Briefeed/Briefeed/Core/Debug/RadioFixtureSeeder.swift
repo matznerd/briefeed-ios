@@ -4,6 +4,32 @@ import Combine
 import CoreData
 import Foundation
 
+@MainActor
+final class RadioFixtureDiagnostics: ObservableObject {
+    static let shared = RadioFixtureDiagnostics()
+
+    @Published private(set) var bootstrapPlayIntentCount = 0
+    @Published private(set) var refreshInvocationCount = 0
+
+    var accessibilityValue: String {
+        "bootstrapPlayIntents=\(bootstrapPlayIntentCount);refreshInvocations=\(refreshInvocationCount)"
+    }
+
+    func reset() {
+        bootstrapPlayIntentCount = 0
+        refreshInvocationCount = 0
+    }
+
+    func recordBootstrapExecution(of intent: RadioPlaybackIntent?) {
+        guard case .play = intent else { return }
+        bootstrapPlayIntentCount += 1
+    }
+
+    func recordRefreshInvocation() {
+        refreshInvocationCount += 1
+    }
+}
+
 enum RadioFixtureScenario: String, CaseIterable, Sendable {
     case partial
     case completed

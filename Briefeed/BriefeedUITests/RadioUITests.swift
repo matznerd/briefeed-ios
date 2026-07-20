@@ -3,6 +3,11 @@ import XCTest
 final class RadioUITests: XCTestCase {
     private var app: XCUIApplication!
 
+    private struct FixtureDiagnostics: Equatable {
+        let bootstrapPlayIntents: Int
+        let refreshInvocations: Int
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
@@ -211,12 +216,24 @@ final class RadioUITests: XCTestCase {
         app = launchFixture("partial", reset: true, autoplay: false)
         XCTAssertTrue(app.buttons["miniPlayer.playPause"].waitForExistence(timeout: 15))
         XCTAssertTrue(waitForLabel("Play", on: app.buttons["miniPlayer.playPause"]))
+        XCTAssertEqual(try fixtureDiagnostics(), FixtureDiagnostics(bootstrapPlayIntents: 0, refreshInvocations: 0))
+        app.terminate()
+
+        app = launchFixture("partial", reset: false, autoplay: false)
+        XCTAssertTrue(app.buttons["miniPlayer.playPause"].waitForExistence(timeout: 15))
+        XCTAssertEqual(try fixtureDiagnostics(), FixtureDiagnostics(bootstrapPlayIntents: 0, refreshInvocations: 0))
         app.terminate()
 
         app = launchFixture("partial", reset: true, autoplay: true)
         XCTAssertTrue(app.buttons["miniPlayer.playPause"].waitForExistence(timeout: 15))
         XCTAssertTrue(waitForLabel("Pause", on: app.buttons["miniPlayer.playPause"], timeout: 8))
-        XCTAssertEqual(app.staticTexts.matching(identifier: "radio.currentTitle").count, 1)
+        XCTAssertEqual(try fixtureDiagnostics(), FixtureDiagnostics(bootstrapPlayIntents: 1, refreshInvocations: 0))
+        app.terminate()
+
+        app = launchFixture("partial", reset: false, autoplay: true)
+        XCTAssertTrue(app.buttons["miniPlayer.playPause"].waitForExistence(timeout: 15))
+        XCTAssertTrue(waitForLabel("Pause", on: app.buttons["miniPlayer.playPause"], timeout: 8))
+        XCTAssertEqual(try fixtureDiagnostics(), FixtureDiagnostics(bootstrapPlayIntents: 1, refreshInvocations: 0))
     }
 
     @MainActor
@@ -242,7 +259,7 @@ final class RadioUITests: XCTestCase {
         let expectations: [(scenario: String, title: String, action: String?)] = [
             ("offline", "Waiting for Network", "radio.retry"),
             ("refreshing", "Refreshing Radio", nil),
-            ("all-failed", "Radio needs attention", "radio.retry"),
+            ("all-failed", "Radio needs attention", "radio.refresh"),
             ("no-sources", "Choose your sources", "radio.addSource"),
             ("exhausted", "You're caught up", "radio.refresh")
         ]
@@ -256,7 +273,10 @@ final class RadioUITests: XCTestCase {
                 XCTAssertTrue(button.exists, expected.scenario)
                 button.tap()
                 switch expected.scenario {
-                case "offline", "all-failed", "exhausted":
+                case "offline", "exhausted":
+                    XCTAssertTrue(app.staticTexts[expected.title].waitForExistence(timeout: 3))
+                case "all-failed":
+                    XCTAssertEqual(try fixtureDiagnostics(), FixtureDiagnostics(bootstrapPlayIntents: 0, refreshInvocations: 1))
                     XCTAssertTrue(app.staticTexts[expected.title].waitForExistence(timeout: 3))
                 case "no-sources":
                     XCTAssertTrue(app.navigationBars["Add RSS Feed"].waitForExistence(timeout: 3))
@@ -358,6 +378,23 @@ final class RadioUITests: XCTestCase {
             return 0
         }
         return minutes * 60 + seconds
+    }
+
+    private func fixtureDiagnostics() throws -> FixtureDiagnostics {
+        let diagnostics = app.otherElements["radio.fixtureDiagnostics"]
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: 5))
+        let value = try XCTUnwrap(diagnostics.value as? String)
+        let expression = try NSRegularExpression(
+            pattern: #"bootstrapPlayIntents=([0-9]+);refreshInvocations=([0-9]+)"#
+        )
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        let match = try XCTUnwrap(expression.firstMatch(in: value, range: range))
+        let playRange = try XCTUnwrap(Range(match.range(at: 1), in: value))
+        let refreshRange = try XCTUnwrap(Range(match.range(at: 2), in: value))
+        return FixtureDiagnostics(
+            bootstrapPlayIntents: try XCTUnwrap(Int(value[playRange])),
+            refreshInvocations: try XCTUnwrap(Int(value[refreshRange]))
+        )
     }
 
     private func waitForLabel(

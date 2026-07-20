@@ -93,3 +93,50 @@ bash skills/app-testing/scripts/run-radio.sh live-radio-mvp-task12-smoke smoke
 
 The smoke lane should then provide its receipt, screenshot, bounded app log,
 and `RadioSmoke.xcresult` for simulator verification before device testing.
+
+## Review Repair
+
+The first Task 12 review found no critical issues and three important gaps. All
+three are repaired:
+
+- `.failed(.allSourcesUnavailable)` now presents a real source **Refresh**
+  action and calls `refreshRadio()`. Playback and persistence failures retain
+  transport retry behavior. A pure routing test covers all three failure kinds,
+  and the fixture UI test asserts that the source-refresh invocation counter
+  advances rather than accepting an unchanged error title as proof.
+- Fixture diagnostics now count actual `.play` intents passed through the
+  fixture bootstrap executor and source-refresh invocations. The counter resets
+  for each fixture process, is exposed only in DEBUG through one stable
+  accessibility value, and has no Release or production path. XCUITests assert
+  autoplay Off executes zero bootstrap play intents and On executes exactly one,
+  both before and after process relaunch.
+- Smoke log collection is now a short synchronous `with_timeout` call. Timeout
+  status 142 is explicitly accepted before XCUITest begins; there is no
+  background subshell, trap, or orphanable timeout/simctl process.
+
+The fixture tests also fetch the selected offline and degraded Core Data
+episodes directly. Offline proves its current item has no downloaded path;
+degraded proves its local path is readable. The degraded UI assertion is only
+evidence that available local playback continues, not a source-recovery claim.
+
+Strict review-repair TDD evidence:
+
+```text
+RED: make radio-compile
+RadioFixtureSeederTests.swift: cannot find 'RadioFixtureDiagnostics' in scope
+RadioHomePresentationTests.swift: type 'RadioHomePresentation' has no member 'failureRecovery'
+** TEST BUILD FAILED **
+
+GREEN: make radio-compile
+** TEST BUILD SUCCEEDED **
+```
+
+Repair RED log: `/tmp/briefeed-task12-review-red.log`
+
+Final GREEN log: `/tmp/briefeed-task12-review-green-final.log`
+
+The final Release build also succeeded at
+`/tmp/briefeed-task12-review-release.log`. `git diff --check`, both scripts'
+`bash -n`, the no-background-log static assertion, and a direct shared
+`with_timeout` probe returning status 142 passed. Simulator runtime remains
+unrun for the same foreign-GUI safety condition recorded above.

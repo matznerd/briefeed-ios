@@ -611,6 +611,7 @@ extension AudioPlayerViewModelV2 {
         isLoading = true
         #if DEBUG
         if let definition = AppRuntime.radioFixtureDefinition {
+            RadioFixtureDiagnostics.shared.recordRefreshInvocation()
             await unifiedPlayer.execute(
                 definition.applyPostRestore(to: radioCoordinator)
             )

@@ -126,17 +126,28 @@ struct RadioFixtureSeederTests {
             #expect(coordinator.entries.allSatisfy { $0.key.episodeID != RadioFixtureSeeder.EpisodeID.partial })
             #expect(intent == nil)
         case .offline:
+            let request: NSFetchRequest<RSSEpisode> = RSSEpisode.fetchRequest()
+            request.fetchLimit = 1
+            request.predicate = NSPredicate(format: "id == %@", RadioFixtureSeeder.EpisodeID.partial)
+            let episode = try #require(harness.context.fetch(request).first)
             #expect(coordinator.state == .waitingForNetwork)
             #expect(coordinator.currentEpisode?.originalPlaybackURL.scheme == "https")
+            #expect(episode.downloadedFilePath == nil)
             #expect(intent == nil)
         case .allFailed:
             #expect(coordinator.state == .failed(.allSourcesUnavailable))
             #expect(coordinator.sourceFailures.count == definition.enabledSourceCount)
             #expect(intent == nil)
         case .degraded:
+            let request: NSFetchRequest<RSSEpisode> = RSSEpisode.fetchRequest()
+            request.fetchLimit = 1
+            request.predicate = NSPredicate(format: "id == %@", RadioFixtureSeeder.EpisodeID.partial)
+            let episode = try #require(harness.context.fetch(request).first)
+            let localPath = try #require(episode.downloadedFilePath)
             #expect(coordinator.state == .readyPaused)
             #expect(coordinator.currentEpisode != nil)
             #expect(coordinator.sourceFailures.count == 1)
+            #expect(FileManager.default.isReadableFile(atPath: localPath))
             #expect(intent == nil)
         case .noSources:
             #expect(coordinator.state == .noSources)
@@ -151,6 +162,27 @@ struct RadioFixtureSeederTests {
             #expect(coordinator.entries.isEmpty)
             #expect(intent == nil)
         }
+    }
+
+    @Test func diagnosticsCountOnlyExecutedBootstrapPlayIntentsAndRefreshes() {
+        let diagnostics = RadioFixtureDiagnostics()
+        let request = RadioPlaybackRequest(
+            key: .init(feedID: "fixture-npr", episodeID: "fixture-partial"),
+            url: URL(string: "https://fixtures.briefeed.test/partial.wav")!,
+            title: "Morning Update",
+            source: "NPR News Now",
+            positionSeconds: 18
+        )
+
+        diagnostics.reset()
+        diagnostics.recordBootstrapExecution(of: nil)
+        diagnostics.recordBootstrapExecution(of: .pause)
+        diagnostics.recordBootstrapExecution(of: .play(request))
+        diagnostics.recordRefreshInvocation()
+
+        #expect(diagnostics.bootstrapPlayIntentCount == 1)
+        #expect(diagnostics.refreshInvocationCount == 1)
+        #expect(diagnostics.accessibilityValue == "bootstrapPlayIntents=1;refreshInvocations=1")
     }
 
     private func makeHarness() throws -> Harness {

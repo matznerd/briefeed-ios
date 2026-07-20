@@ -32,6 +32,7 @@ enum AccessibilityID {
         static let sourceDetail = "radio.sourceDetail"
         static let sourceDetails = "radio.sourceDetails"
         static let sourceFailures = "radio.sourceFailures"
+        static let fixtureDiagnostics = "radio.fixtureDiagnostics"
     }
 
     enum Feed {

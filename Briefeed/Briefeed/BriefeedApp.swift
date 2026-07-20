@@ -23,6 +23,7 @@ struct BriefeedApp: App {
         #if DEBUG
         AppRuntime.prepareRadioFixturePreferencesIfNeeded()
         if let definition = AppRuntime.radioFixtureDefinition {
+            RadioFixtureDiagnostics.shared.reset()
             RadioServiceContainer.installFixtureOverride(definition: definition)
         }
         #endif

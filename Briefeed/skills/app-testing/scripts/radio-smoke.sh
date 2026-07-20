@@ -30,18 +30,15 @@ SIM_UUID="$SIM_UUID" bash "$ROOT/skills/app-testing/scripts/radio-fixtures.sh" p
 with_timeout 10 sleep 3
 with_timeout 30 xcrun simctl io "$SIM_UUID" screenshot "$screenshot"
 
-(
-    with_timeout 180 xcrun simctl spawn "$SIM_UUID" log stream \
-        --style compact --predicate 'process == "Briefeed"' >"$log_path" 2>&1
-) &
-log_pid=$!
-cleanup_log() {
-    if kill -0 "$log_pid" 2>/dev/null; then
-        kill "$log_pid" 2>/dev/null || true
-        wait "$log_pid" 2>/dev/null || true
-    fi
-}
-trap cleanup_log EXIT INT TERM
+set +e
+with_timeout 8 xcrun simctl spawn "$SIM_UUID" log stream \
+    --style compact --predicate 'process == "Briefeed"' >"$log_path" 2>&1
+log_status=$?
+set -e
+if [[ "$log_status" -ne 0 && "$log_status" -ne 142 ]]; then
+    echo "Radio log capture failed with status $log_status" >&2
+    exit "$log_status"
+fi
 
 with_timeout 900 xcodebuild test \
     -project "$ROOT/Briefeed.xcodeproj" -scheme Briefeed \
@@ -51,9 +48,6 @@ with_timeout 900 xcodebuild test \
     -maximum-concurrent-test-simulator-destinations 1 \
     -resultBundlePath "$xcresult" \
     -only-testing:BriefeedUITests/RadioUITests/testHeadlessRadioSmoke
-
-cleanup_log
-trap - EXIT INT TERM
 
 cat >"$receipt" <<EOF
 simulator_uuid=$SIM_UUID

@@ -60,4 +60,10 @@ struct RadioHomePresentationTests {
         #expect(RadioHomePresentation.currentControlLabel(activeMode: .brief, isPlaying: true) == "Play Radio")
         #expect(RadioHomePresentation.currentControlLabel(activeMode: .radio, isPlaying: false) == "Play Radio")
     }
+
+    @Test func allSourceFailureRefreshesSourcesWhileTransportFailuresRetryPlayback() {
+        #expect(RadioHomePresentation.failureRecovery(for: .allSourcesUnavailable) == .refreshSources)
+        #expect(RadioHomePresentation.failureRecovery(for: .playback("failed")) == .retryPlayback)
+        #expect(RadioHomePresentation.failureRecovery(for: .persistence("failed")) == .retryPlayback)
+    }
 }

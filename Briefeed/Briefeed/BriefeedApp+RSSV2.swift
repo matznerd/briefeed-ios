@@ -306,9 +306,10 @@ extension BriefeedApp {
             autoplayEnabled: UserDefaultsManager.shared.autoPlayLiveNewsOnOpen
         )
         await UnifiedAudioPlayer.shared.execute(restoreIntent)
-        await UnifiedAudioPlayer.shared.execute(
-            definition.applyPostRestore(to: services.coordinator)
-        )
+        RadioFixtureDiagnostics.shared.recordBootstrapExecution(of: restoreIntent)
+        let postRestoreIntent = definition.applyPostRestore(to: services.coordinator)
+        await UnifiedAudioPlayer.shared.execute(postRestoreIntent)
+        RadioFixtureDiagnostics.shared.recordBootstrapExecution(of: postRestoreIntent)
         print("🧪 Radio fixture ready: \(definition.scenario.rawValue)")
     }
     #endif
