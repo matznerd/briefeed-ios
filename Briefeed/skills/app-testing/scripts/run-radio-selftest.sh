@@ -63,9 +63,27 @@ test -f "$RADIO_SELFTEST_XCODEBUILD_MARKER"
 
 mkdir -p "$state/.adapter-live-radio-adapter-selftest.lock"
 rm -f "$state/.adapter-live-radio-adapter-selftest.lock/holder"
+touch -t 200001010000 "$state/.adapter-live-radio-adapter-selftest.lock"
 rm -f "$RADIO_SELFTEST_XCODEBUILD_MARKER"
 bash "$ROOT/skills/app-testing/scripts/run-radio.sh" live-radio-adapter-selftest unit
 test -f "$RADIO_SELFTEST_XCODEBUILD_MARKER"
+
+mkdir -p "$state/.adapter-live-radio-adapter-selftest.lock"
+rm -f "$state/.adapter-live-radio-adapter-selftest.lock/holder"
+rm -f "$RADIO_SELFTEST_XCODEBUILD_MARKER"
+set +e
+sh -c 'sleep 0.75; printf "pid=%s\n" "$$" > "$1/holder"' \
+  _ "$state/.adapter-live-radio-adapter-selftest.lock" &
+delayed_creator_pid=$!
+bash "$ROOT/skills/app-testing/scripts/run-radio.sh" live-radio-adapter-selftest unit
+fresh_ownerless_rc=$?
+wait "$delayed_creator_pid"
+set -e
+test "$fresh_ownerless_rc" -eq 75
+test -f "$state/.adapter-live-radio-adapter-selftest.lock/holder"
+test "$(sed -n 's/^pid=//p' "$state/.adapter-live-radio-adapter-selftest.lock/holder")" -eq "$delayed_creator_pid"
+test ! -e "$RADIO_SELFTEST_XCODEBUILD_MARKER"
+rm -rf "$state/.adapter-live-radio-adapter-selftest.lock"
 
 apply_fixture "$engine/sim-doctor.sh" '#!/usr/bin/env bash
 printf "%s\n" "PRESSURE=critical swap_free=100MB"
@@ -87,4 +105,4 @@ set -e
 test "$critical_rc" -eq 75
 test ! -e "$RADIO_SELFTEST_XCODEBUILD_MARKER"
 
-printf '%s\n' "run-radio fresh-claim, ownerless-lock, and critical-pressure self-tests passed"
+printf '%s\n' "run-radio fresh-claim, stale-ownerless recovery, fresh-ownerless preservation, and critical-pressure self-tests passed"

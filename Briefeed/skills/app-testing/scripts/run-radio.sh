@@ -14,6 +14,7 @@ mode="${2:?mode unit, ui, or smoke required}"
 state_dir="$(sim_state_dir)"
 mkdir -p "$state_dir"
 lane_lock="$state_dir/.adapter-$lane.lock"
+lane_lock_stale_seconds=10
 if ! mkdir "$lane_lock" 2>/dev/null; then
     holder="$(sed -n 's/^pid=//p' "$lane_lock/holder" 2>/dev/null | head -1 || true)"
     if [[ -z "$holder" ]]; then
@@ -24,6 +25,16 @@ if ! mkdir "$lane_lock" 2>/dev/null; then
         done
     fi
     if [[ -z "$holder" ]]; then
+        age=$(( $(date +%s) - $(stat -f %m "$lane_lock" 2>/dev/null || echo 0) ))
+        if (( age < lane_lock_stale_seconds )); then
+            echo "Radio lane $lane has a fresh ownerless acquisition lock" >&2
+            exit 75
+        fi
+        holder="$(sed -n 's/^pid=//p' "$lane_lock/holder" 2>/dev/null | head -1 || true)"
+        if [[ -n "$holder" ]]; then
+            echo "Radio lane $lane acquired an owner while stale-lock recovery was waiting" >&2
+            exit 75
+        fi
         rm -rf "$lane_lock"
         mkdir "$lane_lock" || exit 75
     else
@@ -32,7 +43,7 @@ if ! mkdir "$lane_lock" 2>/dev/null; then
             exit 75
         fi
         age=$(( $(date +%s) - $(stat -f %m "$lane_lock" 2>/dev/null || echo 0) ))
-        (( age >= 10 )) || exit 75
+        (( age >= lane_lock_stale_seconds )) || exit 75
         rm -rf "$lane_lock"
         mkdir "$lane_lock" || exit 75
     fi
