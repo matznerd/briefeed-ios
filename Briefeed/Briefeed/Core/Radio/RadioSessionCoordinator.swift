@@ -17,6 +17,7 @@ protocol RadioSessionCoordinating: AnyObject {
     var sourceFailuresPublisher: AnyPublisher<[String: String], Never> { get }
     var sleepTimerPublisher: AnyPublisher<RadioSleepTimer, Never> { get }
     var canPlayNextPublisher: AnyPublisher<Bool, Never> { get }
+    var pendingNetworkIntentPublisher: AnyPublisher<RadioPlaybackIntent, Never> { get }
 
     func restore(autoplayEnabled: Bool) async -> RadioPlaybackIntent?
     func refreshStarted(enabledSourceCount: Int)
@@ -36,6 +37,11 @@ protocol RadioSessionCoordinating: AnyObject {
     func handleInterruptionBegan(positionSeconds: TimeInterval, duration: TimeInterval?) -> RadioPlaybackIntent?
     func handleInterruptionEnded(shouldResume: Bool) -> RadioPlaybackIntent?
     func handleRouteRemoval(positionSeconds: TimeInterval, duration: TimeInterval?) -> RadioPlaybackIntent?
+    func handleBackground(positionSeconds: TimeInterval, duration: TimeInterval?) -> RadioPlaybackIntent?
+    func handleTermination(positionSeconds: TimeInterval, duration: TimeInterval?) -> RadioPlaybackIntent?
+    func recordProgress(for key: RadioEpisodeKey, positionSeconds: TimeInterval, duration: TimeInterval?)
+    func playbackCompleted(for key: RadioEpisodeKey, at: Date) -> RadioPlaybackIntent?
+    func playbackFailed(for key: RadioEpisodeKey, message: String, positionSeconds: TimeInterval, duration: TimeInterval?, connectivity: ConnectivityStatus) -> RadioPlaybackIntent?
     func cancelPendingColdLaunchAutoplay()
 }
 
@@ -55,6 +61,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
     @Published private(set) var sleepTimer: RadioSleepTimer = .off
     @Published private(set) var canPlayNext = false
     @Published private(set) var hasPendingColdLaunchAutoplay = false
+    private let pendingNetworkIntentSubject = PassthroughSubject<RadioPlaybackIntent, Never>()
 
     var statePublisher: AnyPublisher<RadioSessionState, Never> { $state.eraseToAnyPublisher() }
     var entriesPublisher: AnyPublisher<[RadioQueueEntry], Never> { $entries.eraseToAnyPublisher() }
@@ -62,6 +69,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
     var sourceFailuresPublisher: AnyPublisher<[String: String], Never> { $sourceFailures.eraseToAnyPublisher() }
     var sleepTimerPublisher: AnyPublisher<RadioSleepTimer, Never> { $sleepTimer.eraseToAnyPublisher() }
     var canPlayNextPublisher: AnyPublisher<Bool, Never> { $canPlayNext.eraseToAnyPublisher() }
+    var pendingNetworkIntentPublisher: AnyPublisher<RadioPlaybackIntent, Never> { pendingNetworkIntentSubject.eraseToAnyPublisher() }
 
     private let store: RadioSessionStoreProtocol
     private let repository: RadioEpisodeRepository
@@ -76,6 +84,8 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
     private var attemptedFailureCount = 0
     private var coldLaunchAutoplayDeadline: Date?
     private var didEvaluateColdLaunchAutoplay = false
+    private var pendingNetworkRequest = false
+    private var interruptedWasPlaying = false
 
     init(
         store: RadioSessionStoreProtocol,
@@ -211,6 +221,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
     func beginCurrent() -> RadioPlaybackIntent? {
         cancelPendingColdLaunchAutoplay()
         guard let request = requestForCurrent() else { return nil }
+        guard canLoad(request.url) else { pendingNetworkRequest = true; state = .waitingForNetwork; return nil }
         state = .playing
         return .play(request)
     }
@@ -244,7 +255,11 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
             pending.insert(normalized, at: 0)
         }
         let stagedEntries = [selectedEntry] + pending + deferred + remaining.filter { $0.disposition == .failedThisSession }
-        return commitSelection(stagedEntries, selected: selectedEntry, candidate: candidate)
+        let intent = commitSelection(stagedEntries, selected: selectedEntry, candidate: candidate)
+        if let intent, case .play(let request) = intent, !canLoad(request.url) {
+            pendingNetworkRequest = true; state = .waitingForNetwork; return nil
+        }
+        return intent
     }
 
     func recordProgress(positionSeconds: TimeInterval, duration: TimeInterval?) {
@@ -254,6 +269,11 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         guard previousBucket != bucket else { return }
         store.saveDebounced(currentSession())
         persistProgress(positionSeconds: positionSeconds, duration: duration)
+    }
+
+    func recordProgress(for key: RadioEpisodeKey, positionSeconds: TimeInterval, duration: TimeInterval?) {
+        guard key == currentKey else { return }
+        recordProgress(positionSeconds: positionSeconds, duration: duration)
     }
 
     func pauseByUser(positionSeconds: TimeInterval, duration: TimeInterval?) -> RadioPlaybackIntent? {
@@ -271,7 +291,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
 
     func manualNext(positionSeconds: TimeInterval, duration: TimeInterval?) -> RadioPlaybackIntent? {
         cancelPendingColdLaunchAutoplay()
-        sleepTimer = .off
+        if sleepTimer == .endOfEpisode { sleepTimer = .off }
         guard let currentKey, let current = entries.first(where: { $0.key == currentKey }) else { return nil }
         if isNearlyComplete(positionSeconds: positionSeconds, duration: duration) {
             return playbackCompleted(at: now())
@@ -279,9 +299,20 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         var deferred = current
         deferred.positionSeconds = validPosition(positionSeconds)
         deferred.disposition = .deferred
-        replaceCurrent(deferred)
-        guard forceSave(positionSeconds: deferred.positionSeconds, duration: duration) else { return nil }
-        return advance(afterRemovingCurrent: false)
+        var stagedEntries = entries.filter { $0.key != currentKey }
+        stagedEntries.append(deferred)
+        guard let next = stagedEntries.first(where: { $0.disposition == .pending })
+            ?? stagedEntries.first(where: { $0.disposition == .deferred && $0.key != currentKey }),
+              let candidate = candidatesByKey[next.key] else { return nil }
+        do {
+            try repository.saveProgress(key: currentKey, seconds: deferred.positionSeconds, duration: duration)
+            let staged = PersistedRadioSession(schemaVersion: PersistedRadioSession.schemaVersion, entries: stagedEntries, currentKey: next.key, savedAt: now())
+            try store.saveNow(staged)
+        } catch { state = .failed(.persistence(error.localizedDescription)); return nil }
+        entries = stagedEntries; self.currentKey = next.key; currentEpisode = candidate; updateCanPlayNext(); state = .loading
+        let request = playbackRequest(for: candidate, position: next.positionSeconds)
+        guard canLoad(request.url) else { pendingNetworkRequest = true; state = .waitingForNetwork; return nil }
+        return .play(request)
     }
 
     func playbackCompleted(at date: Date) -> RadioPlaybackIntent? {
@@ -293,23 +324,35 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
             state = .failed(.persistence(error.localizedDescription))
             return nil
         }
-        entries.removeAll { $0.key == currentKey }
-        self.currentKey = nil
-        currentEpisode = nil
-        updateCanPlayNext()
+        let remaining = entries.filter { $0.key != currentKey }
+        let nextKey = remaining.first(where: { $0.disposition == .pending })?.key
+            ?? remaining.first(where: { $0.disposition == .deferred })?.key
+        let isEOE = sleepTimer == .endOfEpisode
+        let nextCandidate = nextKey.flatMap { candidatesByKey[$0] }
+        let staged = PersistedRadioSession(schemaVersion: PersistedRadioSession.schemaVersion, entries: remaining, currentKey: nextKey, savedAt: now())
         do {
-            try store.saveNow(currentSession())
+            try store.saveNow(staged)
         } catch {
             // Core Data is authoritative: the stale snapshot is deliberately repaired on restore.
             state = .failed(.persistence(error.localizedDescription))
             return nil
         }
-        if sleepTimer == .endOfEpisode {
+        entries = remaining; self.currentKey = nextKey; currentEpisode = nextCandidate; updateCanPlayNext()
+        if isEOE {
             sleepTimer = .off
-            selectNextPaused()
+            state = nextCandidate == nil ? .exhausted : .readyPaused
             return nil
         }
-        return advance(afterRemovingCurrent: true)
+        guard let candidate = nextCandidate, let next = remaining.first(where: { $0.key == candidate.key }) else { state = .exhausted; return nil }
+        state = .loading
+        let request = playbackRequest(for: candidate, position: next.positionSeconds)
+        guard canLoad(request.url) else { pendingNetworkRequest = true; state = .waitingForNetwork; return nil }
+        return .play(request)
+    }
+
+    func playbackCompleted(for key: RadioEpisodeKey, at date: Date) -> RadioPlaybackIntent? {
+        guard key == currentKey else { return nil }
+        return playbackCompleted(at: date)
     }
 
     func playbackFailed(message: String) -> RadioPlaybackIntent? {
@@ -327,7 +370,15 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         entries[index].disposition = .failedThisSession
         state = .failed(.playback(message))
         guard forceSave(positionSeconds: entries[index].positionSeconds, duration: currentEpisode?.durationSeconds) else { return nil }
-        return advance(afterRemovingCurrent: false)
+        if RadioQueueBuilder(now: now()).nextEligible(in: currentSession()) == nil { return nil }
+        return advance()
+    }
+
+    func playbackFailed(for key: RadioEpisodeKey, message: String, positionSeconds: TimeInterval, duration: TimeInterval?, connectivity: ConnectivityStatus) -> RadioPlaybackIntent? {
+        guard key == currentKey else { return nil }
+        _ = updateCurrentPosition(positionSeconds)
+        guard connectivity == .online else { pendingNetworkRequest = true; state = .waitingForNetwork; return nil }
+        return playbackFailed(message: message)
     }
 
     func retry() -> RadioPlaybackIntent? {
@@ -336,8 +387,11 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         entries[index].playbackFailureCount = 0
         entries[index].lastPlaybackError = nil
         entries[index].disposition = .pending
+        guard forceSave(positionSeconds: entries[index].positionSeconds, duration: currentEpisode?.durationSeconds) else { return nil }
+        guard let request = requestForCurrent() else { return nil }
+        guard canLoad(request.url) else { pendingNetworkRequest = true; state = .waitingForNetwork; return nil }
         state = .loading
-        return requestForCurrent().map(RadioPlaybackIntent.play)
+        return .play(request)
     }
 
     func setSleepTimer(_ timer: RadioSleepTimer) {
@@ -347,20 +401,21 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
 
     func evaluateSleepTimer(at date: Date, positionSeconds: TimeInterval? = nil, duration: TimeInterval? = nil) -> RadioPlaybackIntent? {
         guard case .deadline(let deadline) = sleepTimer, date >= deadline else { return nil }
-        sleepTimer = .off
-        guard forceSave(positionSeconds: positionSeconds, duration: duration) else { return nil }
-        state = .pausedByUser
+        let saved = forceSave(positionSeconds: positionSeconds, duration: duration)
+        if saved { sleepTimer = .off; state = .pausedByUser }
+        // A deadline must pause transport even when persistence is unavailable.
         return .pause
     }
 
     func handleInterruptionBegan(positionSeconds: TimeInterval, duration: TimeInterval?) -> RadioPlaybackIntent? {
+        interruptedWasPlaying = state == .playing || state == .loading
         forceSave(positionSeconds: positionSeconds, duration: duration)
-        state = .pausedByUser
         return .pause
     }
 
     func handleInterruptionEnded(shouldResume: Bool) -> RadioPlaybackIntent? {
-        guard shouldResume, state == .pausedByUser else { return nil }
+        guard shouldResume, interruptedWasPlaying else { return nil }
+        interruptedWasPlaying = false
         state = .loading
         return requestForCurrent().map(RadioPlaybackIntent.play)
     }
@@ -369,6 +424,14 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         forceSave(positionSeconds: positionSeconds, duration: duration)
         state = .pausedByUser
         return .pause
+    }
+
+    func handleBackground(positionSeconds: TimeInterval, duration: TimeInterval?) -> RadioPlaybackIntent? {
+        cancelPendingColdLaunchAutoplay(); forceSave(positionSeconds: positionSeconds, duration: duration); return nil
+    }
+
+    func handleTermination(positionSeconds: TimeInterval, duration: TimeInterval?) -> RadioPlaybackIntent? {
+        forceSave(positionSeconds: positionSeconds, duration: duration); return nil
     }
 
     private func commitSelection(_ stagedEntries: [RadioQueueEntry], selected: RadioQueueEntry, candidate: RadioEpisodeCandidate) -> RadioPlaybackIntent? {
@@ -394,15 +457,19 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
     }
 
     private func connectivityChanged(_ status: ConnectivityStatus) {
-        guard currentEpisode == nil else { return }
-        if status == .offline { state = .waitingForNetwork }
-        else if status == .online { state = resolveNoPlayableEntry() }
+        if status == .offline, pendingNetworkRequest || currentEpisode == nil { state = .waitingForNetwork; return }
+        guard status == .online else { return }
+        if pendingNetworkRequest, let request = requestForCurrent() {
+            pendingNetworkRequest = false
+            state = .loading
+            pendingNetworkIntentSubject.send(.play(request))
+        } else if currentEpisode == nil { state = resolveNoPlayableEntry() }
     }
 
     @discardableResult
     private func forceSave(positionSeconds: TimeInterval?, duration: TimeInterval?) -> Bool {
         if let positionSeconds { _ = updateCurrentPosition(positionSeconds) }
-        if let positionSeconds { persistProgress(positionSeconds: positionSeconds, duration: duration) }
+        if let positionSeconds, !persistProgress(positionSeconds: positionSeconds, duration: duration) { return false }
         do {
             try store.saveNow(currentSession())
             return true
@@ -412,10 +479,11 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         }
     }
 
-    private func persistProgress(positionSeconds: TimeInterval, duration: TimeInterval?) {
-        guard let currentKey else { return }
+    private func persistProgress(positionSeconds: TimeInterval, duration: TimeInterval?) -> Bool {
+        guard let currentKey else { return true }
         do { try repository.saveProgress(key: currentKey, seconds: positionSeconds, duration: duration) }
-        catch { state = .failed(.persistence(error.localizedDescription)) }
+        catch { state = .failed(.persistence(error.localizedDescription)); return false }
+        return true
     }
 
     @discardableResult
@@ -440,7 +508,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         entries.append(replacement)
     }
 
-    private func advance(afterRemovingCurrent: Bool) -> RadioPlaybackIntent? {
+    private func advance() -> RadioPlaybackIntent? {
         let next = RadioQueueBuilder(now: now()).nextEligible(in: currentSession())
         guard let next, let candidate = candidatesByKey[next], let index = entries.firstIndex(where: { $0.key == next }) else {
             currentKey = nil
@@ -495,6 +563,11 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
               let entry = entries.first(where: { $0.key == currentKey }),
               entry.disposition != .failedThisSession, !candidate.isCompleted else { return nil }
         return playbackRequest(for: candidate, position: entry.positionSeconds)
+    }
+
+    private func canLoad(_ url: URL) -> Bool {
+        if url.isFileURL { return FileManager.default.isReadableFile(atPath: url.path) }
+        return connectivityStatus() == .online
     }
 
     private func playbackRequest(for candidate: RadioEpisodeCandidate, position: TimeInterval) -> RadioPlaybackRequest {

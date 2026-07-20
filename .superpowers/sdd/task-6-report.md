@@ -20,3 +20,11 @@
 - `make sim-status` reported `PRESSURE=warn`, safe capacity, but `Simulator.app=open`.
 - `bash skills/app-testing/scripts/run-radio.sh radio-state unit` stopped at its safety preflight because `Simulator.app` was open. No simulator was claimed, booted, reused, stopped, erased, or otherwise touched.
 - `git diff --check` passed.
+
+## Review Repair
+
+- Remote playback is now held while connectivity is unknown or offline (except readable local files). The coordinator records the pending request and publishes its replay intent when the injected monitor becomes online.
+- Playback callbacks now have identity-bearing coordinator commands so stale transport events are rejected. Background and termination force-save commands were added.
+- Next and completion stage their new cursor and write Core Data progress/completion before forcing the snapshot; End of Episode persists its paused next cursor before publishing it.
+- A failed-only queue preserves its failed current for explicit Retry. Retry resets and force-saves before any replay. Refresh reset scope is limited to successful source results.
+- Deadline timers survive Next, and still pause transport when persistence fails. Interruption resume eligibility is captured before the interruption rather than inferred from the post-pause state.
