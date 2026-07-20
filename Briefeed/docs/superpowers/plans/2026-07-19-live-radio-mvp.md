@@ -15,7 +15,7 @@
 - Radio remains independent of Reddit discovery, article summarization, Gemini TTS, and any future Supabase or Render backend.
 - `QueueCoordinator` remains the single source of truth for Brief only. `RadioSessionCoordinator` is the single source of truth for Radio only.
 - Core Data remains authoritative for RSS sources, episode metadata, normalized progress, and completion. `briefeed_radio_session_v1` remains authoritative for Radio order and seconds-based resume position.
-- Autoplay uses the existing `autoPlayLiveNewsOnOpen` key, defaults Off, and runs once per process cold launch only.
+- Autoplay uses the existing `autoPlayLiveNewsOnOpen` key, defaults Off, and runs once per process cold launch only. When no local episode exists, its deferred online-refresh opportunity lasts at most 60 foreground seconds and is canceled by inactive/background or any manual playback command.
 - Playback speed uses the canonical `playbackSpeed` key and exactly `0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0`.
 - In-app and remote skip intervals are exactly 10 seconds. Radio Previous is disabled.
 - Manual Next defers the current partial episode; it never marks the episode complete.
@@ -27,6 +27,7 @@
 - New Swift files are discovered by the existing file-system-synchronized Xcode groups; do not churn `project.pbxproj` unless Xcode proves an exception is required.
 - Each task follows red, green, refactor and ends in its own reviewable commit.
 - A red test that references a not-yet-created symbol must first use `make radio-compile`; it must not claim a simulator. Claim an owned simulator lane only after the test target compiles and a behavioral assertion can fail at runtime.
+- Tasks 7 and 8 land back-to-back in one implementation session. Do not publish, release, or pause the migration with the temporary nonpersisted Live News compatibility commit as the branch endpoint.
 
 ## File Map
 
@@ -654,6 +655,19 @@ git commit -m "feat: add persisted Radio session model"
     }
 }
 
+@Test func shiftedPublicationDateReusesCanonicalEnclosureRecord() async throws {
+    let original = try await ingestFallbackEpisode(url: "https://example.com/hourly.mp3", date: now)
+    original.isListened = true
+    original.listenedDate = now
+    try context.save()
+    let corrected = try await ingestFallbackEpisode(
+        url: "https://example.com/hourly.mp3",
+        date: now.addingTimeInterval(300)
+    )
+    #expect(corrected.objectID == original.objectID)
+    #expect(corrected.isListened)
+}
+
 @Test func stalenessUsesThirtyMinutesAndSixHours() {
     let now = Date(timeIntervalSince1970: 10_000_000)
     #expect(RSSRefreshPolicy.isStale(.hourly, lastSuccess: now.addingTimeInterval(-1_801), now: now))
@@ -670,7 +684,7 @@ Expected: compile failure naming the new identity and refresh types.
 
 - [ ] **Step 3: Implement identity and parser rejection**
 
-Use `URLComponents` and CryptoKit SHA-256. Require HTTP or HTTPS, lowercase scheme/host, remove fragment/default port, preserve normalized path, sort query items by name then value, and hash `canonicalURL + "|" + Int(publicationDate.timeIntervalSince1970)`. Return trimmed GUID unchanged when present. Keep the original `audioUrl` in `ParsedRSSEpisode`. In `RSSParser`, replace the current synthesized GUID and `parseDate(...) ?? Date()` with a throwing construction that drops malformed items and records their parse rejection count.
+Use `URLComponents` and CryptoKit SHA-256. Require HTTP or HTTPS, lowercase scheme/host, remove fragment/default port, preserve normalized path, sort query items by name then value, and hash `canonicalURL + "|" + Int(publicationDate.timeIntervalSince1970)`. Return trimmed GUID unchanged when present. Keep the original `audioUrl` in `ParsedRSSEpisode`. In `RSSParser`, replace the current synthesized GUID and `parseDate(...) ?? Date()` with a throwing construction that drops malformed items and records their parse rejection count. Before inserting a fallback-ID episode, fetch the same feed plus canonical enclosure. Reuse the existing durable ID and completion/progress state when a publisher merely shifts `pubDate`; update only safe metadata. The canonical-enclosure uniqueness check therefore protects history even though the deterministic fallback hash includes publication time.
 
 - [ ] **Step 4: Return per-source refresh outcomes**
 
@@ -831,7 +845,7 @@ Expected: pure and hosted repository suites pass.
 
 - [ ] **Step 1: Write coordinator tests with fakes**
 
-Use deterministic `FakeRadioSessionStore`, `FakeRadioEpisodeRepository`, and injected `now`. Cover paused restore, autoplay resume intent, autoplay once per process, invalid current repair, local playback before refresh, and exact empty precedence: active playback, no sources, offline, unknown connectivity, refreshing, all attempted failed, then exhausted only after at least one successful or prior-success-backed skipped-fresh result.
+Use deterministic `FakeRadioSessionStore`, `FakeRadioEpisodeRepository`, and injected `now`. Cover paused restore, autoplay resume intent, autoplay once per process, deferred autoplay still eligible at 59 seconds and expired at 60 seconds, manual playback canceling the opportunity, invalid current repair, local playback before refresh, and exact empty precedence: active playback, no sources, offline, unknown connectivity, refreshing, all attempted failed, then exhausted only after at least one successful or prior-success-backed skipped-fresh result.
 
 Also cover explicit episode selection: selecting an eligible repository candidate defers the prior partial current entry, inserts or moves the selected key to current without duplication, force-saves, and returns its restored-position play request. An ineligible, completed, missing, or expired key is a no-op.
 
@@ -878,14 +892,15 @@ protocol RadioSessionCoordinating: AnyObject {
     func applyRefresh(_ result: RSSRefreshBatchResult) -> RadioPlaybackIntent?
     func beginCurrent() -> RadioPlaybackIntent?
     func selectEpisode(_ key: RadioEpisodeKey) -> RadioPlaybackIntent?
+    func cancelPendingColdLaunchAutoplay()
 }
 ```
 
 Implement `RadioSessionCoordinator` as an `ObservableObject` conforming to this surface, with each property `@Published private(set)` and the cold-launch opportunity flag `private(set)`.
 
-`restore` reads local candidates and snapshot without awaiting network. It emits `.play` with a `RadioPlaybackRequest` built from the selected candidate and restored seconds position once only when autoplay is enabled and an eligible current item exists. If autoplay is enabled but no local entry exists, keep one cold-launch autoplay opportunity pending through the first connectivity-resolved refresh. `applyRefresh` may return one play intent only when that initial refresh appends an eligible entry; it then consumes the opportunity. A terminal initial refresh with no entry also consumes it. Later foreground, timer, and manual refreshes never autoplay. A refresh can append entries but cannot replace or interrupt current playback.
+`restore` reads local candidates and snapshot without awaiting network. It emits `.play` with a `RadioPlaybackRequest` built from the selected candidate and restored seconds position once only when autoplay is enabled and an eligible current item exists. If autoplay is enabled but no local entry exists, record an injected-clock deadline exactly 60 seconds after restore and keep one cold-launch opportunity pending only while the scene remains active. `applyRefresh` may return one play intent only before that deadline when the initial refresh appends an eligible entry; it then consumes the opportunity. The deadline, a terminal initial refresh with no entry, inactive/background, or any manual playback command consumes it. Later foreground, timer, and manual refreshes never autoplay. A refresh can append entries but cannot replace or interrupt current playback.
 
-Implement `selectEpisode(_:)` in this task using the same eligibility and persistence rules covered by Step 1. Expose the six explicit publishers by erasing the matching `@Published` projections so injected consumers and test fakes never depend on concrete coordinator storage.
+Implement `selectEpisode(_:)` in this task using the same eligibility and persistence rules covered by Step 1. `beginCurrent`, `selectEpisode`, and the explicit cancellation command consume the deferred autoplay opportunity before returning. Expose the six explicit publishers by erasing the matching `@Published` projections so injected consumers and test fakes never depend on concrete coordinator storage.
 
 - [ ] **Step 4: Encode empty precedence as one tested function**
 
@@ -1011,6 +1026,8 @@ final class RadioServiceContainer {
 - [ ] **Step 4: Implement transition methods and persistence points**
 
 Extend `RadioSessionCoordinating` with the Task 6 commands before adding their concrete implementations. Keep identity, seconds position, duration, connectivity, and `shouldResume` explicit in method arguments; do not make the transport or view model reach into concrete coordinator internals.
+
+Every user-initiated `pauseByUser`, `seekEnded`, `manualNext`, `retry`, or sleep/playback selection command begins by consuming the pending cold-launch autoplay opportunity. System-driven progress and connectivity events do not consume it before the 60-second deadline.
 
 Save seconds at most once per 5-second bucket during progress. Force `store.saveNow` on pause, seek end, Next, completion, background, interruption, route removal, and termination. Manual Next moves current to deferred tail and chooses pending then deferred. On successful completion, call `repository.markCompleted` before removing the entry. If that throws, preserve the entry and stop advancement.
 
@@ -1225,7 +1242,7 @@ git commit -m "fix: make audio transport single item"
 
 - [ ] **Step 1: Write integration tests with a transport spy**
 
-Cover restoring at seconds position; progress sent only to Radio while Radio is active; Brief state untouched; manual Next defers; natural completion once; stream failure uses coordinator budget; remote event routing; and switching from Radio to Brief without deleting either persisted session.
+Cover restoring at seconds position; progress sent only to Radio while Radio is active; Brief state untouched; manual Next defers; natural completion once; stream failure uses coordinator budget; remote event routing; and switching from Radio to Brief without deleting either persisted session. Add a persistence-order spy proving Radio pause, seek, Next, interruption, route removal, and mode switch each force-save the semantic owner before the transport state change. This is the Task 8 proof that closes Task 7's one-commit compatibility gap.
 
 ```swift
 @Test func radioProgressDoesNotMutateBriefCoordinator() async throws {
@@ -1282,7 +1299,7 @@ Add `execute(_ intent: RadioPlaybackIntent?) async`. For `.play`, persist and de
 
 - [ ] **Step 5: Route UI and remote controls by active mode**
 
-Play/pause, seek, 10-second skip, Next, rate, completion, interruption, and route removal switch on `activeMode`. Radio calls `RadioSessionCoordinator`; Brief preserves current `QueueCoordinator` behavior. Radio Previous remains disabled. Update remote availability after every transition.
+Play/pause, seek, 10-second skip, Next, rate, completion, interruption, and route removal switch on `activeMode`. Any user or remote playback command first cancels a pending deferred autoplay opportunity. Radio calls `RadioSessionCoordinator`; Brief preserves current `QueueCoordinator` behavior. Radio Previous remains disabled. Update remote availability after every transition.
 
 - [ ] **Step 6: Bind the view model to Radio**
 
@@ -1316,7 +1333,7 @@ Expected: Radio playback tests and Brief isolation tests pass; no temporary Live
 
 - [ ] **Step 1: Write lifecycle tests around an extracted driver**
 
-Create `RadioAppLifecycleDriver` in `BriefeedApp+RSSV2.swift` with fakeable closures and an injected `ConnectivityMonitoring`. Test that cold launch restores before refresh, autoplay evaluates once, unknown and offline connectivity defer rather than start refresh, the first online event starts the single pending stale refresh, foreground refreshes stale only, background cancels pending refresh and force-saves, and repeated active notifications do not autoplay again or create another poll.
+Create `RadioAppLifecycleDriver` in `BriefeedApp+RSSV2.swift` with fakeable closures and an injected `ConnectivityMonitoring`. Test that cold launch restores before refresh, autoplay evaluates once, unknown and offline connectivity defer rather than start refresh, online at 59 seconds may consume the opportunity while online at 60 seconds only replenishes paused state, the first timely online event starts the single pending stale refresh, foreground refreshes stale only, background cancels pending refresh/autoplay and force-saves, and active-background-active-background cycles re-arm exactly one poll without autoplay or duplication.
 
 - [ ] **Step 2: Verify red**
 
@@ -1346,13 +1363,13 @@ func startRadioServices() async {
 }
 ```
 
-Construct `radioLifecycleDriver` with `RadioServiceContainer.shared.connectivity`, which is the exact monitor already injected into its coordinator. `requestStaleRefreshWhenOnline` retains at most one pending request while status is `.unknown` or `.offline` without polling or consuming source/episode attempts; `.online` invokes its operation exactly once. An offline transition is already reflected in the coordinator's connectivity-driven `waitingForNetwork` state, so it does not fabricate a terminal refresh result or consume the pending cold-launch autoplay opportunity. Cancellation on background removes the pending request so a later network callback cannot start background work; the next foreground creates a new stale-check request.
+Construct `radioLifecycleDriver` with `RadioServiceContainer.shared.connectivity`, which is the exact monitor already injected into its coordinator. `requestStaleRefreshWhenOnline` retains at most one pending request while status is `.unknown` or `.offline` without polling or consuming source/episode attempts; `.online` invokes its operation exactly once. An offline transition is already reflected in the coordinator's connectivity-driven `waitingForNetwork` state, so it does not fabricate a terminal refresh result. The coordinator independently enforces the 60-second active autoplay deadline. Cancellation on inactive/background removes the pending request and calls `cancelPendingColdLaunchAutoplay()` so a later network callback cannot start background work or audio; the next foreground creates a new stale-check request without creating a new autoplay opportunity.
 
 Skip production startup only in hosted unit tests or deterministic Radio fixture mode. Fixture seeding gets its own Task 12 path.
 
 - [ ] **Step 4: Own one active poll and scene lifecycle**
 
-Use `scenePhase` plus a cancellable `Task` that sleeps 15 minutes while active and calls only `requestStaleRefreshWhenOnline` with a stale-refresh operation. Cancel both poll and pending connectivity wait on inactive/background. On every foreground, evaluate stale refresh but never create a new autoplay opportunity. On background and termination, force-save both Radio and Brief state. Let playing audio continue.
+Use `scenePhase` plus a cancellable `Task` that sleeps 15 minutes while active and calls only `requestStaleRefreshWhenOnline` with a stale-refresh operation. Cancel both poll and pending connectivity wait on inactive/background. Every transition to active idempotently creates exactly one new poll when none exists; repeated active notifications leave the existing poll unchanged. On every foreground, evaluate stale refresh but never create a new autoplay opportunity. On background and termination, cancel deferred autoplay and force-save both Radio and Brief state. Let playing audio continue.
 
 - [ ] **Step 5: Run tests and inspect timer ownership**
 
@@ -1672,6 +1689,7 @@ Expected: the branch is clean and reports up to date with its origin. Work is no
 
 - Fresh install defaults to Radio with autoplay Off.
 - Cold-launch autoplay On resumes the exact partial current episode once.
+- Deferred cold-launch autoplay expires after 60 active seconds, inactive/background, or any manual playback command; a late online refresh replenishes paused state only.
 - Reopening in the same hour never replays a completed episode.
 - Source priority, publication date, and episode ID deterministically order pending entries.
 - Manual Next preserves seconds position, defers current, and selects pending before deferred.
@@ -1682,6 +1700,7 @@ Expected: the branch is clean and reports up to date with its origin. Work is no
 - Mini and expanded players provide Back 10, Play/Pause, Forward 10, Next, precise scrubber, 0.5x through 3.0x speed, and complete sleep timing.
 - Manual Next cancels End of Episode sleep.
 - Lock Screen and Control Center route every command through the active mode; Radio Previous is disabled.
+- Each foreground transition re-arms exactly one active 15-minute stale-refresh poll.
 - Brief queue, index, playback position, and persistence are unchanged by Radio.
 - Custom navigation is safe-area correct and accessible across the required size, contrast, motion, and transparency matrix.
 - Automated proof uses only deterministic fixtures and owned simulator UUIDs.

@@ -305,6 +305,7 @@ Within one refresh:
 3. Represent publication time as an integer UTC epoch-second value.
 4. If GUID is absent, require both a parseable publication date and a valid enclosure URL, then derive `episodeID` as the lowercase hexadecimal SHA-256 digest of `canonicalURL + "|" + epochSeconds`.
 5. Reject an item that has neither a non-empty GUID nor both fallback components. Never substitute `Date()` for a missing or malformed publication date.
+6. Before inserting a fallback-ID item, look up an existing episode from the same feed by canonical enclosure URL. If one exists, retain its durable ID and completion/progress state while updating safe metadata such as title and publication date. A publisher correcting `pubDate` must not create a second episode or replay completed content.
 
 Within the active Radio session:
 
@@ -412,7 +413,7 @@ Mark an episode completed when either condition is true:
 
 Completion writes `isListened = true`, `listenedDate = now`, and normalized `lastPosition = 1.0`, then removes the entry from the Radio snapshot. A completed episode is never selected again during its retention lifetime.
 
-Completion must be crash-consistent. First update and successfully save the Core Data episode. Only after that save succeeds may the coordinator remove the Radio entry and persist the updated snapshot. If Core Data save fails, keep the entry and its position in the Radio session, pause automatic advancement, and expose a recoverable persistence error with Retry. Never remove an entry based only on an in-memory completion mutation.
+Completion must be crash-consistent. First update and successfully save the Core Data episode. Only after that save succeeds may the coordinator remove the Radio entry and persist the updated snapshot. If Core Data save fails, keep the entry and its position in the Radio session, pause automatic advancement, and expose a recoverable persistence error with Retry. Never remove an entry based only on an in-memory completion mutation. If the process dies after the Core Data save but before snapshot removal, restore treats Core Data completion as authoritative and drops the lingering snapshot entry, so it cannot replay.
 
 ### Previous Behavior
 
@@ -483,7 +484,7 @@ endOfEpisode
 8. If refresh produces an entry and autoplay is enabled, start it.
 9. Resolve an empty session using the state precedence defined below; do not assume it is exhausted.
 
-Autoplay is off by default and is exposed as a clear Radio setting. Preserve the existing canonical `autoPlayLiveNewsOnOpen` UserDefaults key while renaming its visible setting to Radio autoplay. It runs once per process cold launch, not every time the scene becomes active or the Radio tab appears. If no local episode exists, the one cold-launch opportunity may remain pending through the first connectivity-resolved refresh and start the first newly eligible episode; that refresh or a terminal empty result consumes it. Later foreground, poll, and manual refreshes never autoplay.
+Autoplay is off by default and is exposed as a clear Radio setting. Preserve the existing canonical `autoPlayLiveNewsOnOpen` UserDefaults key while renaming its visible setting to Radio autoplay. It runs once per process cold launch, not every time the scene becomes active or the Radio tab appears. If no local episode exists, the one cold-launch opportunity may remain pending for at most 60 seconds while the app stays active, through the first connectivity-resolved refresh. It expires at the deadline, on inactive/background transition, or on any user-initiated playback command. A qualifying refresh may start the first newly eligible episode; that refresh or a terminal empty result consumes the opportunity. Later foreground, poll, and manual refreshes never autoplay.
 
 ### Foreground Return
 
@@ -491,10 +492,12 @@ Autoplay is off by default and is exposed as a clear Radio setting. Preserve the
 - If the user paused, remain paused.
 - Do not invoke autoplay again.
 - Refresh only when source data is stale, and reconcile without replacing the session.
+- Idempotently establish exactly one 15-minute active poll. A background-to-foreground cycle re-arms one canceled poll and never leaves zero or creates two.
 
 ### Background Transition
 
 - Persist the snapshot immediately.
+- Cancel any pending deferred cold-launch autoplay opportunity.
 - Continue active audio under the existing background-audio mode.
 - Do not start a new feed refresh solely because the app entered background.
 - Continue evaluating an armed sleep deadline while audio remains active.
@@ -522,7 +525,7 @@ Autoplay is off by default and is exposed as a clear Radio setting. Preserve the
 - Hourly sources become stale 30 minutes after their last successful refresh.
 - Daily sources become stale 6 hours after their last successful refresh.
 - On cold launch and every foreground return, evaluate `refreshIfStale`.
-- While the app remains active, one authoritative 15-minute poll invokes only `refreshIfStale`; it does not force a network request for fresh sources.
+- While the app remains active, one authoritative 15-minute poll invokes only `refreshIfStale`; it does not force a network request for fresh sources. Entering background cancels it, and the next foreground re-arms exactly one poll.
 - Manual Refresh ignores the stale threshold.
 - No background task is added for this MVP.
 - Remove the duplicate app and RSS-service refresh timers and update `RSSFeed.isStale` and `checkInterval` to use this single policy.
