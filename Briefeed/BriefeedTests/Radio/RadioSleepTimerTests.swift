@@ -40,6 +40,23 @@ struct RadioSleepTimerTests {
         #expect(store.savedNow?.currentKey == next.key)
     }
 
+    @Test func deadlineSurvivesOrdinaryNextAndNeverCompletesEpisode() async {
+        let now = Date(timeIntervalSince1970: 100)
+        let first = candidate("one", now: now); let next = candidate("two", now: now)
+        let store = FakeRadioSessionStore(snapshot: .init(schemaVersion: 1, entries: [entry(first.key), entry(next.key)], currentKey: first.key, savedAt: now))
+        let repository = CompletionRepository(candidates: [first, next])
+        let coordinator = RadioSessionCoordinator(store: store, repository: repository, now: { now }, connectivityStatus: { .online })
+        _ = await coordinator.restore(autoplayEnabled: false)
+        let deadline = now.addingTimeInterval(30)
+        coordinator.setSleepTimer(.deadline(deadline))
+
+        #expect(coordinator.manualNext(positionSeconds: 10, duration: 100)?.key == next.key)
+        #expect(coordinator.sleepTimer == .deadline(deadline))
+        #expect(repository.completed.isEmpty)
+        #expect(coordinator.evaluateSleepTimer(at: deadline, positionSeconds: 11, duration: 100) == .pause)
+        #expect(repository.completed.isEmpty)
+    }
+
     private func candidate(_ id: String, now: Date) -> RadioEpisodeCandidate {
         .init(key: .init(feedID: "f", episodeID: id), originalPlaybackURL: URL(string: "https://example.com/\(id).mp3")!, canonicalEnclosureURL: "https://example.com/\(id).mp3", title: id, sourceName: "f", publicationDate: now, durationSeconds: 100, normalizedCoreDataProgress: 0, isCompleted: false, sourcePriority: 0, sourceFrequency: .hourly)
     }

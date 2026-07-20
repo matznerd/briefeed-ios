@@ -110,6 +110,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
     private var pendingRequest: PendingRequest?
     private var interruptionResumeEligible = false
     private var lastProgressBucket: (key: RadioEpisodeKey, bucket: Int)?
+    private var completionRecovery: CompletionRecovery?
 
     private enum PendingPurpose {
         case coldLaunchAutoplay, userStart, selection, automaticRetry, networkRecovery, interruptionResume, advance
@@ -119,6 +120,23 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         let request: RadioPlaybackRequest
         let purpose: PendingPurpose
         let generation: Int
+    }
+
+    private enum CompletionContinuation {
+        case advance(endOfEpisode: Bool)
+        case selection
+    }
+
+    private struct CompletionPlan {
+        let completedKey: RadioEpisodeKey
+        let completedAt: Date
+        let repairedSession: PersistedRadioSession
+        let continuation: CompletionContinuation
+    }
+
+    private enum CompletionRecovery {
+        case markCoreData(CompletionPlan)
+        case saveSnapshot(CompletionPlan)
     }
 
     init(
@@ -170,6 +188,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
             restored,
             preservedPlaybackState: previousCurrentKey == restored.currentKey ? previousState : nil
         )
+        completionRecovery = nil
         store.saveDebounced(currentSession())
 
         guard !didEvaluateColdLaunchAutoplay else { return nil }
@@ -291,6 +310,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         }
         guard entries.first(where: { $0.key == key })?.disposition != .failedThisSession,
               isEligibleForSelection(candidate) else { return nil }
+        candidatesByKey[key] = candidate
 
         let previousCurrent = currentKey.flatMap { current in entries.first(where: { $0.key == current }) }
         let selected = entries.first(where: { $0.key == key })
@@ -300,6 +320,34 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         let remaining = entries.filter { $0.key != key && $0.key != previousCurrent?.key }
         var pending = remaining.filter { $0.disposition == .pending }
         var deferred = remaining.filter { $0.disposition == .deferred }
+        if let previousCurrent,
+           previousCurrent.key != key,
+           isNearlyComplete(
+               positionSeconds: previousCurrent.positionSeconds,
+               duration: candidatesByKey[previousCurrent.key]?.durationSeconds
+           ) {
+            guard forceSave(
+                positionSeconds: previousCurrent.positionSeconds,
+                duration: candidatesByKey[previousCurrent.key]?.durationSeconds
+            ) else { return nil }
+            let stagedEntries = [selectedEntry] + pending + deferred
+                + remaining.filter { $0.disposition == .failedThisSession }
+            let repaired = PersistedRadioSession(
+                schemaVersion: PersistedRadioSession.schemaVersion,
+                entries: stagedEntries,
+                currentKey: selectedEntry.key,
+                savedAt: now()
+            )
+            return executeCompletionPlan(
+                CompletionPlan(
+                    completedKey: previousCurrent.key,
+                    completedAt: now(),
+                    repairedSession: repaired,
+                    continuation: .selection
+                ),
+                markCoreData: true
+            )
+        }
         if var previousCurrent, previousCurrent.key != key, previousCurrent.positionSeconds > 0 {
             previousCurrent.disposition = .deferred
             deferred.append(previousCurrent)
@@ -318,8 +366,9 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
 
     func recordProgress(for key: RadioEpisodeKey, positionSeconds: TimeInterval, duration: TimeInterval?) {
         guard key == currentKey else { return }
-        guard updateCurrentPosition(positionSeconds) else { return }
-        let bucket = Int(max(positionSeconds, 0) / 5)
+        let sanitizedPosition = validPosition(positionSeconds)
+        guard updateCurrentPosition(sanitizedPosition) else { return }
+        let bucket = Int(sanitizedPosition / 5)
         if lastProgressBucket == nil {
             let initial = entries.first(where: { $0.key == key }).map { Int($0.positionSeconds / 5) } ?? bucket
             lastProgressBucket = (key, initial)
@@ -327,14 +376,14 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         guard lastProgressBucket?.key != key || lastProgressBucket?.bucket != bucket else { return }
         lastProgressBucket = (key, bucket)
         store.saveDebounced(currentSession())
-        _ = persistProgress(positionSeconds: positionSeconds, duration: duration)
+        _ = persistProgress(positionSeconds: sanitizedPosition, duration: duration)
     }
 
     func pauseByUser(positionSeconds: TimeInterval, duration: TimeInterval?) -> RadioPlaybackIntent? {
         cancelPendingColdLaunchAutoplay()
         cancelPendingRequest()
-        guard forceSave(positionSeconds: positionSeconds, duration: duration) else { return nil }
-        state = .pausedByUser
+        let saved = forceSave(positionSeconds: positionSeconds, duration: duration)
+        if saved { state = .pausedByUser }
         return .pause
     }
 
@@ -386,39 +435,71 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
 
     private func completeCurrent(at date: Date) -> RadioPlaybackIntent? {
         guard let currentKey else { return nil }
-        do {
-            try repository.markCompleted(key: currentKey, at: date)
-        } catch {
-            state = .failed(.persistence(error.localizedDescription))
-            return nil
-        }
         let remaining = entries.filter { $0.key != currentKey }
         let nextKey = remaining.first(where: { $0.disposition == .pending })?.key
             ?? remaining.first(where: { $0.disposition == .deferred })?.key
         let isEOE = sleepTimer == .endOfEpisode
-        let nextCandidate = nextKey.flatMap { candidatesByKey[$0] }
         let staged = PersistedRadioSession(schemaVersion: PersistedRadioSession.schemaVersion, entries: remaining, currentKey: nextKey, savedAt: now())
-        entries = remaining
-        self.currentKey = nextKey
-        currentEpisode = nextCandidate
-        candidatesByKey.removeValue(forKey: currentKey)
-        updateCanPlayNext()
-        lastProgressBucket = nil
+        return executeCompletionPlan(
+            CompletionPlan(
+                completedKey: currentKey,
+                completedAt: date,
+                repairedSession: staged,
+                continuation: .advance(endOfEpisode: isEOE)
+            ),
+            markCoreData: true
+        )
+    }
+
+    private func executeCompletionPlan(_ plan: CompletionPlan, markCoreData: Bool) -> RadioPlaybackIntent? {
+        if markCoreData {
+            completionRecovery = .markCoreData(plan)
+            do {
+                try repository.markCompleted(key: plan.completedKey, at: plan.completedAt)
+            } catch {
+                state = .failed(.persistence(error.localizedDescription))
+                return nil
+            }
+            applyAuthoritativeCompletion(plan)
+            completionRecovery = .saveSnapshot(plan)
+        }
+
         do {
-            try store.saveNow(staged)
+            try store.saveNow(plan.repairedSession)
         } catch {
             state = .failed(.persistence(error.localizedDescription))
             return nil
         }
-        if isEOE {
+        completionRecovery = nil
+        return continueAfterCompletion(plan)
+    }
+
+    private func applyAuthoritativeCompletion(_ plan: CompletionPlan) {
+        entries = plan.repairedSession.entries
+        currentKey = plan.repairedSession.currentKey
+        candidatesByKey.removeValue(forKey: plan.completedKey)
+        currentEpisode = currentKey.flatMap { candidatesByKey[$0] }
+        updateCanPlayNext()
+        lastProgressBucket = nil
+    }
+
+    private func continueAfterCompletion(_ plan: CompletionPlan) -> RadioPlaybackIntent? {
+        if case .advance(let endOfEpisode) = plan.continuation, endOfEpisode {
             sleepTimer = .off
-            state = nextCandidate == nil ? .exhausted : .readyPaused
+            state = currentEpisode == nil ? .exhausted : .readyPaused
             return nil
         }
-        guard let candidate = nextCandidate, let next = remaining.first(where: { $0.key == candidate.key }) else { state = .exhausted; return nil }
+        guard let candidate = currentEpisode,
+              let entry = entries.first(where: { $0.key == candidate.key }) else {
+            state = .exhausted
+            return nil
+        }
         state = .loading
-        let request = playbackRequest(for: candidate, position: next.positionSeconds)
-        guard canLoad(request.url) else { setPending(request, purpose: .advance); state = .waitingForNetwork; return nil }
+        let request = playbackRequest(for: candidate, position: entry.positionSeconds)
+        let purpose: PendingPurpose
+        if case .selection = plan.continuation { purpose = .selection }
+        else { purpose = .advance }
+        guard canLoad(request.url) else { setPending(request, purpose: purpose); state = .waitingForNetwork; return nil }
         return .play(request)
     }
 
@@ -474,6 +555,14 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
     func retry() -> RadioPlaybackIntent? {
         cancelPendingColdLaunchAutoplay()
         cancelPendingRequest()
+        if let completionRecovery {
+            switch completionRecovery {
+            case .markCoreData(let plan):
+                return executeCompletionPlan(plan, markCoreData: true)
+            case .saveSnapshot(let plan):
+                return executeCompletionPlan(plan, markCoreData: false)
+            }
+        }
         guard case .failed(.persistence) = state else {
             return resetAndRetryCurrent()
         }
@@ -503,6 +592,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         cancelPendingRequest()
         let saved = forceSave(positionSeconds: positionSeconds, duration: duration)
         if saved { state = .pausedByUser }
+        else { interruptionResumeEligible = false }
         // A deadline must pause transport even when persistence is unavailable.
         return .pause
     }

@@ -21,6 +21,19 @@
 - `bash skills/app-testing/scripts/run-radio.sh radio-state unit` stopped at its safety preflight because `Simulator.app` was open. No simulator was claimed, booted, reused, stopped, erased, or otherwise touched.
 - `git diff --check` passed.
 
+## Final Review Blockers
+
+- Completion recovery now records whether Core Data still needs `markCompleted` or whether only the repaired session snapshot remains. Retry reattempts the exact failed stage: a pre-Core-Data failure retains the current key, entry, and exact position; a post-Core-Data failure keeps the completed row removed in memory and only re-saves the authoritative snapshot before continuing.
+- `selectEpisode(_:)` applies the 95-percent-on-leave rule from the current entry's live seconds and known duration. It force-saves the exact position, completes Core Data, removes the completed entry, and then persists/selects the requested episode; a failed completion remains recoverable through Retry without deferring the nearly finished row.
+- Progress sanitizes non-finite seconds before bucket conversion. User pause still emits `.pause` when persistence fails, and interruption resume eligibility is revoked when the interruption-begin force-save fails.
+- Added same-session failed-entry partition and selection tests, completion Retry tests for both persistence stages, reconstructed crash-window restores, natural completion cursor/order, direct force-save ordering, reconnect retry-budget preservation, cold-launch failure reset, deadline/Next behavior, and concrete autoplay-cancellation coverage for pause, seek, Next, Retry, sleep, and selection.
+
+## Final Review Verification
+
+- `make radio-compile` passed after the final review repairs: `TEST BUILD SUCCEEDED`.
+- The isolated `radio-state` lane again exited at fleet preflight because host pressure remained critical (`load=128`, `Simulator.app=open`); no override or foreign simulator was used.
+- `git diff --check` passed.
+
 ## Review Repair
 
 - Remote playback is now held while connectivity is unknown or offline (except readable local files). The coordinator records the pending request and publishes its replay intent when the injected monitor becomes online.

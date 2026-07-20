@@ -30,6 +30,17 @@ struct RadioPlaybackStateTests {
         #expect(coordinator.entries[0].positionSeconds == 10)
     }
 
+    @Test func nonFiniteProgressIsSanitizedBeforeBucketConversion() async {
+        let episode = candidate("one")
+        let coordinator = make(candidates: [episode])
+        _ = await coordinator.restore(autoplayEnabled: false)
+
+        coordinator.recordProgress(for: episode.key, positionSeconds: .nan, duration: 100)
+        coordinator.recordProgress(for: episode.key, positionSeconds: .infinity, duration: 100)
+
+        #expect(coordinator.entries[0].positionSeconds == 0)
+    }
+
     @Test func staleLowLevelCallbacksCannotMutateOrCompleteCurrent() async {
         let first = candidate("one"); let second = candidate("two")
         let repository = CompletionRepository(candidates: [first, second])
@@ -51,14 +62,58 @@ struct RadioPlaybackStateTests {
     @Test func nextDefersCurrentAtDeferredTailBeforeFailedEntries() async {
         let first = candidate("one"); let next = candidate("two"); let deferred = candidate("three"); let failed = candidate("four")
         let snapshot = session([
-            entry(first.key), entry(next.key), entry(deferred.key, disposition: .deferred), entry(failed.key, disposition: .failedThisSession)
-        ], current: first.key)
-        let coordinator = make(store: FakeRadioSessionStore(snapshot: snapshot), repository: CompletionRepository(candidates: [first, next, deferred, failed]))
+            entry(failed.key), entry(first.key), entry(next.key), entry(deferred.key, disposition: .deferred)
+        ], current: failed.key)
+        let scheduler = TestRadioRetryScheduler()
+        let coordinator = make(
+            store: FakeRadioSessionStore(snapshot: snapshot),
+            repository: CompletionRepository(candidates: [first, next, deferred, failed]),
+            scheduler: scheduler
+        )
         _ = await coordinator.restore(autoplayEnabled: false)
+        _ = coordinator.playbackFailed(for: failed.key, message: "one", positionSeconds: 1, duration: 300, connectivity: .online)
+        scheduler.fire()
+        _ = coordinator.playbackFailed(for: failed.key, message: "two", positionSeconds: 2, duration: 300, connectivity: .online)
+        #expect(coordinator.currentKey == first.key)
+        #expect(coordinator.entries.first { $0.key == failed.key }?.disposition == .failedThisSession)
 
         #expect(coordinator.manualNext(positionSeconds: 42, duration: 300)?.key == next.key)
         #expect(coordinator.entries.map(\.key) == [next.key, deferred.key, first.key, failed.key])
         #expect(coordinator.entries[2].disposition == .deferred)
+    }
+
+    @Test func selectingAnotherEpisodeCompletesNearlyFinishedCurrentInsteadOfDeferringIt() async {
+        let first = candidate("one"); let selected = candidate("two")
+        let repository = CompletionRepository(candidates: [first, selected])
+        let store = FakeRadioSessionStore(snapshot: session([entry(first.key), entry(selected.key)], current: first.key))
+        let coordinator = make(store: store, repository: repository)
+        _ = await coordinator.restore(autoplayEnabled: false)
+        coordinator.recordProgress(for: first.key, positionSeconds: 286, duration: 300)
+
+        #expect(coordinator.selectEpisode(selected.key)?.key == selected.key)
+        #expect(repository.completed == [first.key])
+        #expect(!coordinator.entries.contains { $0.key == first.key })
+        #expect(coordinator.entries.allSatisfy { $0.disposition != .deferred })
+        #expect(store.savedNow?.currentKey == selected.key)
+    }
+
+    @Test func failedCompletionWhileSelectingKeepsExactCurrentAndRetryFinishesSelection() async {
+        let first = candidate("one"); let selected = candidate("two")
+        let repository = CompletionRepository(candidates: [first, selected], completionError: TestError.denied)
+        let store = FakeRadioSessionStore(snapshot: session([entry(first.key), entry(selected.key)], current: first.key))
+        let coordinator = make(store: store, repository: repository)
+        _ = await coordinator.restore(autoplayEnabled: false)
+        coordinator.recordProgress(for: first.key, positionSeconds: 286.5, duration: 300)
+
+        #expect(coordinator.selectEpisode(selected.key) == nil)
+        #expect(coordinator.currentKey == first.key)
+        #expect(coordinator.entries.first { $0.key == first.key }?.positionSeconds == 286.5)
+        #expect(coordinator.entries.first { $0.key == first.key }?.disposition != .deferred)
+        repository.completionError = nil
+
+        #expect(coordinator.retry()?.key == selected.key)
+        #expect(repository.completed == [first.key])
+        #expect(coordinator.currentKey == selected.key)
     }
 
     @Test func nearlyCompleteNextRetainsExactPositionWhenCompletionFails() async {
@@ -106,6 +161,59 @@ struct RadioPlaybackStateTests {
         #expect(coordinator.state == .failed(.persistence("denied")))
     }
 
+    @Test func retryAfterCompletionMarkFailureRetriesCompletionInsteadOfPlayback() async {
+        let first = candidate("one"); let next = candidate("two")
+        let repository = CompletionRepository(candidates: [first, next], completionError: TestError.denied)
+        let store = FakeRadioSessionStore(snapshot: session([entry(first.key, position: 37), entry(next.key)], current: first.key))
+        let coordinator = make(store: store, repository: repository)
+        _ = await coordinator.restore(autoplayEnabled: false)
+
+        #expect(coordinator.playbackCompleted(for: first.key, at: now) == nil)
+        #expect(repository.completionAttempts == [first.key])
+        #expect(coordinator.currentKey == first.key)
+        #expect(coordinator.entries.first?.positionSeconds == 37)
+        repository.completionError = nil
+
+        #expect(coordinator.retry()?.key == next.key)
+        #expect(repository.completionAttempts == [first.key, first.key])
+        #expect(repository.completed == [first.key])
+        #expect(!coordinator.entries.contains { $0.key == first.key })
+    }
+
+    @Test func retryAfterSnapshotFailureOnlyRepairsSnapshotAndContinues() async {
+        let first = candidate("one"); let next = candidate("two")
+        let repository = CompletionRepository(candidates: [first, next])
+        let store = FakeRadioSessionStore(snapshot: session([entry(first.key), entry(next.key)], current: first.key))
+        let coordinator = make(store: store, repository: repository)
+        _ = await coordinator.restore(autoplayEnabled: false)
+        store.saveNowError = TestError.denied
+
+        #expect(coordinator.playbackCompleted(for: first.key, at: now) == nil)
+        #expect(repository.completionAttempts == [first.key])
+        #expect(coordinator.currentKey == next.key)
+        store.saveNowError = nil
+
+        #expect(coordinator.retry()?.key == next.key)
+        #expect(repository.completionAttempts == [first.key])
+        #expect(store.savedNow?.currentKey == next.key)
+        #expect(!store.savedNow!.entries.contains { $0.key == first.key })
+    }
+
+    @Test func naturalCompletionReturnsNextIntentAfterCoreDataThenSnapshotSave() async {
+        let first = candidate("one"); let next = candidate("two")
+        var order: [String] = []
+        let repository = CompletionRepository(candidates: [first, next], onCompletion: { order.append("complete") })
+        let store = FakeRadioSessionStore(snapshot: session([entry(first.key), entry(next.key)], current: first.key), onSaveNow: { order.append("snapshot") })
+        let coordinator = make(store: store, repository: repository)
+        _ = await coordinator.restore(autoplayEnabled: false)
+        order.removeAll(); store.resetCalls()
+
+        #expect(coordinator.playbackCompleted(for: first.key, at: now)?.key == next.key)
+        #expect(order == ["complete", "snapshot"])
+        #expect(store.savedNow?.currentKey == next.key)
+        #expect(coordinator.currentKey == next.key)
+    }
+
     @Test func firstOnlineFailureSchedulesExactlyOneDelayedRetry() async {
         let episode = candidate("one")
         let scheduler = TestRadioRetryScheduler()
@@ -120,6 +228,37 @@ struct RadioPlaybackStateTests {
         scheduler.fire()
         scheduler.fire()
         #expect(intents.map(\.key) == [episode.key])
+        withExtendedLifetime(cancellable) {}
+    }
+
+    @Test func oneFailureThenOfflineReconnectUsesOnlyTheRemainingDelayedRetry() async {
+        let episode = candidate("one")
+        let monitor = TestConnectivityMonitor(.online)
+        let scheduler = TestRadioRetryScheduler()
+        let coordinator = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(snapshot: session([entry(episode.key)], current: episode.key)),
+            repository: CompletionRepository(candidates: [episode]), now: { now },
+            connectivity: monitor, retryScheduler: scheduler
+        )
+        var intents: [RadioPlaybackIntent] = []
+        let cancellable = coordinator.pendingNetworkIntentPublisher.sink { intents.append($0) }
+        _ = await coordinator.restore(autoplayEnabled: false)
+
+        _ = coordinator.playbackFailed(for: episode.key, message: "one", positionSeconds: 10, duration: 100, connectivity: .online)
+        #expect(coordinator.entries[0].playbackFailureCount == 1)
+        monitor.send(.offline)
+        scheduler.fireCanceledActionAnyway()
+        #expect(intents.isEmpty)
+        monitor.send(.online)
+        #expect(scheduler.scheduledDelays.last == 0.5)
+        scheduler.fire()
+        #expect(intents.map(\.key) == [episode.key])
+        #expect(coordinator.entries[0].playbackFailureCount == 1)
+
+        #expect(coordinator.playbackFailed(for: episode.key, message: "two", positionSeconds: 12, duration: 100, connectivity: .online) == nil)
+        #expect(coordinator.entries[0].playbackFailureCount == 2)
+        #expect(coordinator.entries[0].disposition == .failedThisSession)
+        #expect(intents.count == 1)
         withExtendedLifetime(cancellable) {}
     }
 
@@ -269,6 +408,21 @@ struct RadioPlaybackStateTests {
         #expect(coordinator.canPlayNext)
     }
 
+    @Test func coldLaunchRestoreResetsPersistedFailureBudget() async {
+        let episode = candidate("one")
+        let failed = RadioQueueEntry(key: episode.key, positionSeconds: 12, disposition: .failedThisSession, playbackFailureCount: 2, lastPlaybackError: "old")
+        let coordinator = make(
+            store: FakeRadioSessionStore(snapshot: session([failed], current: episode.key)),
+            repository: CompletionRepository(candidates: [episode])
+        )
+
+        _ = await coordinator.restore(autoplayEnabled: false)
+
+        #expect(coordinator.entries[0].disposition == .pending)
+        #expect(coordinator.entries[0].playbackFailureCount == 0)
+        #expect(coordinator.entries[0].lastPlaybackError == nil)
+    }
+
     @Test func pendingRetryIsCanceledByPauseBackgroundTerminationAndCurrentSwitch() async {
         let first = candidate("one"); let second = candidate("two")
         let scheduler = TestRadioRetryScheduler()
@@ -299,6 +453,40 @@ struct RadioPlaybackStateTests {
         withExtendedLifetime(cancellable) {}
     }
 
+    @Test func everyUserTransitionCancelsDeferredColdLaunchAutoplay() async {
+        let first = candidate("one"); let second = candidate("two")
+
+        func coordinatorForAction() async -> RadioSessionCoordinator {
+            let coordinator = RadioSessionCoordinator(
+                store: FakeRadioSessionStore(snapshot: session([entry(first.key), entry(second.key)], current: first.key)),
+                repository: CompletionRepository(candidates: [first, second]), now: { now },
+                connectivityStatus: { .unknown }, retryScheduler: TestRadioRetryScheduler()
+            )
+            _ = await coordinator.restore(autoplayEnabled: true)
+            #expect(coordinator.hasPendingColdLaunchAutoplay)
+            return coordinator
+        }
+
+        let pause = await coordinatorForAction()
+        _ = pause.pauseByUser(positionSeconds: 1, duration: 300)
+        #expect(!pause.hasPendingColdLaunchAutoplay)
+        let seek = await coordinatorForAction()
+        _ = seek.seekEnded(positionSeconds: 1, duration: 300)
+        #expect(!seek.hasPendingColdLaunchAutoplay)
+        let next = await coordinatorForAction()
+        _ = next.manualNext(positionSeconds: 1, duration: 300)
+        #expect(!next.hasPendingColdLaunchAutoplay)
+        let retry = await coordinatorForAction()
+        _ = retry.retry()
+        #expect(!retry.hasPendingColdLaunchAutoplay)
+        let sleep = await coordinatorForAction()
+        sleep.setSleepTimer(.deadline(now.addingTimeInterval(60)))
+        #expect(!sleep.hasPendingColdLaunchAutoplay)
+        let select = await coordinatorForAction()
+        _ = select.selectEpisode(second.key)
+        #expect(!select.hasPendingColdLaunchAutoplay)
+    }
+
     @Test func forceSaveEventsCapturePositionAndOrdering() async {
         let episode = candidate("one")
         var order: [String] = []
@@ -313,6 +501,73 @@ struct RadioPlaybackStateTests {
         _ = coordinator.handleTermination(positionSeconds: 7, duration: 100)
         #expect(store.forcedSaves.map { $0.entries[0].positionSeconds } == [5, 6, 7])
         #expect(order == ["coredata", "snapshot", "coredata", "snapshot", "coredata", "snapshot"])
+    }
+
+    @Test func directPauseNextCompletionInterruptionAndRouteSaveBeforeReturningIntent() async {
+        let first = candidate("one"); let next = candidate("two")
+        var order: [String] = []
+        let repository = CompletionRepository(
+            candidates: [first, next],
+            onProgress: { order.append("progress") },
+            onCompletion: { order.append("complete") }
+        )
+        let store = FakeRadioSessionStore(snapshot: session([entry(first.key), entry(next.key)], current: first.key), onSaveNow: { order.append("snapshot") })
+        let coordinator = make(store: store, repository: repository)
+        _ = await coordinator.restore(autoplayEnabled: false)
+
+        order.removeAll()
+        #expect(coordinator.pauseByUser(positionSeconds: 1, duration: 100) == .pause)
+        #expect(order == ["progress", "snapshot"])
+        order.removeAll()
+        _ = coordinator.handleInterruptionBegan(positionSeconds: 2, duration: 100)
+        #expect(order == ["progress", "snapshot"])
+        order.removeAll()
+        _ = coordinator.handleRouteRemoval(positionSeconds: 3, duration: 100)
+        #expect(order == ["progress", "snapshot"])
+        order.removeAll()
+        #expect(coordinator.manualNext(positionSeconds: 4, duration: 100)?.key == next.key)
+        #expect(order == ["progress", "snapshot"])
+        order.removeAll()
+        #expect(coordinator.playbackCompleted(for: next.key, at: now) == nil)
+        #expect(order == ["complete", "snapshot"])
+    }
+
+    @Test func pauseSaveFailureStillPausesAndInterruptionSaveFailureCannotResume() async {
+        let episode = candidate("one")
+        let store = FakeRadioSessionStore(snapshot: session([entry(episode.key)], current: episode.key))
+        let coordinator = make(store: store, repository: CompletionRepository(candidates: [episode]))
+        _ = await coordinator.restore(autoplayEnabled: false)
+        _ = coordinator.beginCurrent()
+        store.saveNowError = TestError.denied
+
+        #expect(coordinator.pauseByUser(positionSeconds: 10, duration: 100) == .pause)
+        #expect(coordinator.state == .failed(.persistence("denied")))
+
+        let interruptionStore = FakeRadioSessionStore(snapshot: session([entry(episode.key)], current: episode.key))
+        let interrupted = make(store: interruptionStore, repository: CompletionRepository(candidates: [episode]))
+        _ = await interrupted.restore(autoplayEnabled: false)
+        _ = interrupted.beginCurrent()
+        interruptionStore.saveNowError = TestError.denied
+        #expect(interrupted.handleInterruptionBegan(positionSeconds: 11, duration: 100) == .pause)
+        #expect(interrupted.handleInterruptionEnded(shouldResume: true) == nil)
+        #expect(interrupted.state == .failed(.persistence("denied")))
+    }
+
+    @Test func retryForceSavesBeforeReturningPlaybackIntent() async {
+        let episode = candidate("one")
+        var order: [String] = []
+        let repository = CompletionRepository(candidates: [episode], onProgress: { order.append("progress") })
+        let store = FakeRadioSessionStore(snapshot: session([entry(episode.key)], current: episode.key), onSaveNow: { order.append("snapshot") })
+        let scheduler = TestRadioRetryScheduler()
+        let coordinator = make(store: store, repository: repository, scheduler: scheduler)
+        _ = await coordinator.restore(autoplayEnabled: false)
+        _ = coordinator.playbackFailed(for: episode.key, message: "one", positionSeconds: 12, duration: 100, connectivity: .online)
+        scheduler.fire()
+        _ = coordinator.playbackFailed(for: episode.key, message: "two", positionSeconds: 13, duration: 100, connectivity: .online)
+        order.removeAll()
+
+        #expect(coordinator.retry()?.key == episode.key)
+        #expect(order == ["progress", "snapshot"])
     }
 
     @Test func interruptionSemanticallyPausesAndResumesOnlyPriorPlayingOnlineSession() async {
@@ -388,10 +643,17 @@ final class CompletionRepository: RadioEpisodeRepository {
     var progressWrites: [ProgressWrite] = []
     private let onProgress: () -> Void
 
-    init(candidates: [RadioEpisodeCandidate], completionError: Error? = nil, onProgress: @escaping () -> Void = {}) {
+    var completionAttempts: [RadioEpisodeKey] = []
+    private let onCompletion: () -> Void
+
+    init(
+        candidates: [RadioEpisodeCandidate], completionError: Error? = nil,
+        onProgress: @escaping () -> Void = {}, onCompletion: @escaping () -> Void = {}
+    ) {
         values = candidates
         self.completionError = completionError
         self.onProgress = onProgress
+        self.onCompletion = onCompletion
     }
 
     func candidates() throws -> [RadioEpisodeCandidate] { values }
@@ -402,7 +664,9 @@ final class CompletionRepository: RadioEpisodeRepository {
         onProgress()
     }
     func markCompleted(key: RadioEpisodeKey, at date: Date) throws {
+        completionAttempts.append(key)
         if let completionError { throw completionError }
+        onCompletion()
         completed.insert(key)
         values = values.map { value in
             guard value.key == key else { return value }

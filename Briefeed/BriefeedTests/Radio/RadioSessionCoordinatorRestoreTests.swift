@@ -230,18 +230,34 @@ struct RadioSessionCoordinatorRestoreTests {
         #expect(active.beginCurrent() == .play(request(for: episode, position: 0)))
     }
 
-    @Test func selectionDoesNotPublishOrMutateUntilForcedSaveSucceedsAndRejectsFailedEntries() async {
+    @Test func selectionDoesNotPublishOrMutateUntilForcedSaveSucceeds() async {
         let first = candidate("npr", "one")
-        let failed = candidate("bbc", "failed")
         let selected = candidate("bbc", "two")
-        let store = FakeRadioSessionStore(snapshot: session([entry(first.key, position: 12), entry(failed.key, disposition: .failedThisSession), entry(selected.key, position: 7)], current: first.key))
-        let coordinator = makeCoordinator(store: store, candidates: [first, failed, selected])
+        let store = FakeRadioSessionStore(snapshot: session([entry(first.key, position: 12), entry(selected.key, position: 7)], current: first.key))
+        let coordinator = makeCoordinator(store: store, candidates: [first, selected])
         _ = await coordinator.restore(autoplayEnabled: false)
         let before = coordinator.entries
         store.saveNowError = FakeError.failed
         #expect(coordinator.selectEpisode(selected.key) == nil)
         #expect(coordinator.entries == before)
+    }
+
+    @Test func selectionRejectsEntryThatFailedInTheCurrentSession() async {
+        let failed = candidate("npr", "failed")
+        let next = candidate("bbc", "next")
+        let scheduler = TestRadioRetryScheduler()
+        let coordinator = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(snapshot: session([entry(failed.key), entry(next.key)], current: failed.key)),
+            repository: FakeRadioEpisodeRepository(candidates: [failed, next]), now: { now },
+            connectivityStatus: { .online }, retryScheduler: scheduler
+        )
+        _ = await coordinator.restore(autoplayEnabled: false)
+        _ = coordinator.playbackFailed(for: failed.key, message: "one", positionSeconds: 1, duration: 60, connectivity: .online)
+        scheduler.fire()
+        _ = coordinator.playbackFailed(for: failed.key, message: "two", positionSeconds: 2, duration: 60, connectivity: .online)
+
         #expect(coordinator.selectEpisode(failed.key) == nil)
+        #expect(coordinator.currentKey == next.key)
     }
 
     @Test func refreshPreservesPlayingLoadingAndPausedStatesForSameCurrent() async {

@@ -128,6 +128,11 @@ struct CoreDataRadioEpisodeRepositoryTests {
         #expect(!episode.isListened)
         #expect(coordinator.currentKey == key)
         #expect(coordinator.entries.contains { $0.key == key })
+
+        let reconstructed = RadioSessionCoordinator(store: store, repository: repository, connectivityStatus: { .online })
+        _ = await reconstructed.restore(autoplayEnabled: false)
+        #expect(reconstructed.currentKey == key)
+        #expect(reconstructed.entries.contains { $0.key == key })
     }
 
     @Test @MainActor func coordinatorCrashAfterCoreDataCompletionDropsEpisodeInProcess() async throws {
@@ -149,6 +154,12 @@ struct CoreDataRadioEpisodeRepositoryTests {
         #expect(!coordinator.entries.contains { $0.key == key })
         #expect(coordinator.currentKey == nil)
         #expect(coordinator.retry() == nil)
+
+        store.saveNowError = nil
+        let reconstructed = RadioSessionCoordinator(store: store, repository: repository, connectivityStatus: { .online })
+        _ = await reconstructed.restore(autoplayEnabled: false)
+        #expect(reconstructed.currentKey == nil)
+        #expect(!reconstructed.entries.contains { $0.key == key })
     }
 
     @MainActor private func persistedSession(key: RadioEpisodeKey) -> PersistedRadioSession {
