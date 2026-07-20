@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import Briefeed
 
@@ -41,6 +42,16 @@ struct PlaybackSpeedSettingsTests {
 
         #expect(speed == 3.0)
         #expect(defaults.float(forKey: UserDefaultsKey.playbackSpeed.rawValue) == 3.0)
+    }
+
+    @Test func everySpeedControlUsesCanonicalOptions() {
+        let picker = SpeedPickerV2(selectedSpeed: .constant(1.0))
+        let horizontal = HorizontalSpeedSelector(selectedSpeed: .constant(1.0))
+
+        #expect(SpeedPickerV2.supportedSpeeds == PlaybackSpeedPolicy.supported)
+        #expect(picker.allSpeeds == PlaybackSpeedPolicy.supported)
+        #expect(horizontal.allSpeeds == PlaybackSpeedPolicy.supported)
+        #expect(Set(horizontal.quickSpeeds).isSubset(of: Set(PlaybackSpeedPolicy.supported)))
     }
 
     private func isolatedDefaults() -> (UserDefaults, String) {

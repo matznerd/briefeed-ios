@@ -11,13 +11,10 @@ struct SpeedPickerV2: View {
     @Binding var selectedSpeed: Float
     @State private var isExpanded = false
     
-    // Organized speed options with sections
-    let standardSpeeds: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
-    let fastSpeeds: [Float] = [2.5, 3.0, 4.0, 5.0]
-    let ultraFastSpeeds: [Float] = [8.0, 10.0, 15.0, 20.0]
-    
+    static let supportedSpeeds = PlaybackSpeedPolicy.supported
+
     var allSpeeds: [Float] {
-        standardSpeeds + fastSpeeds + ultraFastSpeeds
+        Self.supportedSpeeds
     }
     
     var body: some View {
@@ -58,42 +55,13 @@ struct SpeedPickerV2: View {
             // Speed options popup
             if isExpanded {
                 VStack(spacing: 0) {
-                    // Standard speeds section
                     SpeedSection(
-                        title: "Standard",
-                        speeds: standardSpeeds,
+                        title: "Playback Speed",
+                        speeds: allSpeeds,
                         selectedSpeed: $selectedSpeed,
                         onSelect: { 
                             isExpanded = false
                             HapticManager.shared.lightImpact()
-                        }
-                    )
-                    
-                    Divider()
-                        .padding(.horizontal, 16)
-                    
-                    // Fast speeds section
-                    SpeedSection(
-                        title: "Fast",
-                        speeds: fastSpeeds,
-                        selectedSpeed: $selectedSpeed,
-                        onSelect: { 
-                            isExpanded = false
-                            HapticManager.shared.mediumImpact()
-                        }
-                    )
-                    
-                    Divider()
-                        .padding(.horizontal, 16)
-                    
-                    // Ultra fast speeds section
-                    SpeedSection(
-                        title: "Ultra Fast 🚀",
-                        speeds: ultraFastSpeeds,
-                        selectedSpeed: $selectedSpeed,
-                        onSelect: { 
-                            isExpanded = false
-                            HapticManager.shared.heavyImpact()
                         }
                     )
                 }
