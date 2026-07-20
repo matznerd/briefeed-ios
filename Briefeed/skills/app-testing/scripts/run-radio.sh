@@ -15,15 +15,27 @@ state_dir="$(sim_state_dir)"
 mkdir -p "$state_dir"
 lane_lock="$state_dir/.adapter-$lane.lock"
 if ! mkdir "$lane_lock" 2>/dev/null; then
-    holder="$(sed -n 's/^pid=//p' "$lane_lock/holder" 2>/dev/null | head -1)"
-    if [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null; then
-        echo "Radio lane $lane is owned by pid $holder" >&2
-        exit 75
+    holder="$(sed -n 's/^pid=//p' "$lane_lock/holder" 2>/dev/null | head -1 || true)"
+    if [[ -z "$holder" ]]; then
+        for _ in {1..10}; do
+            sleep 0.05
+            holder="$(sed -n 's/^pid=//p' "$lane_lock/holder" 2>/dev/null | head -1 || true)"
+            [[ -n "$holder" ]] && break
+        done
     fi
-    age=$(( $(date +%s) - $(stat -f %m "$lane_lock" 2>/dev/null || echo 0) ))
-    (( age >= 10 )) || exit 75
-    rm -rf "$lane_lock"
-    mkdir "$lane_lock" || exit 75
+    if [[ -z "$holder" ]]; then
+        rm -rf "$lane_lock"
+        mkdir "$lane_lock" || exit 75
+    else
+        if kill -0 "$holder" 2>/dev/null; then
+            echo "Radio lane $lane is owned by pid $holder" >&2
+            exit 75
+        fi
+        age=$(( $(date +%s) - $(stat -f %m "$lane_lock" 2>/dev/null || echo 0) ))
+        (( age >= 10 )) || exit 75
+        rm -rf "$lane_lock"
+        mkdir "$lane_lock" || exit 75
+    fi
 fi
 printf 'pid=%s\n' "$$" > "$lane_lock/holder"
 
@@ -42,10 +54,13 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-doctor_rc=0
-bash "$ENGINE/sim-doctor.sh" --gc || doctor_rc=$?
+set +e
+doctor_output="$(bash "$ENGINE/sim-doctor.sh" --gc 2>&1)"
+doctor_rc=$?
+set -e
+printf '%s\n' "$doctor_output"
 [[ "$doctor_rc" == 0 || "$doctor_rc" == 10 ]] || exit 75
-if [[ "$doctor_rc" == 10 ]]; then
+if [[ "$doctor_rc" == 10 || "$doctor_output" == *"PRESSURE=critical"* ]]; then
     echo "Radio lane $lane will not start new work while host pressure is critical" >&2
     exit 75
 fi

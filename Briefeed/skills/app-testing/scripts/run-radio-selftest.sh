@@ -61,8 +61,15 @@ bash "$ROOT/skills/app-testing/scripts/run-radio.sh" live-radio-adapter-selftest
 test -f "$state/live-radio-adapter-selftest.env"
 test -f "$RADIO_SELFTEST_XCODEBUILD_MARKER"
 
+mkdir -p "$state/.adapter-live-radio-adapter-selftest.lock"
+rm -f "$state/.adapter-live-radio-adapter-selftest.lock/holder"
+rm -f "$RADIO_SELFTEST_XCODEBUILD_MARKER"
+bash "$ROOT/skills/app-testing/scripts/run-radio.sh" live-radio-adapter-selftest unit
+test -f "$RADIO_SELFTEST_XCODEBUILD_MARKER"
+
 apply_fixture "$engine/sim-doctor.sh" '#!/usr/bin/env bash
-exit 10'
+printf "%s\n" "PRESSURE=critical swap_free=100MB"
+exit 0'
 rm -f "$RADIO_SELFTEST_XCODEBUILD_MARKER"
 set +e
 bash "$ROOT/skills/app-testing/scripts/run-radio.sh" live-radio-adapter-selftest ui
@@ -71,4 +78,13 @@ set -e
 test "$critical_rc" -eq 75
 test ! -e "$RADIO_SELFTEST_XCODEBUILD_MARKER"
 
-printf '%s\n' "run-radio fresh-claim and critical-pressure self-tests passed"
+apply_fixture "$engine/sim-doctor.sh" '#!/usr/bin/env bash
+exit 10'
+set +e
+bash "$ROOT/skills/app-testing/scripts/run-radio.sh" live-radio-adapter-selftest ui
+critical_rc=$?
+set -e
+test "$critical_rc" -eq 75
+test ! -e "$RADIO_SELFTEST_XCODEBUILD_MARKER"
+
+printf '%s\n' "run-radio fresh-claim, ownerless-lock, and critical-pressure self-tests passed"

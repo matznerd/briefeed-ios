@@ -199,7 +199,10 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         didEvaluateColdLaunchAutoplay = true
         guard autoplayEnabled else { return nil }
         if let request = requestForCurrent() {
-            if canLoad(request.url) { return .play(request) }
+            if canLoad(request.url) {
+                state = .loading
+                return .play(request)
+            }
             coldLaunchAutoplayDeadline = now().addingTimeInterval(60)
             hasPendingColdLaunchAutoplay = true
             setPending(request, purpose: .coldLaunchAutoplay)
@@ -323,6 +326,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
            let request = requestForCurrent() {
             if canLoad(request.url) {
                 cancelPendingColdLaunchAutoplay()
+                state = .loading
                 return .play(request)
             }
             setPending(request, purpose: .coldLaunchAutoplay)

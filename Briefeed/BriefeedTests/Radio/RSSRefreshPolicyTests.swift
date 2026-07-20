@@ -63,7 +63,43 @@ struct RSSRefreshPolicyTests {
         #expect(episode.isListened)
         #expect(episode.listenedDate == oldDate)
         #expect(episode.lastPosition == 0.4)
+        #expect(context.insertedObjects.isEmpty)
+        #expect(context.updatedObjects.isEmpty)
+        #expect(context.deletedObjects.isEmpty)
         #expect(!context.hasChanges)
+    }
+
+    @Test @MainActor func failedRefreshSavePreservesUnrelatedUnsavedObjects() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let context = persistence.container.viewContext
+        let oldDate = Date(timeIntervalSince1970: 100)
+        let feed = makeFeed(in: context, id: "save-failure", lastFetchDate: oldDate)
+        _ = makeEpisode(in: context, feed: feed, id: "stable", date: oldDate)
+        try context.save()
+        let service = RSSAudioService(
+            viewContext: context,
+            dataLoader: { _ in Self.feedXML(url: "https://example.com/one.mp3", date: "Wed, 17 Jul 2024 12:05:00 GMT") },
+            saveContext: { throw SaveError.denied }
+        )
+        let existingUndoManager = UndoManager()
+        context.undoManager = existingUndoManager
+        existingUndoManager.beginUndoGrouping()
+        let draft = makeFeed(in: context, id: "unrelated-draft")
+        draft.displayName = "Unrelated unsaved draft"
+        existingUndoManager.endUndoGrouping()
+        #expect(existingUndoManager.canUndo)
+
+        let result = await service.refreshFeed(feed, now: Date(timeIntervalSince1970: 200))
+
+        #expect({ if case .failed = result.outcome { return true }; return false }())
+        #expect(feed.lastFetchDate == oldDate)
+        #expect(draft.managedObjectContext === context)
+        #expect(draft.isInserted)
+        #expect(!draft.isDeleted)
+        #expect(draft.displayName == "Unrelated unsaved draft")
+        #expect(context.hasChanges)
+        #expect(context.undoManager === existingUndoManager)
+        #expect(existingUndoManager.canUndo)
     }
 
     @Test @MainActor func shiftedFallbackPublicationDateReusesSameEpisodeHistory() async throws {
@@ -131,6 +167,9 @@ struct RSSRefreshPolicyTests {
         let request: NSFetchRequest<RSSFeed> = RSSFeed.fetchRequest()
         #expect(!firstSaved)
         #expect(try context.count(for: request) == 0)
+        #expect(context.insertedObjects.isEmpty)
+        #expect(context.updatedObjects.isEmpty)
+        #expect(context.deletedObjects.isEmpty)
         #expect(!context.hasChanges)
 
         let secondSaved = await service.ensureDefaultFeedsExist()

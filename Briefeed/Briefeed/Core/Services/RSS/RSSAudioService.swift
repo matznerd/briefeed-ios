@@ -71,23 +71,19 @@ class RSSAudioService: NSObject, ObservableObject {
     @discardableResult
     func ensureDefaultFeedsExist() async -> Bool {
         do {
-            let existingDefaultIDs = try Self.existingDefaultFeedIDs(in: viewContext)
-            if try Self.insertMissingDefaultFeeds(in: viewContext) {
-                do {
+            let inserted = try performRecoverableContextChanges {
+                let inserted = try Self.insertMissingDefaultFeeds(in: viewContext)
+                if inserted {
                     try saveContext()
-                } catch {
-                    Self.discardNewDefaultFeeds(in: viewContext, preserving: existingDefaultIDs)
-                    viewContext.rollback()
-                    if viewContext.hasChanges {
-                        viewContext.reset()
-                    }
-                    loadFeeds()
-                    throw error
                 }
+                return inserted
+            }
+            if inserted {
                 loadFeeds()
             }
             return true
         } catch {
+            loadFeeds()
             print("Error creating default feeds: \(error)")
             return false
         }
@@ -115,22 +111,6 @@ class RSSAudioService: NSObject, ObservableObject {
         return inserted
     }
 
-    private static func existingDefaultFeedIDs(in context: NSManagedObjectContext) throws -> Set<String> {
-        let request: NSFetchRequest<RSSFeed> = RSSFeed.fetchRequest()
-        let defaults = Set(defaultFeedsConfig.map(\.id))
-        return Set(try context.fetch(request).map(\.id).filter(defaults.contains))
-    }
-
-    private static func discardNewDefaultFeeds(in context: NSManagedObjectContext, preserving existingIDs: Set<String>) {
-        let request: NSFetchRequest<RSSFeed> = RSSFeed.fetchRequest()
-        let defaultIDs = Set(defaultFeedsConfig.map(\.id))
-        guard let feeds = try? context.fetch(request) else { return }
-        for feed in feeds where defaultIDs.contains(feed.id) && !existingIDs.contains(feed.id) {
-            context.delete(feed)
-        }
-        context.processPendingChanges()
-    }
-    
     @discardableResult
     func refreshAllFeeds() async -> RSSRefreshBatchResult {
         await refreshAll(now: Date())
@@ -189,35 +169,21 @@ class RSSAudioService: NSObject, ObservableObject {
             let parser = RSSParser()
             let episodes = try await parser.parse(data: data, feedId: feed.id)
             
-            var insertedIDs: [String] = []
-            var insertedEpisodes: [RSSEpisode] = []
-            var updatedEpisodes: [(episode: RSSEpisode, snapshot: EpisodeSnapshot)] = []
-            let previousFetchDate = feed.lastFetchDate
-            for episodeData in episodes {
-                if episodeData.usesFallbackIdentity,
-                   let canonicalURL = episodeData.canonicalEnclosureURL,
-                   let existing = episodeWithCanonicalEnclosure(canonicalURL, feedID: feed.id) {
-                    if !updatedEpisodes.contains(where: { $0.episode === existing }) {
-                        updatedEpisodes.append((existing, EpisodeSnapshot(episode: existing)))
+            let insertedIDs = try performRecoverableContextChanges {
+                var insertedIDs: [String] = []
+                for episodeData in episodes {
+                    if episodeData.usesFallbackIdentity,
+                       let canonicalURL = episodeData.canonicalEnclosureURL,
+                       let existing = episodeWithCanonicalEnclosure(canonicalURL, feedID: feed.id) {
+                        updateSafeMetadata(existing, from: episodeData)
+                    } else if !episodeExists(guid: episodeData.guid, feedId: feed.id) {
+                        _ = createEpisode(from: episodeData, for: feed)
+                        insertedIDs.append(episodeData.guid)
                     }
-                    updateSafeMetadata(existing, from: episodeData)
-                } else if !episodeExists(guid: episodeData.guid, feedId: feed.id) {
-                    insertedEpisodes.append(createEpisode(from: episodeData, for: feed))
-                    insertedIDs.append(episodeData.guid)
                 }
-            }
-            feed.lastFetchDate = now
-            do {
+                feed.lastFetchDate = now
                 try saveContext()
-            } catch {
-                restoreRefreshState(
-                    feed: feed,
-                    previousFetchDate: previousFetchDate,
-                    insertedEpisodes: insertedEpisodes,
-                    updatedEpisodes: updatedEpisodes
-                )
-                viewContext.rollback()
-                throw error
+                return insertedIDs
             }
             return RSSFeedRefreshResult(feedID: feed.id, outcome: .success(insertedEpisodeIDs: insertedIDs))
         } catch {
@@ -465,16 +431,26 @@ class RSSAudioService: NSObject, ObservableObject {
         return RSSFeedRefreshResult(feedID: feedID, outcome: .failed(message: error.localizedDescription))
     }
 
-    private func restoreRefreshState(
-        feed: RSSFeed,
-        previousFetchDate: Date?,
-        insertedEpisodes: [RSSEpisode],
-        updatedEpisodes: [(episode: RSSEpisode, snapshot: EpisodeSnapshot)]
-    ) {
-        for episode in insertedEpisodes { viewContext.delete(episode) }
-        for update in updatedEpisodes { update.snapshot.restore(on: update.episode) }
-        feed.lastFetchDate = previousFetchDate
-        viewContext.processPendingChanges()
+    private func performRecoverableContextChanges<T>(_ changes: () throws -> T) throws -> T {
+        // Callers enter only after their awaits; this temporary undo group owns
+        // the service's synchronous mutation without touching prior dirty state.
+        let previousUndoManager = viewContext.undoManager
+        let transactionUndoManager = UndoManager()
+        viewContext.undoManager = transactionUndoManager
+        transactionUndoManager.beginUndoGrouping()
+        defer { viewContext.undoManager = previousUndoManager }
+
+        do {
+            let value = try changes()
+            transactionUndoManager.endUndoGrouping()
+            transactionUndoManager.removeAllActions()
+            return value
+        } catch {
+            transactionUndoManager.endUndoGrouping()
+            transactionUndoManager.undo()
+            viewContext.processPendingChanges()
+            throw error
+        }
     }
     
     private func cleanupOldEpisodes() {
@@ -497,27 +473,6 @@ class RSSAudioService: NSObject, ObservableObject {
         }
     }
     
-}
-
-private struct EpisodeSnapshot {
-    let title: String
-    let pubDate: Date
-    let duration: Int32
-    let episodeDescription: String?
-
-    init(episode: RSSEpisode) {
-        title = episode.title
-        pubDate = episode.pubDate
-        duration = episode.duration
-        episodeDescription = episode.episodeDescription
-    }
-
-    func restore(on episode: RSSEpisode) {
-        episode.title = title
-        episode.pubDate = pubDate
-        episode.duration = duration
-        episode.episodeDescription = episodeDescription
-    }
 }
 
 // MARK: - Supporting Types

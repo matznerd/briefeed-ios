@@ -24,7 +24,11 @@ struct RadioSessionCoordinatorRestoreTests {
         let coordinator = makeCoordinator(store: FakeRadioSessionStore(snapshot: session([entry(episode.key, position: 17)], current: episode.key)), candidates: [episode])
 
         #expect(await coordinator.restore(autoplayEnabled: true) == .play(request(for: episode, position: 17)))
+        #expect(coordinator.state == .loading)
+        coordinator.transportDidStart(for: episode.key)
+        #expect(coordinator.state == .playing)
         #expect(await coordinator.restore(autoplayEnabled: true) == nil)
+        #expect(coordinator.state == .playing)
     }
 
     @Test func remoteRestoreAutoplayWaitsForKnownOnlineConnectivityAndEmitsOnceAfterDelay() async {
@@ -71,6 +75,7 @@ struct RadioSessionCoordinatorRestoreTests {
         )
 
         #expect(await coordinator.restore(autoplayEnabled: true) == .play(request(for: local, position: 0)))
+        #expect(coordinator.state == .loading)
     }
 
     @Test func initialRefreshRemoteAutoplayWaitsForConnectivity() async {
@@ -142,6 +147,9 @@ struct RadioSessionCoordinatorRestoreTests {
         let episode = candidate("npr", "one", date: clock)
         repository.values = [episode]
         #expect(coordinator.applyInitialRefresh(success()) == .play(request(for: episode, position: 0)))
+        #expect(coordinator.state == .loading)
+        coordinator.transportDidStart(for: episode.key)
+        #expect(coordinator.state == .playing)
 
         clock = now
         repository.values = []
@@ -209,7 +217,7 @@ struct RadioSessionCoordinatorRestoreTests {
         coordinator.refreshStarted(enabledSourceCount: 1)
         #expect(coordinator.applyRefresh(success()) == nil)
         #expect(coordinator.currentKey == episode.key)
-        #expect(coordinator.state == .playing)
+        #expect(coordinator.state == .loading)
 
         let coldStore = FakeRadioSessionStore(snapshot: session([entry(episode.key)], current: episode.key))
         coldStore.loadError = FakeError.failed
@@ -279,7 +287,7 @@ struct RadioSessionCoordinatorRestoreTests {
         _ = coordinator.beginCurrent()
         _ = await coordinator.restore(autoplayEnabled: false)
         #expect(coordinator.currentKey == episode.key)
-        #expect(coordinator.state == .playing)
+        #expect(coordinator.state == .loading)
     }
 
     @Test func onlyExplicitInitialRefreshCanConsumeDeferredAutoplay() async {

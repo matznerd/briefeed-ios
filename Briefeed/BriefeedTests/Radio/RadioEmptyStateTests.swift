@@ -53,7 +53,7 @@ struct RadioEmptyStateTests {
         #expect(coordinator.beginCurrent() != nil)
         coordinator.refreshStarted(enabledSourceCount: 1)
         coordinator.applyRefresh(.init(results: [.init(feedID: "npr", outcome: .failed(message: "503"))]))
-        #expect(coordinator.state == .playing)
+        #expect(coordinator.state == .loading)
         #expect(coordinator.sourceFailures == ["npr": "503"])
     }
 

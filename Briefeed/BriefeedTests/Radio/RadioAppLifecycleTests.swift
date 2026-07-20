@@ -74,7 +74,7 @@ struct RadioAppLifecycleTests {
     @Test func delayedInitialRefreshMayAutoplayAt59SecondsButNotAt60() async {
         let beforeDeadline = await delayedInitialRefresh(offset: 59)
         #expect(beforeDeadline.intent?.key == RadioEpisodeKey(feedID: "npr", episodeID: "latest"))
-        #expect(beforeDeadline.state == .readyPaused)
+        #expect(beforeDeadline.state == .loading)
 
         let atDeadline = await delayedInitialRefresh(offset: 60)
         #expect(atDeadline.intent == nil)
