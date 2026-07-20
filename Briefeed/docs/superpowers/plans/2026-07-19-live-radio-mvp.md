@@ -1,5 +1,14 @@
 # Briefeed Live Radio MVP Implementation Plan
 
+> **Execution status (July 20, 2026):** Tasks 1-12 are implemented on
+> `codex/live-radio-mvp`. Task 13's deterministic unit, focused Brief, complete
+> Radio UI, Analyze, signed archive, and App Store export gates pass. The build
+> is ready for an explicitly approved phone test. Physical-device listening,
+> remote controls, routes, interruptions, and sleep-under-lock remain open and
+> are required before distribution-candidate status. The exact evidence and
+> CoreSimulator audio limitation are recorded in
+> [`docs/release/LIVE-RADIO-DISTRIBUTION-RECEIPT.md`](../../release/LIVE-RADIO-DISTRIBUTION-RECEIPT.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship a distribution-candidate iOS build whose default Radio tab restores and deterministically advances a persisted source-ordered podcast session, supports opt-in cold-launch autoplay, 10-second transport controls, persisted speed, sleep timing, accessible compact navigation, and reliable background and remote playback without depending on Reddit or article generation.

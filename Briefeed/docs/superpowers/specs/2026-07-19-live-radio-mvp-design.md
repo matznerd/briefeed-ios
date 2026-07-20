@@ -1,7 +1,8 @@
 # Briefeed Live Radio MVP Design
 
 **Date:** 2026-07-19  
-**Status:** Proposed for implementation planning  
+**Status:** Implemented; automated simulator/archive verification passed, physical-device gate open
+
 **Product focus:** Reliable, quick, lean-back news radio from RSS podcast audio  
 **Relationship to existing PRD:** This specification governs the Live Radio vertical slice. It does not delete or redesign the Brief, Feed, Reddit, article summarization, or TTS systems. Where `PRD-REFACTOR-V2.md` describes Live News as a temporary non-persisted playback list, this specification supersedes that behavior for Radio playback.
 
