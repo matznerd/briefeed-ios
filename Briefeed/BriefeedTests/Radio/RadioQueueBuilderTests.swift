@@ -175,6 +175,17 @@ struct RadioQueueBuilderTests {
         #expect(result.entries.map(\.key) == [pending.key, failed.key])
     }
 
+    @Test func reconcileMissingCurrentSelectsAppendedPendingBeforeSavedDeferred() {
+        let deferred = candidate("deferred", "one", priority: 1, date: now)
+        let appended = candidate("appended", "one", priority: 0, date: now)
+        let snapshot = session(entries: [entry(deferred.key, .deferred)], current: key("missing", "one"))
+
+        let result = RadioQueueBuilder(now: now).reconcile(snapshot: snapshot, candidates: [deferred, appended])
+
+        #expect(result.currentKey == appended.key)
+        #expect(result.entries.map(\.key) == [appended.key, deferred.key])
+    }
+
     @Test func reconcileAppendsWithoutInsertingBeforeCurrentAndDeduplicatesKeysAndEnclosures() {
         let current = candidate("current", "one", priority: 10, date: now)
         let duplicateKey = candidate("current", "one", priority: 0, date: now)

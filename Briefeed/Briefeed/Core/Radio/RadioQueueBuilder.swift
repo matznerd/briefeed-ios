@@ -44,8 +44,8 @@ struct RadioQueueBuilder {
             resetSessionFailures: false
         )
         let candidatesByKey = dictionaryByKey(candidates)
-        let currentEntry = restored.currentKey.flatMap { currentKey in
-            restored.entries.first(where: { $0.key == currentKey })
+        let currentEntry = restored.entries.first { entry in
+            entry.key == snapshot.currentKey && entry.disposition != .failedThisSession
         }
         let nonCurrent = restored.entries.filter { $0.key != currentEntry?.key }
         let deferred = nonCurrent.filter { $0.disposition == .deferred }

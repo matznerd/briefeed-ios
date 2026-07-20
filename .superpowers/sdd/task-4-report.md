@@ -40,3 +40,9 @@
 - A valid cold-start `failedThisSession` current is reset to pending and retained as current. Live reconciliation keeps session failures transient and excludes a failed current in favor of pending, then deferred.
 - Added coverage for source/date boundaries (including exact daily 24-hour freshness and seven-day retention), restored current repositioning, pending reorder with appended items, invalid-current selection with an appended pending item, 200-entry store acceptance, and Core Data progress clamping/unknown duration.
 - `make radio-compile` passed and `git diff --check` passed after this correction. Simulator pressure was not overridden.
+
+## Final Review Fix
+
+- Added a RED regression for live reconciliation with a missing current, saved deferred entry, and fresh appended pending entry.
+- Reconciliation now preserves only the original snapshot current when that exact entry is eligible. A repair fallback is selected only after all partitions, including appended candidates, are built, so pending always wins over deferred.
+- `make radio-compile` passed after the fix.
