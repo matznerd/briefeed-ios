@@ -67,4 +67,18 @@ struct RSSEpisodeIdentityTests {
         #expect(episodes.isEmpty)
         #expect(parser.rejectedItemCount == 2)
     }
+
+    @Test func parserKeepsGuidWhenEnclosureCannotBeCanonicalized() async throws {
+        let data = Data("""
+        <rss><channel><item><title>Guid episode</title><guid>  source-guid  </guid><pubDate>Wed, 17 Jul 2024 12:00:00 GMT</pubDate><enclosure url="not a URL" type="audio/mpeg" /></item></channel></rss>
+        """.utf8)
+        let parser = RSSParser()
+
+        let episodes = try await parser.parse(data: data, feedId: "feed")
+
+        #expect(episodes.count == 1)
+        #expect(episodes.first?.guid == "source-guid")
+        #expect(episodes.first?.audioUrl == "not a URL")
+        #expect(episodes.first?.canonicalEnclosureURL == nil)
+    }
 }

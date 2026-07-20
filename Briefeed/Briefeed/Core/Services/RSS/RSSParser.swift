@@ -133,13 +133,16 @@ extension RSSParser: XMLParserDelegate {
                 enclosureURL: currentEnclosureUrl,
                 publicationDate: publicationDate
             )
-            let canonicalEnclosureURL = try RSSEpisodeIdentity.canonicalEnclosureURL(currentEnclosureUrl)
+            let usesFallbackIdentity = currentGuid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let canonicalEnclosureURL = usesFallbackIdentity
+                ? try RSSEpisodeIdentity.canonicalEnclosureURL(currentEnclosureUrl)
+                : nil
             items.append(ParsedRSSEpisode(
                 guid: identity,
                 title: title,
                 audioUrl: currentEnclosureUrl,
                 canonicalEnclosureURL: canonicalEnclosureURL,
-                usesFallbackIdentity: currentGuid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                usesFallbackIdentity: usesFallbackIdentity,
                 pubDate: publicationDate,
                 duration: parseDuration(currentDuration),
                 description: cleanDescription(currentDescription)
