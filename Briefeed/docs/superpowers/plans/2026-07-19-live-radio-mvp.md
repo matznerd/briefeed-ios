@@ -1681,9 +1681,11 @@ Expected: the branch is clean and reports up to date with its origin. Work is no
 ## Planning Review Record
 
 - The first architecture gate returned REVISE with stable findings covering task atomicity, interruption ownership, fresh-source evidence, simulator claims, local-only startup, persistence generations, tri-state connectivity, callback identity, singleton-free tests, fixture reset, and release labeling. Every listed correction is incorporated into this revision.
-- The authorized Fabled Orca High review attempt timed out without publishing a verdict (`.orca/runs/briefeed-radio-plan-review-20260719/review-01/manifest.json`).
-- The authorized Fabled Orca High debate attempt exited 86 without a valid result envelope (`.orca/runs/briefeed-radio-plan-debate-20260719/debate-01/manifest.json`). No Fable findings or approval are claimed, and no retry was made.
-- A fresh same-provider fallback gate re-read the final specification and plan and returned APPROVE with no remaining critical or high task-boundary inconsistency. This approves implementation readiness only; product implementation, simulator evidence, physical-device checks, signing, archive validation, and distribution remain undone.
+- Two historical Fabled Orca High transport attempts failed before the final revision: the first review timed out without a verdict, and the first debate exited 86 without a valid envelope. Neither is treated as review evidence.
+- A fresh independent Fable High review of `radio-plan-82e80e6-v2` completed with observed Anthropic/Fable routing and returned `PLAN_APPROVED`. Result SHA-256: `0d9968be7de072fbea6ab786590c1cf4503af75210bb05bf3139b20bdd880ebc`. It found no critical/high issue and raised two medium plus three low hardening items.
+- Revision `68c2b94` bounded deferred autoplay to 60 active seconds, made canonical-enclosure ingestion preserve durable identity across shifted publication dates, specified exact foreground poll re-arming, strengthened the Task 7/8 adjacency gate, and carried the already-existing crash-window proof into the review evidence.
+- A fresh Fable High debate round reviewed every finding disposition and declared the plan converged with no remaining critical, high, or material medium disagreement. Result SHA-256: `7da462e6eb40d51107cc571214a56db4106ca6f9bf75c93fbd8c9d8dff5f3e1d`; round: `debate-round-1`; remaining disagreements: none.
+- The independent review and debate approve implementation readiness only. Product implementation, simulator evidence, physical-device checks, signing, archive validation, and distribution remain undone.
 
 ## Final Acceptance Matrix
 
