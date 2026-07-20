@@ -13,52 +13,19 @@ extension BriefeedApp {
     
     /// Initialize RSS features on app launch
     func initializeRSSFeatures() {
-        do {
-            print("📡 Initializing RSS features...")
-            
-            // Register RSS defaults
-            UserDefaultsManager.shared.registerRSSDefaults()
-            UserDefaultsManager.shared.loadRSSSettings()
-            
-            print("✅ RSS settings loaded")
-            
-            // Initialize RSS feeds and auto-play
-            Task {
-                do {
-                    // Initialize default RSS feeds if needed
-                    await RSSAudioService.shared.initializeDefaultFeedsIfNeeded()
-                    print("✅ RSS feeds initialized")
-                    
-                    // Handle auto-play if enabled
-                    if UserDefaultsManager.shared.autoPlayLiveNewsOnOpen {
-                        // Wait a moment for UI to be ready
-                        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-                        
-                        // Refresh feeds if needed
-                        await RSSAudioService.shared.refreshAllFeeds()
-                        
-                        // Play live news like a radio
-                        await playLiveNewsRadio()
-                    }
-                } catch {
-                    print("❌ Error in RSS initialization: \(error)")
-                }
-            }
-            
-            // Schedule periodic cleanup (handled by new cache manager)
-            scheduleRSSRefresh()
-            
-        } catch {
-            print("❌ Fatal error initializing RSS features: \(error)")
-        }
-    }
-    
-    /// Schedule periodic feed refresh
-    private func scheduleRSSRefresh() {
-        // Refresh feeds every 30 minutes
-        Timer.scheduledTimer(withTimeInterval: 1800, repeats: true) { _ in
-            Task {
-                await RSSAudioService.shared.refreshAllFeeds()
+        print("📡 Initializing RSS features...")
+        UserDefaultsManager.shared.registerRSSDefaults()
+        UserDefaultsManager.shared.loadRSSSettings()
+        print("✅ RSS settings loaded")
+
+        Task {
+            await RSSAudioService.shared.ensureDefaultFeedsExist()
+            print("✅ RSS feeds initialized")
+
+            if UserDefaultsManager.shared.autoPlayLiveNewsOnOpen {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                _ = await RSSAudioService.shared.refreshAllFeeds()
+                await playLiveNewsRadio()
             }
         }
     }

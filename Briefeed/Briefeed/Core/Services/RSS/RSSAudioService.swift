@@ -24,7 +24,6 @@ class RSSAudioService: NSObject, ObservableObject {
     // MARK: - Private Properties
     private let networkService = NetworkService.shared
     private let viewContext = PersistenceController.shared.container.viewContext
-    private var refreshTimer: Timer?
     
     // MARK: - Default Feeds Configuration
     private let defaultFeedsConfig = [
@@ -43,13 +42,12 @@ class RSSAudioService: NSObject, ObservableObject {
     private override init() {
         super.init()
         loadFeeds()
-        setupAutoRefresh()
     }
     
     // MARK: - Public Methods
     
-    /// Initialize default feeds if needed
-    func initializeDefaultFeedsIfNeeded() async {
+    /// Inserts default feed rows only. Network refresh is owned by explicit refresh calls.
+    func ensureDefaultFeedsExist() async {
         let fetchRequest: NSFetchRequest<RSSFeed> = RSSFeed.fetchRequest()
         let count = (try? viewContext.count(for: fetchRequest)) ?? 0
         
@@ -61,58 +59,86 @@ class RSSAudioService: NSObject, ObservableObject {
             do {
                 try viewContext.save()
                 loadFeeds()
-                await refreshAllFeeds()
             } catch {
                 print("Error creating default feeds: \(error)")
             }
         }
     }
     
-    /// Refresh all enabled feeds
-    func refreshAllFeeds() async {
-        guard !isRefreshing else { return }
+    @discardableResult
+    func refreshAllFeeds() async -> RSSRefreshBatchResult {
+        await refreshAll(now: Date())
+    }
+
+    func refreshAll(now: Date) async -> RSSRefreshBatchResult {
+        guard !isRefreshing else { return RSSRefreshBatchResult(results: []) }
         
         isRefreshing = true
         lastError = nil
         
-        // Refresh each enabled feed
-        for feed in feeds.filter({ $0.isEnabled }) {
-            await refreshFeed(feed)
+        var results: [RSSFeedRefreshResult] = []
+        for feed in feeds.filter(\.isEnabled).sorted(by: { lhs, rhs in
+            lhs.priority == rhs.priority ? lhs.id < rhs.id : lhs.priority < rhs.priority
+        }) {
+            results.append(await refreshFeed(feed, now: now))
         }
         
         isRefreshing = false
         
         // Clean up old episodes
         cleanupOldEpisodes()
+        return RSSRefreshBatchResult(results: results)
+    }
+
+    func refreshIfStale(now: Date) async -> RSSRefreshBatchResult {
+        guard !isRefreshing else { return RSSRefreshBatchResult(results: []) }
+        var results: [RSSFeedRefreshResult] = []
+        for feed in feeds.filter(\.isEnabled).sorted(by: { lhs, rhs in
+            lhs.priority == rhs.priority ? lhs.id < rhs.id : lhs.priority < rhs.priority
+        }) {
+            results.append(await refreshIfStale(feed, now: now))
+        }
+        return RSSRefreshBatchResult(results: results)
+    }
+
+    func refreshIfStale(_ feed: RSSFeed, now: Date) async -> RSSFeedRefreshResult {
+        if let lastSuccess = feed.lastFetchDate,
+           !RSSRefreshPolicy.isStale(feed.updateFrequencyEnum, lastSuccess: lastSuccess, now: now) {
+            return RSSFeedRefreshResult(feedID: feed.id, outcome: .skippedFresh(lastSuccessfulRefresh: lastSuccess))
+        }
+        return await refreshFeed(feed, now: now)
     }
     
     /// Refresh a specific feed
-    func refreshFeed(_ feed: RSSFeed) async {
+    func refreshFeed(_ feed: RSSFeed, now: Date = Date()) async -> RSSFeedRefreshResult {
         do {
             // Fetch RSS data
-            guard let url = URL(string: feed.url) else { return }
+            guard let url = URL(string: feed.url) else {
+                return RSSFeedRefreshResult(feedID: feed.id, outcome: .failed(message: "Invalid feed URL"))
+            }
             let data = try await networkService.requestData(url.absoluteString, method: .get, parameters: nil, headers: nil, timeout: nil)
             
             // Parse RSS
             let parser = RSSParser()
             let episodes = try await parser.parse(data: data, feedId: feed.id)
             
-            // Update feed in Core Data
-            feed.lastFetchDate = Date()
-            
-            // Add new episodes
+            var insertedIDs: [String] = []
             for episodeData in episodes {
-                // Check if episode already exists
-                if !episodeExists(guid: episodeData.guid, feedId: feed.id) {
+                if episodeData.usesFallbackIdentity,
+                   let existing = episodeWithCanonicalEnclosure(episodeData.canonicalEnclosureURL, feedID: feed.id) {
+                    updateSafeMetadata(existing, from: episodeData)
+                } else if !episodeExists(guid: episodeData.guid, feedId: feed.id) {
                     createEpisode(from: episodeData, for: feed)
+                    insertedIDs.append(episodeData.guid)
                 }
             }
-            
+            feed.lastFetchDate = now
             try viewContext.save()
-            
+            return RSSFeedRefreshResult(feedID: feed.id, outcome: .success(insertedEpisodeIDs: insertedIDs))
         } catch {
             print("Error refreshing feed \(feed.displayName): \(error)")
             lastError = error
+            return RSSFeedRefreshResult(feedID: feed.id, outcome: .failed(message: error.localizedDescription))
         }
     }
     
@@ -176,7 +202,7 @@ class RSSAudioService: NSObject, ObservableObject {
     
     /// Parse Player.fm URL to extract RSS feed
     func extractFeedFromPlayerFM(_ urlString: String) async -> String? {
-        guard let url = URL(string: urlString) else { return nil }
+        guard URL(string: urlString) != nil else { return nil }
         
         do {
             // Use Firecrawl to get the page content
@@ -184,7 +210,7 @@ class RSSAudioService: NSObject, ObservableObject {
             let scraped = try await firecrawlService.scrapeURL(urlString)
             
             // Look for RSS feed link in the content
-            let content = scraped.markdown ?? scraped.content ?? ""
+            let content = scraped.markdown ?? scraped.content
             if !content.isEmpty {
                 // Player.fm includes RSS links in the page
                 let pattern = #"(https?://[^"\s]+\.rss|https?://[^"\s]+/rss|https?://[^"\s]+/feed)"#
@@ -245,7 +271,7 @@ class RSSAudioService: NSObject, ObservableObject {
         loadFeeds()
         
         // Refresh the new feed
-        await refreshFeed(feed)
+        _ = await refreshFeed(feed)
     }
     
     /// Delete a feed
@@ -331,6 +357,25 @@ class RSSAudioService: NSObject, ObservableObject {
         let count = (try? viewContext.count(for: fetchRequest)) ?? 0
         return count > 0
     }
+
+    private func episodeWithCanonicalEnclosure(_ canonicalURL: String, feedID: String) -> RSSEpisode? {
+        let request: NSFetchRequest<RSSEpisode> = RSSEpisode.fetchRequest()
+        request.predicate = NSPredicate(format: "feedId == %@", feedID)
+        do {
+            return try viewContext.fetch(request).first {
+                (try? RSSEpisodeIdentity.canonicalEnclosureURL($0.audioUrl)) == canonicalURL
+            }
+        } catch {
+            return nil
+        }
+    }
+
+    private func updateSafeMetadata(_ episode: RSSEpisode, from data: ParsedRSSEpisode) {
+        episode.title = data.title
+        episode.pubDate = data.pubDate
+        episode.duration = Int32(data.duration ?? 0)
+        episode.episodeDescription = data.description
+    }
     
     private func cleanupOldEpisodes() {
         let fetchRequest: NSFetchRequest<RSSEpisode> = RSSEpisode.fetchRequest()
@@ -352,22 +397,6 @@ class RSSAudioService: NSObject, ObservableObject {
         }
     }
     
-    private func setupAutoRefresh() {
-        // Refresh feeds periodically based on their update frequency
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 1800, repeats: true) { _ in // 30 minutes
-            Task {
-                await self.refreshStaleFeeds()
-            }
-        }
-    }
-    
-    private func refreshStaleFeeds() async {
-        let staleFeeds = feeds.filter { $0.isEnabled && $0.isStale }
-        
-        for feed in staleFeeds {
-            await refreshFeed(feed)
-        }
-    }
 }
 
 // MARK: - Supporting Types
@@ -383,7 +412,42 @@ struct ParsedRSSEpisode {
     let guid: String
     let title: String
     let audioUrl: String
+    let canonicalEnclosureURL: String
+    let usesFallbackIdentity: Bool
     let pubDate: Date
     let duration: Int?
     let description: String?
+}
+
+enum RSSFeedRefreshOutcome: Equatable, Sendable {
+    case success(insertedEpisodeIDs: [String])
+    case failed(message: String)
+    case skippedFresh(lastSuccessfulRefresh: Date)
+    case skippedOffline
+}
+
+struct RSSFeedRefreshResult: Equatable, Sendable {
+    let feedID: String
+    let outcome: RSSFeedRefreshOutcome
+}
+
+struct RSSRefreshBatchResult: Equatable, Sendable {
+    let results: [RSSFeedRefreshResult]
+
+    var successfulSourceEvidenceCount: Int {
+        results.reduce(into: 0) { count, result in
+            switch result.outcome {
+            case .success, .skippedFresh:
+                count += 1
+            case .failed, .skippedOffline:
+                break
+            }
+        }
+    }
+
+    var attemptedFailureCount: Int {
+        results.reduce(into: 0) { count, result in
+            if case .failed = result.outcome { count += 1 }
+        }
+    }
 }

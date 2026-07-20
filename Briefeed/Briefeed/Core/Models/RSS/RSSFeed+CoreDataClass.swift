@@ -23,9 +23,7 @@ public class RSSFeed: NSManagedObject {
     }
     
     var isStale: Bool {
-        guard let lastFetch = lastFetchDate else { return true }
-        let stalePeriod: TimeInterval = updateFrequencyEnum == .hourly ? 3600 : 86400 // 1 hour or 24 hours
-        return Date().timeIntervalSince(lastFetch) > stalePeriod
+        RSSRefreshPolicy.isStale(updateFrequencyEnum, lastSuccess: lastFetchDate, now: Date())
     }
     
     // MARK: - Helper Methods
@@ -76,9 +74,16 @@ enum RSSUpdateFrequency: String, CaseIterable {
     var checkInterval: TimeInterval {
         switch self {
         case .hourly:
-            return 3600 // 1 hour
+            return 1800
         case .daily:
-            return 21600 // 6 hours
+            return 21600
         }
+    }
+}
+
+enum RSSRefreshPolicy {
+    static func isStale(_ frequency: RSSUpdateFrequency, lastSuccess: Date?, now: Date) -> Bool {
+        guard let lastSuccess else { return true }
+        return now.timeIntervalSince(lastSuccess) > frequency.checkInterval
     }
 }

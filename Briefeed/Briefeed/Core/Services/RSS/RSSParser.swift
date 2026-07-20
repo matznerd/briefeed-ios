@@ -24,6 +24,7 @@ class RSSParser: NSObject {
     private var items: [ParsedRSSEpisode] = []
     private var feedId: String = ""
     private var isInsideItem = false
+    private(set) var rejectedItemCount = 0
     
     // MARK: - Public Methods
     
@@ -31,6 +32,7 @@ class RSSParser: NSObject {
     func parse(data: Data, feedId: String) async throws -> [ParsedRSSEpisode] {
         self.feedId = feedId
         self.items = []
+        self.rejectedItemCount = 0
         
         let parser = XMLParser(data: data)
         parser.delegate = self
@@ -109,24 +111,43 @@ extension RSSParser: XMLParserDelegate {
         let element = elementName.lowercased()
         
         if element == "item" || element == "entry" {
-            // Create episode if we have required fields
-            if !currentTitle.isEmpty && !currentEnclosureUrl.isEmpty {
-                let episode = ParsedRSSEpisode(
-                    guid: currentGuid.isEmpty ? "\(feedId)-\(currentPubDate)" : currentGuid,
-                    title: currentTitle.trimmingCharacters(in: .whitespacesAndNewlines),
-                    audioUrl: currentEnclosureUrl,
-                    pubDate: parseDate(currentPubDate) ?? Date(),
-                    duration: parseDuration(currentDuration),
-                    description: cleanDescription(currentDescription)
-                )
-                items.append(episode)
-            }
+            appendCurrentItemIfValid()
             
             isInsideItem = false
         }
     }
     
     // MARK: - Helper Methods
+
+    private func appendCurrentItemIfValid() {
+        let title = currentTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty,
+              let publicationDate = parseDate(currentPubDate) else {
+            rejectedItemCount += 1
+            return
+        }
+
+        do {
+            let identity = try RSSEpisodeIdentity.episodeID(
+                guid: currentGuid,
+                enclosureURL: currentEnclosureUrl,
+                publicationDate: publicationDate
+            )
+            let canonicalEnclosureURL = try RSSEpisodeIdentity.canonicalEnclosureURL(currentEnclosureUrl)
+            items.append(ParsedRSSEpisode(
+                guid: identity,
+                title: title,
+                audioUrl: currentEnclosureUrl,
+                canonicalEnclosureURL: canonicalEnclosureURL,
+                usesFallbackIdentity: currentGuid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                pubDate: publicationDate,
+                duration: parseDuration(currentDuration),
+                description: cleanDescription(currentDescription)
+            ))
+        } catch {
+            rejectedItemCount += 1
+        }
+    }
     
     private func parseDate(_ dateString: String) -> Date? {
         let trimmedDate = dateString.trimmingCharacters(in: .whitespacesAndNewlines)
