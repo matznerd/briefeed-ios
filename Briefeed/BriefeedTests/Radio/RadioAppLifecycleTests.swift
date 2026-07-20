@@ -81,10 +81,13 @@ struct RadioAppLifecycleTests {
         #expect(atDeadline.state == .readyPaused)
     }
 
-    @Test func backgroundCancelsPendingWorkAndGuardsLateRefreshApplication() async {
+    @Test func foregroundWaitsForCancellationIgnoringRefreshBeforeStartingItsReplacement() async {
         let monitor = LifecycleConnectivityMonitor(.online)
-        let gate = LifecycleRefreshGate()
-        var applyCount = 0
+        let loader = LifecycleSingleFlightLoader(
+            initialResult: refreshResult(episodeID: "initial"),
+            foregroundResult: refreshResult(episodeID: "foreground")
+        )
+        var appliedResults: [RSSRefreshBatchResult] = []
         var cancelAutoplayCount = 0
         var forceSaveCount = 0
         let driver = makeDriver(
@@ -93,27 +96,40 @@ struct RadioAppLifecycleTests {
             forceSave: { _ in forceSaveCount += 1 }
         )
         driver.handleScenePhase(.active)
-        var foregroundApplyCount = 0
-        let initial = refreshWork(load: { await gate.wait() }, apply: { _ in applyCount += 1 })
-        let foreground = refreshWork(load: { self.emptyRefresh }, apply: { _ in foregroundApplyCount += 1 })
+        let initial = refreshWork(
+            load: { await loader.loadInitial() },
+            apply: { appliedResults.append($0) }
+        )
+        let foreground = refreshWork(
+            load: { await loader.loadForeground() },
+            apply: { appliedResults.append($0) }
+        )
 
         await driver.startColdLaunch(restore: { _ in nil }, initialRefresh: initial, foregroundRefresh: foreground)
         await settle()
         #expect(driver.hasInFlightRefresh)
+        #expect(loader.isRefreshing)
+        #expect(loader.initialLoadCount == 1)
 
         driver.handleScenePhase(.background)
-        #expect(!driver.hasInFlightRefresh)
+        #expect(driver.hasInFlightRefresh)
         driver.handleScenePhase(.active)
         await settle()
-        #expect(foregroundApplyCount == 1)
+        #expect(driver.hasPendingRefresh)
+        #expect(loader.foregroundLoadCount == 0)
+        #expect(loader.overlapCount == 0)
+        #expect(appliedResults.isEmpty)
 
-        gate.release(emptyRefresh)
+        loader.releaseInitial()
         await settle()
 
         #expect(!driver.hasPendingRefresh)
         #expect(!driver.hasInFlightRefresh)
         #expect(driver.hasActivePoll)
-        #expect(applyCount == 0)
+        #expect(!loader.isRefreshing)
+        #expect(loader.foregroundLoadCount == 1)
+        #expect(loader.overlapCount == 0)
+        #expect(appliedResults == [refreshResult(episodeID: "foreground")])
         #expect(cancelAutoplayCount == 1)
         #expect(forceSaveCount == 1)
     }
@@ -215,24 +231,35 @@ struct RadioAppLifecycleTests {
         #expect(foregroundCount == 1)
     }
 
-    @Test func backgroundDuringRestoreRejectsLateAutoplayIntent() async {
+    @Test func activeReturnBeforeStaleRestoreCompletesUsesOnlyForegroundRefreshAndOnePoll() async {
         let monitor = LifecycleConnectivityMonitor(.online)
         let gate = LifecycleIntentGate()
         var appliedIntents: [RadioPlaybackIntent?] = []
+        var initialCount = 0
         var foregroundCount = 0
-        let driver = makeDriver(monitor: monitor)
+        var sleepCalls: [TimeInterval] = []
+        let driver = makeDriver(monitor: monitor, sleep: { seconds in
+            sleepCalls.append(seconds)
+            try await Task.sleep(for: .seconds(3_600))
+        })
         driver.handleScenePhase(.active)
 
         let startup = Task { @MainActor in
             await driver.startColdLaunch(
                 restore: { _ in await gate.wait() },
                 applyRestoreIntent: { appliedIntents.append($0) },
-                initialRefresh: refreshWork(load: { self.emptyRefresh }),
+                initialRefresh: refreshWork(begin: { initialCount += 1 }, load: { self.emptyRefresh }),
                 foregroundRefresh: refreshWork(begin: { foregroundCount += 1 }, load: { self.emptyRefresh })
             )
         }
         await settle()
         driver.handleScenePhase(.background)
+        driver.handleScenePhase(.active)
+        await settle()
+        #expect(initialCount == 0)
+        #expect(foregroundCount == 0)
+        #expect(!driver.hasActivePoll)
+
         gate.release(.play(RadioPlaybackRequest(
             key: RadioEpisodeKey(feedID: "npr", episodeID: "late"),
             url: URL(string: "https://example.com/late.mp3")!,
@@ -241,11 +268,13 @@ struct RadioAppLifecycleTests {
             positionSeconds: 0
         )))
         await startup.value
+        await settle()
 
         #expect(appliedIntents.isEmpty)
-        driver.handleScenePhase(.active)
-        await settle()
+        #expect(initialCount == 0)
         #expect(foregroundCount == 1)
+        #expect(driver.hasActivePoll)
+        #expect(sleepCalls == [900])
     }
 
     @Test func backgroundForceSavesActiveRadioTransportPositionAndBriefWithoutStoppingAudio() async {
@@ -361,6 +390,12 @@ struct RadioAppLifecycleTests {
         )
     }
 
+    private func refreshResult(episodeID: String) -> RSSRefreshBatchResult {
+        RSSRefreshBatchResult(results: [
+            RSSFeedRefreshResult(feedID: "npr", outcome: .success(insertedEpisodeIDs: [episodeID]))
+        ])
+    }
+
     private func session(for key: RadioEpisodeKey, position: TimeInterval) -> PersistedRadioSession {
         PersistedRadioSession(
             schemaVersion: PersistedRadioSession.schemaVersion,
@@ -418,16 +453,46 @@ private final class LifecycleConnectivityMonitor: ConnectivityMonitoring {
 }
 
 @MainActor
-private final class LifecycleRefreshGate {
-    private var continuation: CheckedContinuation<RSSRefreshBatchResult, Never>?
+private final class LifecycleSingleFlightLoader {
+    private let initialResult: RSSRefreshBatchResult
+    private let foregroundResult: RSSRefreshBatchResult
+    private var initialContinuation: CheckedContinuation<RSSRefreshBatchResult, Never>?
+    private(set) var isRefreshing = false
+    private(set) var initialLoadCount = 0
+    private(set) var foregroundLoadCount = 0
+    private(set) var overlapCount = 0
 
-    func wait() async -> RSSRefreshBatchResult {
-        await withCheckedContinuation { continuation = $0 }
+    init(initialResult: RSSRefreshBatchResult, foregroundResult: RSSRefreshBatchResult) {
+        self.initialResult = initialResult
+        self.foregroundResult = foregroundResult
     }
 
-    func release(_ result: RSSRefreshBatchResult) {
-        continuation?.resume(returning: result)
-        continuation = nil
+    func loadInitial() async -> RSSRefreshBatchResult {
+        initialLoadCount += 1
+        guard !isRefreshing else {
+            overlapCount += 1
+            return RSSRefreshBatchResult(results: [])
+        }
+        isRefreshing = true
+        let result = await withCheckedContinuation { initialContinuation = $0 }
+        isRefreshing = false
+        return result
+    }
+
+    func loadForeground() async -> RSSRefreshBatchResult {
+        foregroundLoadCount += 1
+        guard !isRefreshing else {
+            overlapCount += 1
+            return RSSRefreshBatchResult(results: [])
+        }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        return foregroundResult
+    }
+
+    func releaseInitial() {
+        initialContinuation?.resume(returning: initialResult)
+        initialContinuation = nil
     }
 }
 

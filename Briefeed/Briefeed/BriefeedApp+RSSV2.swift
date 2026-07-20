@@ -104,6 +104,7 @@ final class RadioAppLifecycleDriver {
 
         guard restoreGeneration == generation, isActive else {
             cancelPendingColdLaunchAutoplay()
+            recoverFromStaleRestoreIfActive()
             return
         }
         await applyRestoreIntent(restoreIntent)
@@ -171,6 +172,15 @@ final class RadioAppLifecycleDriver {
         } else if let foregroundRefreshWork {
             requestStaleRefreshWhenOnline(now: now(), operation: foregroundRefreshWork)
         }
+    }
+
+    private func recoverFromStaleRestoreIfActive() {
+        guard isActive, !didTerminate else { return }
+        didRequestInitialRefresh = true
+        if let foregroundRefreshWork {
+            requestStaleRefreshWhenOnline(now: now(), operation: foregroundRefreshWork)
+        }
+        armPollIfNeeded()
     }
 
     private func connectivityChanged(_ status: ConnectivityStatus) {
@@ -264,8 +274,6 @@ final class RadioAppLifecycleDriver {
         generation += 1
         pendingRefresh = nil
         refreshTask?.cancel()
-        refreshTask = nil
-        inFlightRefreshID = nil
         pollTask?.cancel()
         pollTask = nil
         pollID = nil
