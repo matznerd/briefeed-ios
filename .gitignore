@@ -101,3 +101,6 @@ iOSInjectionProject/
 
 # Local Fabled Orca review/runtime artifacts
 Briefeed/.orca/
+
+# Local Codex feature worktrees
+.worktrees/
