@@ -37,9 +37,14 @@ final class RadioUITests: XCTestCase {
         XCTAssertTrue(app.buttons["tab.radio"].isSelected)
         XCTAssertTrue(app.staticTexts["Morning Update"].exists)
         XCTAssertEqual(
+            app.otherElements.matching(identifier: "navigation.rail").count,
+            1,
+            "Radio, Brief, and Feed must have exactly one navigation rail"
+        )
+        XCTAssertEqual(
             app.tabBars.allElementsBoundByIndex.filter(\.isHittable).count,
             0,
-            "The hidden native tab bar must not create a second interactive navigation row"
+            "The root view must not expose a native tab bar alongside the custom rail"
         )
     }
 

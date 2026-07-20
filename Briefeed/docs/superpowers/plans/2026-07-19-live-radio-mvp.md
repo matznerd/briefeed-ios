@@ -1529,7 +1529,7 @@ Run `bash skills/app-testing/scripts/run-radio.sh radio-nav ui` and expect the d
 enum AppTab: Hashable { case radio, brief, feed }
 ```
 
-`ContentView` defaults to `.radio`. Keep a `TabView(selection:)`, apply `.toolbar(.hidden, for: .tabBar)`, and place the custom chrome after the flexible tab content in the root vertical layout. Do not overlay the chrome or use a fixed `49`-point padding: the tab content's frame must end before `RadioTabRail`, followed by `MiniAudioPlayerV4`, so list rows cannot render under either control and the mini-player remains the bottom-most app control above the home indicator.
+`ContentView` defaults to `.radio`. Keep Radio, Brief, and Feed alive in a selection-controlled `ZStack`, with only the selected root visible, hittable, and exposed to accessibility. Do not use a native `TabView` or rely on `.toolbar(.hidden, for: .tabBar)`: iOS 26 can re-expose that system bar and create a second active menu. Place the custom chrome after the flexible root content in the vertical layout. Do not overlay the chrome or use a fixed `49`-point padding: the content frame must end before `RadioTabRail`, followed by `MiniAudioPlayerV4`, so list rows cannot render under either control and the mini-player remains the bottom-most app control above the home indicator.
 
 - [ ] **Step 4: Implement the compact rail and Settings**
 

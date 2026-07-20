@@ -626,7 +626,7 @@ enum AppTab: Hashable {
 }
 ```
 
-`ContentView` owns the selected `AppTab`, defaulting to `.radio`. Keep a `TabView` to preserve each section's state and hide its native tab bar. Place the custom lower chrome after the flexible tab content in the root vertical layout rather than overlaying it or using a fixed offset. This gives the list a hard visible boundary above the chrome.
+`ContentView` owns the selected `AppTab`, defaulting to `.radio`. Keep the three root sections alive in a selection-controlled `ZStack`; only the selected section is visible, hittable, and exposed to accessibility. Do not use a native `TabView`: its system tab bar can reappear on iOS 26 even when hidden and duplicate the custom rail. Place the custom lower chrome after the flexible root content in the vertical layout rather than overlaying it or using a fixed offset. This gives the list a hard visible boundary above the chrome while preserving each section's state.
 
 The lower chrome order is:
 

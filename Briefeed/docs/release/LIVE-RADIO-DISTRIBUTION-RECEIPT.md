@@ -308,3 +308,36 @@ App Store Connect blocker in GitHub #7 is resolved.
 
 Future on-device transcription and smart ad-boundary skipping remain outside
 this MVP and are tracked by GitHub issue #10.
+
+## July 20 Single-Rail Phone Correction
+
+A physical-device screenshot of the source-centric build exposed both the
+native iOS tab bar and the compact custom `RadioTabRail` at the same time. The
+root cause was architectural: `ContentView` still embedded the three sections
+in a native `TabView` and relied on `.toolbar(.hidden, for: .tabBar)`. iOS 26
+rendered that system bar after the lower chrome moved into the root layout.
+
+The correction removes the native tab container. Radio, Brief, and Feed now
+remain alive in a selection-controlled root `ZStack`, and only the selected
+section is visible, hittable, and exposed to accessibility. The custom rail is
+therefore the sole menu by construction. `RadioUITests` now asserts that exactly
+one custom rail exists and that no hittable native tab bar exists. The signed
+phone build and installation evidence for this correction is:
+
+- Signed device build: `/tmp/briefeed-radio-single-rail-device-v2.log`
+  (`** BUILD SUCCEEDED **`).
+- Strict signature verification: passed for
+  `/tmp/briefeed-radio-single-rail-device-v2/Build/Products/Debug-iphoneos/Briefeed.app`.
+- Signed app/unit/UI test-target compile:
+  `/tmp/briefeed-radio-single-rail-device-v2-tests.log`
+  (`** TEST BUILD SUCCEEDED **`).
+- Physical-device install:
+  `/tmp/briefeed-radio-single-rail-device-v2-install.log` (succeeded without
+  clearing app data).
+- Physical-device launch:
+  `/tmp/briefeed-radio-single-rail-device-v2-launch.log` (succeeded).
+
+The simulator runtime assertion is not claimed for this correction. The shared
+host remained at warning-level scheduler pressure with no booted simulators, so
+starting a new simulator was intentionally avoided. The owner is performing the
+final visual confirmation on the installed phone.

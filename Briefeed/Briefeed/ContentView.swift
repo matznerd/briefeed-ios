@@ -24,26 +24,25 @@ struct ContentView: View {
             }
 
             ZStack(alignment: .topTrailing) {
-                TabView(selection: $selectedTab) {
+                ZStack {
                     RadioHomeView()
-                    .tabItem {
-                        Label(AppTab.radio.title, systemImage: AppTab.radio.systemImage)
-                    }
-                    .tag(AppTab.radio)
+                        .opacity(selectedTab == .radio ? 1 : 0)
+                        .allowsHitTesting(selectedTab == .radio)
+                        .accessibilityHidden(selectedTab != .radio)
+                        .zIndex(selectedTab == .radio ? 1 : 0)
 
                     FilteredBriefView()
-                    .tabItem {
-                        Label(AppTab.brief.title, systemImage: AppTab.brief.systemImage)
-                    }
-                    .tag(AppTab.brief)
+                        .opacity(selectedTab == .brief ? 1 : 0)
+                        .allowsHitTesting(selectedTab == .brief)
+                        .accessibilityHidden(selectedTab != .brief)
+                        .zIndex(selectedTab == .brief ? 1 : 0)
 
                     FeedView()
-                    .tabItem {
-                        Label(AppTab.feed.title, systemImage: AppTab.feed.systemImage)
-                    }
-                    .tag(AppTab.feed)
+                        .opacity(selectedTab == .feed ? 1 : 0)
+                        .allowsHitTesting(selectedTab == .feed)
+                        .accessibilityHidden(selectedTab != .feed)
+                        .zIndex(selectedTab == .feed ? 1 : 0)
                 }
-                .toolbar(.hidden, for: .tabBar)
                 .tint(.briefeedRed)
 
                 AppSettingsButton { showingSettings = true }
