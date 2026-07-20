@@ -28,3 +28,19 @@
 - Next and completion stage their new cursor and write Core Data progress/completion before forcing the snapshot; End of Episode persists its paused next cursor before publishing it.
 - A failed-only queue preserves its failed current for explicit Retry. Retry resets and force-saves before any replay. Refresh reset scope is limited to successful source results.
 - Deadline timers survive Next, and still pause transport when persistence fails. Interruption resume eligibility is captured before the interruption rather than inferred from the post-pause state.
+
+## Final Hardening
+
+- Replaced the unscoped pending-network Boolean with identity-, purpose-, and generation-bound requests plus an injectable 500 ms retry scheduler. Reconnect and automatic retry emissions revalidate the current key, playback eligibility, connectivity, generation, and cold-launch deadline; pause, background, termination, autoplay cancellation, and current changes invalidate delayed work.
+- Restore and initial-refresh autoplay now require either a readable local file or online connectivity. Offline and unknown callbacks consume no playback attempt, force-save their exact keyed position, and wait for a delayed reconnect emission.
+- Successful source refreshes reset only matching playback failures before reconciliation, allowing failed-only queues to be selected again and recomputing Next eligibility. Failed refreshes preserve the existing budget.
+- Completion now makes a successful Core Data row authoritative in memory before the snapshot write. Snapshot failure cannot replay the completed entry, and Core Data progress writes refuse to lower a completed row. Manual Next at or above 95 percent first persists the exact supplied position so a completion failure remains resumable.
+- Deadline, interruption, route, end-of-episode, second-failure advancement, and Next transitions now preserve their required pause/error/cursor/save-order semantics. Unkeyed low-level progress, completion, and failure commands were removed from the public coordinator protocol.
+- Added regression coverage for real five-second progress boundaries, all force-save families, both completion crash windows with Core Data, stale identities, automatic retry count and cancellation, local/remote network gates, delayed reconnect expiry, failure-reset scope, all-failed Retry, deadline one-shot behavior, EOE paused cursors, repository completion guards, and monitor start/cancel ownership.
+
+## Final Verification
+
+- Strict RED was observed after adding the scheduler/keyed-callback regressions: `make radio-compile` failed on the missing `RadioRetryScheduling` contract and initializer injection.
+- Final `make radio-compile` passed with `TEST BUILD SUCCEEDED`.
+- `bash skills/app-testing/scripts/run-radio.sh radio-state unit` exited at the fleet safety preflight because host pressure was critical (`load=136`, `Simulator.app=open`). No capacity override or unowned simulator was used.
+- `git diff --check` passed.

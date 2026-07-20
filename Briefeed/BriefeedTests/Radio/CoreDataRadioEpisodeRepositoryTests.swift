@@ -91,6 +91,75 @@ struct CoreDataRadioEpisodeRepositoryTests {
         #expect(context.hasChanges)
     }
 
+    @Test @MainActor func progressCannotLowerAnAuthoritativelyCompletedRow() throws {
+        let persistence = PersistenceController(inMemory: true)
+        let context = persistence.container.viewContext
+        let feed = makeFeed(in: context, id: "feed", enabled: true)
+        let episode = makeEpisode(in: context, feed: feed, id: "episode")
+        episode.isListened = true
+        episode.listenedDate = .now
+        episode.lastPosition = 1
+        try context.save()
+
+        try CoreDataRadioEpisodeRepository(context: context).saveProgress(
+            key: RadioEpisodeKey(feedID: "feed", episodeID: "episode"),
+            seconds: 20,
+            duration: 100
+        )
+
+        #expect(episode.isListened)
+        #expect(episode.lastPosition == 1)
+    }
+
+    @Test @MainActor func coordinatorCrashBeforeCoreDataCompletionKeepsEpisodeResumable() async throws {
+        enum SaveError: LocalizedError { case denied; var errorDescription: String? { "core data denied" } }
+        let persistence = PersistenceController(inMemory: true)
+        let context = persistence.container.viewContext
+        let feed = makeFeed(in: context, id: "feed", enabled: true)
+        let episode = makeEpisode(in: context, feed: feed, id: "episode")
+        try context.save()
+        let key = RadioEpisodeKey(feedID: "feed", episodeID: "episode")
+        let store = FakeRadioSessionStore(snapshot: persistedSession(key: key))
+        let repository = CoreDataRadioEpisodeRepository(context: context, saveContext: { throw SaveError.denied })
+        let coordinator = RadioSessionCoordinator(store: store, repository: repository, connectivityStatus: { .online })
+        _ = await coordinator.restore(autoplayEnabled: false)
+
+        #expect(coordinator.playbackCompleted(for: key, at: .now) == nil)
+        #expect(!episode.isListened)
+        #expect(coordinator.currentKey == key)
+        #expect(coordinator.entries.contains { $0.key == key })
+    }
+
+    @Test @MainActor func coordinatorCrashAfterCoreDataCompletionDropsEpisodeInProcess() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let context = persistence.container.viewContext
+        let feed = makeFeed(in: context, id: "feed", enabled: true)
+        let episode = makeEpisode(in: context, feed: feed, id: "episode")
+        try context.save()
+        let key = RadioEpisodeKey(feedID: "feed", episodeID: "episode")
+        let store = FakeRadioSessionStore(snapshot: persistedSession(key: key))
+        let repository = CoreDataRadioEpisodeRepository(context: context)
+        let coordinator = RadioSessionCoordinator(store: store, repository: repository, connectivityStatus: { .online })
+        _ = await coordinator.restore(autoplayEnabled: false)
+        store.saveNowError = NSError(domain: "snapshot", code: 1, userInfo: [NSLocalizedDescriptionKey: "snapshot denied"])
+
+        #expect(coordinator.playbackCompleted(for: key, at: .now) == nil)
+        #expect(episode.isListened)
+        #expect(episode.lastPosition == 1)
+        #expect(!coordinator.entries.contains { $0.key == key })
+        #expect(coordinator.currentKey == nil)
+        #expect(coordinator.retry() == nil)
+    }
+
+    @MainActor private func persistedSession(key: RadioEpisodeKey) -> PersistedRadioSession {
+        .init(
+            schemaVersion: 1,
+            entries: [.init(key: key, positionSeconds: 0, disposition: .pending, playbackFailureCount: 0, lastPlaybackError: nil)],
+            currentKey: key,
+            savedAt: .now
+        )
+    }
+
     @MainActor private func makeFeed(in context: NSManagedObjectContext, id: String, enabled: Bool) -> RSSFeed {
         let feed = RSSFeed(context: context)
         feed.id = id

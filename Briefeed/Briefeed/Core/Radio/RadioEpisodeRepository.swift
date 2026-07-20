@@ -45,6 +45,7 @@ final class CoreDataRadioEpisodeRepository: RadioEpisodeRepository {
 
     func saveProgress(key: RadioEpisodeKey, seconds: TimeInterval, duration: TimeInterval?) throws {
         guard let episode = try episode(for: key) else { return }
+        guard !episode.isListened else { return }
         guard let duration, duration.isFinite, duration > 0, seconds.isFinite else { return }
         episode.lastPosition = min(max(seconds / duration, 0), 1)
         try saveContext()

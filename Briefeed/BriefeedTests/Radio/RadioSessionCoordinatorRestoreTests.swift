@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Testing
 @testable import Briefeed
 
@@ -24,6 +25,111 @@ struct RadioSessionCoordinatorRestoreTests {
 
         #expect(await coordinator.restore(autoplayEnabled: true) == .play(request(for: episode, position: 17)))
         #expect(await coordinator.restore(autoplayEnabled: true) == nil)
+    }
+
+    @Test func remoteRestoreAutoplayWaitsForKnownOnlineConnectivityAndEmitsOnceAfterDelay() async {
+        let episode = candidate("npr", "one")
+        let monitor = TestConnectivityMonitor(.unknown)
+        let scheduler = TestRadioRetryScheduler()
+        let coordinator = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(snapshot: session([entry(episode.key, position: 17)], current: episode.key)),
+            repository: FakeRadioEpisodeRepository(candidates: [episode]), now: { now },
+            connectivity: monitor, retryScheduler: scheduler
+        )
+        var intents: [RadioPlaybackIntent] = []
+        let cancellable = coordinator.pendingNetworkIntentPublisher.sink { intents.append($0) }
+
+        #expect(await coordinator.restore(autoplayEnabled: true) == nil)
+        #expect(coordinator.hasPendingColdLaunchAutoplay)
+        #expect(scheduler.scheduledDelays.isEmpty)
+        monitor.send(.offline)
+        #expect(scheduler.scheduledDelays.isEmpty)
+        monitor.send(.online)
+        #expect(scheduler.scheduledDelays == [0.5])
+        scheduler.fire()
+        scheduler.fire()
+        #expect(intents == [.play(request(for: episode, position: 17))])
+        #expect(!coordinator.hasPendingColdLaunchAutoplay)
+        withExtendedLifetime(cancellable) {}
+    }
+
+    @Test func readableLocalRestoreAutoplaysWhileConnectivityUnknown() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data([1]).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let base = candidate("npr", "one")
+        let local = RadioEpisodeCandidate(
+            key: base.key, originalPlaybackURL: url, canonicalEnclosureURL: url.absoluteString,
+            title: base.title, sourceName: base.sourceName, publicationDate: base.publicationDate,
+            durationSeconds: base.durationSeconds, normalizedCoreDataProgress: 0,
+            isCompleted: false, sourcePriority: 0, sourceFrequency: .hourly
+        )
+        let coordinator = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(snapshot: session([entry(local.key)], current: local.key)),
+            repository: FakeRadioEpisodeRepository(candidates: [local]), now: { now },
+            connectivity: TestConnectivityMonitor(.unknown)
+        )
+
+        #expect(await coordinator.restore(autoplayEnabled: true) == .play(request(for: local, position: 0)))
+    }
+
+    @Test func initialRefreshRemoteAutoplayWaitsForConnectivity() async {
+        let repository = FakeRadioEpisodeRepository(candidates: [])
+        let monitor = TestConnectivityMonitor(.offline)
+        let scheduler = TestRadioRetryScheduler()
+        let coordinator = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(), repository: repository, now: { now },
+            connectivity: monitor, retryScheduler: scheduler
+        )
+        var intents: [RadioPlaybackIntent] = []
+        let cancellable = coordinator.pendingNetworkIntentPublisher.sink { intents.append($0) }
+        _ = await coordinator.restore(autoplayEnabled: true)
+        let episode = candidate("npr", "one")
+        repository.values = [episode]
+
+        #expect(coordinator.applyInitialRefresh(success()) == nil)
+        #expect(intents.isEmpty)
+        #expect(scheduler.scheduledDelays.isEmpty)
+        monitor.send(.online)
+        scheduler.fire()
+        #expect(intents == [.play(request(for: episode, position: 0))])
+        withExtendedLifetime(cancellable) {}
+    }
+
+    @Test func cancelAutoplayPreventsDelayedReconnectAndExpiredAutoplayNeverEmits() async {
+        var clock = now
+        let episode = candidate("npr", "one")
+        let monitor = TestConnectivityMonitor(.unknown)
+        let scheduler = TestRadioRetryScheduler()
+        let coordinator = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(snapshot: session([entry(episode.key)], current: episode.key)),
+            repository: FakeRadioEpisodeRepository(candidates: [episode]), now: { clock },
+            connectivity: monitor, retryScheduler: scheduler
+        )
+        var intents: [RadioPlaybackIntent] = []
+        let cancellable = coordinator.pendingNetworkIntentPublisher.sink { intents.append($0) }
+        _ = await coordinator.restore(autoplayEnabled: true)
+        monitor.send(.online)
+        coordinator.cancelPendingColdLaunchAutoplay()
+        scheduler.fireCanceledActionAnyway()
+        #expect(intents.isEmpty)
+
+        let expiredScheduler = TestRadioRetryScheduler()
+        let expiredMonitor = TestConnectivityMonitor(.unknown)
+        let expired = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(snapshot: session([entry(episode.key)], current: episode.key)),
+            repository: FakeRadioEpisodeRepository(candidates: [episode]), now: { clock },
+            connectivity: expiredMonitor, retryScheduler: expiredScheduler
+        )
+        var expiredIntents: [RadioPlaybackIntent] = []
+        let expiredCancellable = expired.pendingNetworkIntentPublisher.sink { expiredIntents.append($0) }
+        _ = await expired.restore(autoplayEnabled: true)
+        clock = now.addingTimeInterval(60)
+        expiredMonitor.send(.online)
+        expiredScheduler.fire()
+        #expect(expiredIntents.isEmpty)
+        #expect(!expired.hasPendingColdLaunchAutoplay)
+        withExtendedLifetime((cancellable, expiredCancellable)) {}
     }
 
     @Test func deferredAutoplayIsEligibleAt59SecondsButExpiresAt60() async {
@@ -198,13 +304,26 @@ struct RadioSessionCoordinatorRestoreTests {
 final class FakeRadioSessionStore: RadioSessionStoreProtocol {
     var snapshot: PersistedRadioSession?
     var savedNow: PersistedRadioSession?
+    var debouncedSaves: [PersistedRadioSession] = []
+    var forcedSaves: [PersistedRadioSession] = []
     var loadError: Error?
     var saveNowError: Error?
-    init(snapshot: PersistedRadioSession? = nil) { self.snapshot = snapshot }
+    private let onSaveNow: () -> Void
+    init(snapshot: PersistedRadioSession? = nil, onSaveNow: @escaping () -> Void = {}) {
+        self.snapshot = snapshot
+        self.onSaveNow = onSaveNow
+    }
     func load(durations: [RadioEpisodeKey: TimeInterval]) throws -> PersistedRadioSession? { if let loadError { throw loadError }; return snapshot }
-    func saveDebounced(_ session: PersistedRadioSession) { snapshot = session }
-    func saveNow(_ session: PersistedRadioSession) throws { if let saveNowError { throw saveNowError }; savedNow = session; snapshot = session }
+    func saveDebounced(_ session: PersistedRadioSession) { debouncedSaves.append(session); snapshot = session }
+    func saveNow(_ session: PersistedRadioSession) throws {
+        if let saveNowError { throw saveNowError }
+        onSaveNow()
+        savedNow = session
+        forcedSaves.append(session)
+        snapshot = session
+    }
     func clear() { snapshot = nil }
+    func resetCalls() { savedNow = nil; debouncedSaves = []; forcedSaves = [] }
 }
 
 @MainActor
@@ -219,3 +338,13 @@ final class FakeRadioEpisodeRepository: RadioEpisodeRepository {
 }
 
 private enum FakeError: LocalizedError { case failed; var errorDescription: String? { "test failure" } }
+
+@MainActor
+final class TestConnectivityMonitor: ConnectivityMonitoring {
+    private let subject: CurrentValueSubject<ConnectivityStatus, Never>
+    var status: ConnectivityStatus { subject.value }
+    var statusPublisher: AnyPublisher<ConnectivityStatus, Never> { subject.eraseToAnyPublisher() }
+
+    init(_ status: ConnectivityStatus) { subject = .init(status) }
+    func send(_ status: ConnectivityStatus) { subject.send(status) }
+}

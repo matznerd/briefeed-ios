@@ -6,7 +6,7 @@ import Testing
 @Suite("Radio service container") @MainActor
 struct RadioServiceContainerTests {
     @Test func injectedMonitorIsTheSingleCoordinatorMonitor() async {
-        let monitor = TestConnectivityMonitor()
+        let monitor = ContainerConnectivityMonitor()
         let coordinator = RadioSessionCoordinator(store: FakeRadioSessionStore(), repository: FakeRadioEpisodeRepository(candidates: []), connectivity: monitor)
         let container = RadioServiceContainer(connectivity: monitor, coordinator: coordinator)
         #expect(container.connectivity === monitor)
@@ -15,11 +15,31 @@ struct RadioServiceContainerTests {
         monitor.send(.offline)
         #expect(container.coordinator.state == .waitingForNetwork)
     }
+
+    @Test func networkMonitorStartsPublishesAndCancelsItsSingleWrapper() async {
+        let pathMonitor = TestPathMonitor()
+        var monitor: RadioNetworkMonitor? = RadioNetworkMonitor(monitor: pathMonitor)
+        #expect(pathMonitor.startCount == 1)
+        pathMonitor.send(.online)
+        await Task.yield()
+        #expect(monitor?.status == .online)
+        monitor = nil
+        #expect(pathMonitor.cancelCount == 1)
+    }
 }
 
-@MainActor private final class TestConnectivityMonitor: ConnectivityMonitoring {
+@MainActor private final class ContainerConnectivityMonitor: ConnectivityMonitoring {
     private let subject = CurrentValueSubject<ConnectivityStatus, Never>(.unknown)
     var status: ConnectivityStatus { subject.value }
     var statusPublisher: AnyPublisher<ConnectivityStatus, Never> { subject.eraseToAnyPublisher() }
     func send(_ status: ConnectivityStatus) { subject.send(status) }
+}
+
+private final class TestPathMonitor: RadioPathMonitoring {
+    var statusHandler: ((ConnectivityStatus) -> Void)?
+    var startCount = 0
+    var cancelCount = 0
+    func start(queue: DispatchQueue) { startCount += 1 }
+    func cancel() { cancelCount += 1 }
+    func send(_ status: ConnectivityStatus) { statusHandler?(status) }
 }
