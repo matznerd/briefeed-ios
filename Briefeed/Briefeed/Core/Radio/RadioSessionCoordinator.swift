@@ -592,7 +592,6 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         cancelPendingRequest()
         let saved = forceSave(positionSeconds: positionSeconds, duration: duration)
         if saved { state = .pausedByUser }
-        else { interruptionResumeEligible = false }
         // A deadline must pause transport even when persistence is unavailable.
         return .pause
     }
@@ -603,6 +602,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         cancelPendingRequest()
         let saved = forceSave(positionSeconds: positionSeconds, duration: duration)
         if saved { state = .pausedByUser }
+        else { interruptionResumeEligible = false }
         return .pause
     }
 

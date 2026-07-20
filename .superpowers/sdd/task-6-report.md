@@ -21,6 +21,11 @@
 - `bash skills/app-testing/scripts/run-radio.sh radio-state unit` stopped at its safety preflight because `Simulator.app` was open. No simulator was claimed, booted, reused, stopped, erased, or otherwise touched.
 - `git diff --check` passed.
 
+## Interruption Eligibility Correction
+
+- Corrected the final interruption-begin branch so a failed force-save clears `interruptionResumeEligible` at the interruption boundary itself. Interruption end therefore cannot resume transport or overwrite the persistence failure.
+- The focused regression starts from active playback, injects the interruption-begin snapshot failure, requires `.pause`, and proves `shouldResume: true` remains a no-op with the persistence error intact.
+
 ## Final Review Blockers
 
 - Completion recovery now records whether Core Data still needs `markCompleted` or whether only the repaired session snapshot remains. Retry reattempts the exact failed stage: a pre-Core-Data failure retains the current key, entry, and exact position; a post-Core-Data failure keeps the completed row removed in memory and only re-saves the authoritative snapshot before continuing.
