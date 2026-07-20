@@ -82,6 +82,7 @@ class UserDefaultsManager: ObservableObject {
     internal let userDefaults = UserDefaults.standard
     
     private init() {
+        playbackSpeed = PlaybackSpeedPolicy.loadAndMigrate(defaults: userDefaults)
         registerDefaults()
         loadSettings()
     }
@@ -112,7 +113,6 @@ class UserDefaultsManager: ObservableObject {
             // RSS defaults
             "autoPlayLiveNewsOnOpen": false,
             "autoRefreshLiveNewsOnOpen": true,
-            "rssPlaybackSpeed": 1.0,
             "defaultBriefFilter": "all",
             "rssRetentionHours": 168,
             // FluidAudio On-Device TTS
@@ -270,12 +270,6 @@ class UserDefaultsManager: ObservableObject {
         }
     }
     
-    @Published var rssPlaybackSpeed: Float = 1.0 {
-        didSet {
-            userDefaults.set(rssPlaybackSpeed, forKey: "rssPlaybackSpeed")
-        }
-    }
-    
     var defaultBriefFilter: String {
         get {
             userDefaults.string(forKey: "defaultBriefFilter") ?? "all"
@@ -429,7 +423,7 @@ class UserDefaultsManager: ObservableObject {
         useDeviceTTS = userDefaults.bool(forKey: UserDefaultsKey.useDeviceTTS.rawValue)
         selectedVoice = userDefaults.string(forKey: UserDefaultsKey.selectedVoice.rawValue) ?? "Autonoe"
         autoPlayNext = userDefaults.bool(forKey: UserDefaultsKey.autoPlayNext.rawValue)
-        playbackSpeed = userDefaults.object(forKey: UserDefaultsKey.playbackSpeed.rawValue) as? Float ?? 1.0
+        playbackSpeed = PlaybackSpeedPolicy.loadAndMigrate(defaults: userDefaults)
         
         // Load FluidAudio settings
         preferOnDeviceTTS = userDefaults.bool(forKey: UserDefaultsKey.preferOnDeviceTTS.rawValue)
@@ -439,7 +433,6 @@ class UserDefaultsManager: ObservableObject {
         // Load RSS settings
         autoPlayLiveNewsOnOpen = userDefaults.bool(forKey: "autoPlayLiveNewsOnOpen")
         autoRefreshLiveNewsOnOpen = userDefaults.bool(forKey: "autoRefreshLiveNewsOnOpen")
-        rssPlaybackSpeed = userDefaults.object(forKey: "rssPlaybackSpeed") as? Float ?? 1.0
         rssRetentionHours = userDefaults.integer(forKey: "rssRetentionHours")
     }
     

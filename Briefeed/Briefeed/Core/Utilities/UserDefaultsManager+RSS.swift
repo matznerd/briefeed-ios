@@ -7,6 +7,36 @@
 
 import Foundation
 
+enum PlaybackSpeedPolicy {
+    static let supported: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
+
+    static func normalize(_ raw: Float) -> Float {
+        guard raw.isFinite else { return 1.0 }
+        let clamped = min(3.0, max(0.5, raw))
+        return supported.min { lhs, rhs in
+            let left = abs(lhs - clamped)
+            let right = abs(rhs - clamped)
+            return left == right ? lhs < rhs : left < right
+        } ?? 1.0
+    }
+
+    static func loadAndMigrate(defaults: UserDefaults) -> Float {
+        let canonical = UserDefaultsKey.playbackSpeed.rawValue
+        let legacy = UserDefaultsKey.rssPlaybackSpeed.rawValue
+        let raw: Float
+        if defaults.object(forKey: canonical) != nil {
+            raw = defaults.float(forKey: canonical)
+        } else if defaults.object(forKey: legacy) != nil {
+            raw = defaults.float(forKey: legacy)
+        } else {
+            raw = 1.0
+        }
+        let normalized = normalize(raw)
+        defaults.set(normalized, forKey: canonical)
+        return normalized
+    }
+}
+
 // MARK: - RSS UserDefaults Properties
 extension UserDefaultsManager {
     
@@ -43,9 +73,6 @@ extension UserDefaultsManager {
     /// Load RSS-specific settings
     func loadRSSSettings() {
         autoPlayLiveNewsOnOpen = userDefaults.bool(forKey: UserDefaultsKey.autoPlayLiveNewsOnOpen.rawValue)
-        rssPlaybackSpeed = userDefaults.float(forKey: UserDefaultsKey.rssPlaybackSpeed.rawValue)
-        if rssPlaybackSpeed == 0 { rssPlaybackSpeed = 1.0 }
-        
         defaultBriefFilter = userDefaults.string(forKey: UserDefaultsKey.defaultBriefFilter.rawValue) ?? "all"
         
         let retention = userDefaults.integer(forKey: UserDefaultsKey.rssRetentionHours.rawValue)
@@ -58,7 +85,6 @@ extension UserDefaultsManager {
     func registerRSSDefaults() {
         let defaults: [String: Any] = [
             UserDefaultsKey.autoPlayLiveNewsOnOpen.rawValue: false,
-            UserDefaultsKey.rssPlaybackSpeed.rawValue: 1.0,
             UserDefaultsKey.defaultBriefFilter.rawValue: "all",
             UserDefaultsKey.rssRetentionHours.rawValue: 24
         ]
