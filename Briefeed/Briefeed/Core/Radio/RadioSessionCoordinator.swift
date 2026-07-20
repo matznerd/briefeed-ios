@@ -21,6 +21,7 @@ protocol RadioSessionCoordinating: AnyObject {
     func restore(autoplayEnabled: Bool) async -> RadioPlaybackIntent?
     func refreshStarted(enabledSourceCount: Int)
     func applyRefresh(_ result: RSSRefreshBatchResult) -> RadioPlaybackIntent?
+    func applyInitialRefresh(_ result: RSSRefreshBatchResult) -> RadioPlaybackIntent?
     func beginCurrent() -> RadioPlaybackIntent?
     func selectEpisode(_ key: RadioEpisodeKey) -> RadioPlaybackIntent?
     func cancelPendingColdLaunchAutoplay()
@@ -69,12 +70,12 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
     }
 
     func restore(autoplayEnabled: Bool) async -> RadioPlaybackIntent? {
-        state = .restoring
+        if !hasActivePlaybackState { state = .restoring }
         let candidates: [RadioEpisodeCandidate]
         do {
             candidates = try repository.candidates()
         } catch {
-            candidates = []
+            return handleReadFailure(error)
         }
         setCandidates(candidates)
         let durations = Dictionary(uniqueKeysWithValues: candidates.compactMap { candidate in
@@ -84,12 +85,17 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         do {
             snapshot = try store.load(durations: durations)
         } catch {
-            snapshot = nil
+            return handleReadFailure(error)
         }
         let builder = RadioQueueBuilder(now: now())
         let restored = snapshot.map { builder.restore(snapshot: $0, candidates: candidates) }
             ?? builder.buildInitial(candidates: candidates)
-        install(restored)
+        let previousCurrentKey = currentKey
+        let previousState = state
+        install(
+            restored,
+            preservedPlaybackState: previousCurrentKey == restored.currentKey ? previousState : nil
+        )
         store.saveDebounced(currentSession())
 
         guard !didEvaluateColdLaunchAutoplay else { return nil }
@@ -110,6 +116,14 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
     }
 
     func applyRefresh(_ result: RSSRefreshBatchResult) -> RadioPlaybackIntent? {
+        applyRefresh(result, isInitialColdLaunchRefresh: false)
+    }
+
+    func applyInitialRefresh(_ result: RSSRefreshBatchResult) -> RadioPlaybackIntent? {
+        applyRefresh(result, isInitialColdLaunchRefresh: true)
+    }
+
+    private func applyRefresh(_ result: RSSRefreshBatchResult, isInitialColdLaunchRefresh: Bool) -> RadioPlaybackIntent? {
         isRefreshing = false
         successfulSourceEvidenceCount = result.successfulSourceEvidenceCount
         attemptedFailureCount = result.attemptedFailureCount
@@ -122,22 +136,30 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         do {
             candidates = try repository.candidates()
         } catch {
-            candidates = []
+            return handleReadFailure(error)
         }
         setCandidates(candidates)
         let session = currentSession()
         let reconciled = RadioQueueBuilder(now: now()).reconcile(snapshot: session, candidates: candidates)
-        install(reconciled, preservePlayingState: true)
+        let previousCurrentKey = currentKey
+        let previousState = state
+        install(
+            reconciled,
+            preservedPlaybackState: previousCurrentKey == reconciled.currentKey ? previousState : nil
+        )
         store.saveDebounced(currentSession())
 
-        guard hasPendingColdLaunchAutoplay else { return nil }
+        guard isInitialColdLaunchRefresh, hasPendingColdLaunchAutoplay else { return nil }
         guard let deadline = coldLaunchAutoplayDeadline, now() < deadline else {
             cancelPendingColdLaunchAutoplay()
             return nil
         }
-        defer { cancelPendingColdLaunchAutoplay() }
-        guard let request = requestForCurrent() else { return nil }
-        return .play(request)
+        if let request = requestForCurrent() {
+            cancelPendingColdLaunchAutoplay()
+            return .play(request)
+        }
+        if isTerminalInitialRefresh(result) { cancelPendingColdLaunchAutoplay() }
+        return nil
     }
 
     func beginCurrent() -> RadioPlaybackIntent? {
@@ -149,28 +171,50 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
 
     func selectEpisode(_ key: RadioEpisodeKey) -> RadioPlaybackIntent? {
         cancelPendingColdLaunchAutoplay()
-        guard let candidate = try? repository.candidate(for: key),
-              isEligibleForSelection(candidate) else { return nil }
-        setCandidates(Array(candidatesByKey.values.filter { $0.key != key }) + [candidate])
-
-        var updated = entries.filter { $0.key != key }
-        if let currentKey, let currentIndex = updated.firstIndex(where: { $0.key == currentKey }),
-           updated[currentIndex].positionSeconds > 0 {
-            updated[currentIndex].disposition = .deferred
+        let candidate: RadioEpisodeCandidate
+        do {
+            guard let loaded = try repository.candidate(for: key) else { return nil }
+            candidate = loaded
+        } catch {
+            return handleReadFailure(error)
         }
+        guard entries.first(where: { $0.key == key })?.disposition != .failedThisSession,
+              isEligibleForSelection(candidate) else { return nil }
+
+        let previousCurrent = currentKey.flatMap { current in entries.first(where: { $0.key == current }) }
         let selected = entries.first(where: { $0.key == key })
             ?? RadioQueueEntry(key: key, positionSeconds: initialPosition(for: candidate), disposition: .pending, playbackFailureCount: 0, lastPlaybackError: nil)
-        updated.insert(selected, at: 0)
-        entries = updated
-        currentKey = key
-        currentEpisode = candidate
-        updateCanPlayNext()
+        var selectedEntry = selected
+        selectedEntry.disposition = .pending
+        let remaining = entries.filter { $0.key != key && $0.key != previousCurrent?.key }
+        let pending = remaining.filter { $0.disposition == .pending }
+        var deferred = remaining.filter { $0.disposition == .deferred }
+        if var previousCurrent, previousCurrent.key != key, previousCurrent.positionSeconds > 0 {
+            previousCurrent.disposition = .deferred
+            deferred.append(previousCurrent)
+        } else if let previousCurrent, previousCurrent.key != key {
+            // A nonpartial prior item remains pending, ahead of saved deferrals.
+            let preserved = previousCurrent
+            let stagedEntries = [selectedEntry] + [preserved] + pending + deferred + remaining.filter { $0.disposition == .failedThisSession }
+            return commitSelection(stagedEntries, selected: selectedEntry, candidate: candidate)
+        }
+        let stagedEntries = [selectedEntry] + pending + deferred + remaining.filter { $0.disposition == .failedThisSession }
+        return commitSelection(stagedEntries, selected: selectedEntry, candidate: candidate)
+    }
+
+    private func commitSelection(_ stagedEntries: [RadioQueueEntry], selected: RadioQueueEntry, candidate: RadioEpisodeCandidate) -> RadioPlaybackIntent? {
+        let staged = PersistedRadioSession(schemaVersion: PersistedRadioSession.schemaVersion, entries: stagedEntries, currentKey: selected.key, savedAt: now())
         do {
-            try store.saveNow(currentSession())
+            try store.saveNow(staged)
         } catch {
             state = .failed(.persistence(error.localizedDescription))
             return nil
         }
+        entries = stagedEntries
+        currentKey = selected.key
+        currentEpisode = candidate
+        setCandidates(Array(candidatesByKey.values.filter { $0.key != selected.key }) + [candidate])
+        updateCanPlayNext()
         state = .loading
         return .play(playbackRequest(for: candidate, position: selected.positionSeconds))
     }
@@ -180,12 +224,15 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         coldLaunchAutoplayDeadline = nil
     }
 
-    private func install(_ session: PersistedRadioSession, preservePlayingState: Bool = false) {
+    private func install(_ session: PersistedRadioSession, preservedPlaybackState: RadioSessionState? = nil) {
         entries = session.entries
         currentKey = session.currentKey
         currentEpisode = currentKey.flatMap { candidatesByKey[$0] }
         updateCanPlayNext()
-        if preservePlayingState && state == .playing { return }
+        if let preservedPlaybackState, isPlaybackState(preservedPlaybackState) {
+            state = preservedPlaybackState
+            return
+        }
         state = currentEpisode == nil ? resolveNoPlayableEntry() : .readyPaused
     }
 
@@ -222,6 +269,28 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
             $0.key != candidate.key && candidatesByKey[$0.key]?.canonicalEnclosureURL == candidate.canonicalEnclosureURL
         }) else { return false }
         return RadioQueueBuilder(now: now()).buildInitial(candidates: [candidate]).entries.contains { $0.key == candidate.key }
+    }
+
+    private var hasActivePlaybackState: Bool { isPlaybackState(state) }
+
+    private func isPlaybackState(_ state: RadioSessionState) -> Bool {
+        state == .playing || state == .loading || state == .pausedByUser
+    }
+
+    /// Audio integration uses this narrow state projection without gaining mutable queue access.
+    func transitionPlaybackState(_ state: RadioSessionState) {
+        guard isPlaybackState(state) else { return }
+        self.state = state
+    }
+
+    private func handleReadFailure(_ error: Error) -> RadioPlaybackIntent? {
+        if !hasActivePlaybackState { state = .failed(.persistence(error.localizedDescription)) }
+        return nil
+    }
+
+    private func isTerminalInitialRefresh(_ result: RSSRefreshBatchResult) -> Bool {
+        if result.successfulSourceEvidenceCount > 0 { return true }
+        return enabledSourceCount > 0 && result.attemptedFailureCount == enabledSourceCount
     }
 
     private func updateCanPlayNext() {
