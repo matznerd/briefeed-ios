@@ -30,12 +30,7 @@ final class AudioPlayerViewModelV2: ObservableObject {
     
     @Published var playbackSpeed: Float = 1.0 {
         didSet {
-            let normalized = PlaybackSpeedPolicy.normalize(playbackSpeed)
-            if playbackSpeed != normalized {
-                playbackSpeed = normalized
-                return
-            }
-            unifiedPlayer.setRate(playbackSpeed)
+            applyPlaybackSpeed()
         }
     }
     
@@ -68,6 +63,7 @@ final class AudioPlayerViewModelV2: ObservableObject {
     private let unifiedPlayer = UnifiedAudioPlayer.shared
     private let queueCoordinator = QueueCoordinator.shared
     private var cancellables = Set<AnyCancellable>()
+    private var isApplyingPlaybackSpeed = false
     
     // MARK: - Initialization
     
@@ -151,6 +147,19 @@ final class AudioPlayerViewModelV2: ObservableObject {
         
         // Load saved queue if any
         // This would be implemented with persistence
+    }
+
+    private func applyPlaybackSpeed() {
+        guard !isApplyingPlaybackSpeed else { return }
+
+        isApplyingPlaybackSpeed = true
+        let normalized = PlaybackSpeedPolicy.normalize(playbackSpeed)
+        if playbackSpeed != normalized {
+            playbackSpeed = normalized
+        }
+        unifiedPlayer.setRate(normalized)
+        UserDefaultsManager.shared.playbackSpeed = normalized
+        isApplyingPlaybackSpeed = false
     }
     
     // MARK: - Computed Properties
@@ -280,9 +289,7 @@ final class AudioPlayerViewModelV2: ObservableObject {
     // MARK: - Speed Control
     
     func setSpeed(_ speed: Float) {
-        let normalized = PlaybackSpeedPolicy.normalize(speed)
-        playbackSpeed = normalized
-        UserDefaultsManager.shared.playbackSpeed = normalized
+        playbackSpeed = speed
     }
     
     func increaseSpeed() {

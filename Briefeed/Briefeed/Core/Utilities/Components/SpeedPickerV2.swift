@@ -2,7 +2,7 @@
 //  SpeedPickerV2.swift
 //  Briefeed
 //
-//  Enhanced speed picker supporting up to 20x playback with SwiftAudioEx
+//  Enhanced speed picker using the app-wide playback speed policy
 //
 
 import SwiftUI
@@ -272,9 +272,9 @@ struct HorizontalSpeedSelector: View {
     @Binding var selectedSpeed: Float
     @State private var showAllSpeeds = false
     
-    // Quick access speeds
+    // Quick access speeds are a supported subset; the complete list is canonical.
     let quickSpeeds: [Float] = [0.5, 1.0, 1.5, 2.0, 3.0]
-    let allSpeeds: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0, 8.0, 10.0, 15.0, 20.0]
+    let allSpeeds = PlaybackSpeedPolicy.supported
     
     var displayedSpeeds: [Float] {
         showAllSpeeds ? allSpeeds : quickSpeeds

@@ -243,12 +243,13 @@ final class MiniPlayerUITests: XCTestCase {
         // Then: Speed control should be accessible
         XCTAssertEqual(viewModel.playbackSpeed, 1.0) // Default
         
-        // Speed options available: 0.5x to 20x
+        // Supported speed options are bounded by the canonical policy.
         viewModel.playbackSpeed = 0.5
         XCTAssertEqual(viewModel.playbackSpeed, 0.5)
         
         viewModel.playbackSpeed = 20.0
-        XCTAssertEqual(viewModel.playbackSpeed, 20.0)
+        XCTAssertEqual(viewModel.playbackSpeed, 3.0)
+        XCTAssertEqual(UnifiedAudioPlayer.shared.playbackRate, 3.0)
     }
     
     // MARK: - Accessibility Tests
