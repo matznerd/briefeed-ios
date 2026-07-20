@@ -77,7 +77,6 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         } catch {
             return handleReadFailure(error)
         }
-        setCandidates(candidates)
         let durations = Dictionary(uniqueKeysWithValues: candidates.compactMap { candidate in
             candidate.durationSeconds.map { (candidate.key, $0) }
         })
@@ -92,6 +91,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
             ?? builder.buildInitial(candidates: candidates)
         let previousCurrentKey = currentKey
         let previousState = state
+        setCandidates(candidates)
         install(
             restored,
             preservedPlaybackState: previousCurrentKey == restored.currentKey ? previousState : nil
@@ -112,7 +112,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
     func refreshStarted(enabledSourceCount: Int) {
         self.enabledSourceCount = enabledSourceCount
         isRefreshing = true
-        if state != .playing { state = resolveNoPlayableEntry() }
+        if !hasActivePlaybackState { state = resolveNoPlayableEntry() }
     }
 
     func applyRefresh(_ result: RSSRefreshBatchResult) -> RadioPlaybackIntent? {
@@ -140,6 +140,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         }
         setCandidates(candidates)
         let session = currentSession()
+        let preReconcileKeys = Set(entries.map(\.key))
         let reconciled = RadioQueueBuilder(now: now()).reconcile(snapshot: session, candidates: candidates)
         let previousCurrentKey = currentKey
         let previousState = state
@@ -154,7 +155,11 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
             cancelPendingColdLaunchAutoplay()
             return nil
         }
-        if let request = requestForCurrent() {
+        let appendedKeys = Set(reconciled.entries.map(\.key)).subtracting(preReconcileKeys)
+        if result.successfulSourceEvidenceCount > 0,
+           let currentKey,
+           appendedKeys.contains(currentKey),
+           let request = requestForCurrent() {
             cancelPendingColdLaunchAutoplay()
             return .play(request)
         }
@@ -187,16 +192,15 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         var selectedEntry = selected
         selectedEntry.disposition = .pending
         let remaining = entries.filter { $0.key != key && $0.key != previousCurrent?.key }
-        let pending = remaining.filter { $0.disposition == .pending }
+        var pending = remaining.filter { $0.disposition == .pending }
         var deferred = remaining.filter { $0.disposition == .deferred }
         if var previousCurrent, previousCurrent.key != key, previousCurrent.positionSeconds > 0 {
             previousCurrent.disposition = .deferred
             deferred.append(previousCurrent)
         } else if let previousCurrent, previousCurrent.key != key {
-            // A nonpartial prior item remains pending, ahead of saved deferrals.
-            let preserved = previousCurrent
-            let stagedEntries = [selectedEntry] + [preserved] + pending + deferred + remaining.filter { $0.disposition == .failedThisSession }
-            return commitSelection(stagedEntries, selected: selectedEntry, candidate: candidate)
+            var normalized = previousCurrent
+            normalized.disposition = .pending
+            pending.insert(normalized, at: 0)
         }
         let stagedEntries = [selectedEntry] + pending + deferred + remaining.filter { $0.disposition == .failedThisSession }
         return commitSelection(stagedEntries, selected: selectedEntry, candidate: candidate)
@@ -277,11 +281,12 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         state == .playing || state == .loading || state == .pausedByUser
     }
 
-    /// Audio integration uses this narrow state projection without gaining mutable queue access.
-    func transitionPlaybackState(_ state: RadioSessionState) {
+    #if DEBUG
+    func setPlaybackStateForTesting(_ state: RadioSessionState) {
         guard isPlaybackState(state) else { return }
         self.state = state
     }
+    #endif
 
     private func handleReadFailure(_ error: Error) -> RadioPlaybackIntent? {
         if !hasActivePlaybackState { state = .failed(.persistence(error.localizedDescription)) }

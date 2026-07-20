@@ -100,6 +100,7 @@ struct RadioSessionCoordinatorRestoreTests {
         _ = await coordinator.restore(autoplayEnabled: false)
         _ = coordinator.beginCurrent()
         repository.readError = FakeError.failed
+        coordinator.refreshStarted(enabledSourceCount: 1)
         #expect(coordinator.applyRefresh(success()) == nil)
         #expect(coordinator.currentKey == episode.key)
         #expect(coordinator.state == .playing)
@@ -110,6 +111,17 @@ struct RadioSessionCoordinatorRestoreTests {
         #expect(await cold.restore(autoplayEnabled: false) == nil)
         #expect(cold.entries.isEmpty)
         #expect(cold.state == .failed(.persistence(FakeError.failed.localizedDescription)))
+
+        let activeStore = FakeRadioSessionStore(snapshot: session([entry(episode.key)], current: episode.key))
+        let activeRepository = FakeRadioEpisodeRepository(candidates: [episode])
+        let active = RadioSessionCoordinator(store: activeStore, repository: activeRepository, now: { now }, connectivityStatus: { .online })
+        _ = await active.restore(autoplayEnabled: false)
+        _ = active.beginCurrent()
+        activeRepository.values = [candidate("bbc", "other")]
+        activeStore.loadError = FakeError.failed
+        #expect(await active.restore(autoplayEnabled: false) == nil)
+        #expect(active.currentKey == episode.key)
+        #expect(active.beginCurrent() == .play(request(for: episode, position: 0)))
     }
 
     @Test func selectionDoesNotPublishOrMutateUntilForcedSaveSucceedsAndRejectsFailedEntries() async {
@@ -131,7 +143,8 @@ struct RadioSessionCoordinatorRestoreTests {
         let coordinator = makeCoordinator(store: FakeRadioSessionStore(snapshot: session([entry(episode.key)], current: episode.key)), candidates: [episode])
         _ = await coordinator.restore(autoplayEnabled: false)
         for state in [RadioSessionState.playing, .loading, .pausedByUser] {
-            coordinator.transitionPlaybackState(state)
+            coordinator.setPlaybackStateForTesting(state)
+            coordinator.refreshStarted(enabledSourceCount: 1)
             coordinator.applyRefresh(success())
             #expect(coordinator.state == state)
         }
@@ -158,8 +171,12 @@ struct RadioSessionCoordinatorRestoreTests {
         #expect(coordinator.hasPendingColdLaunchAutoplay)
         #expect(coordinator.applyInitialRefresh(success()) != nil)
 
-        let offline = RadioSessionCoordinator(store: FakeRadioSessionStore(), repository: FakeRadioEpisodeRepository(candidates: []), now: { now }, connectivityStatus: { .online })
+        let offlineRepository = FakeRadioEpisodeRepository(candidates: [])
+        let offline = RadioSessionCoordinator(store: FakeRadioSessionStore(), repository: offlineRepository, now: { now }, connectivityStatus: { .online })
         _ = await offline.restore(autoplayEnabled: true)
+        offlineRepository.values = [candidate("bbc", "ordinary")]
+        #expect(offline.applyRefresh(success()) == nil)
+        #expect(offline.currentKey == key("bbc", "ordinary"))
         #expect(offline.applyInitialRefresh(.init(results: [.init(feedID: "npr", outcome: .skippedOffline)])) == nil)
         #expect(offline.hasPendingColdLaunchAutoplay)
     }
