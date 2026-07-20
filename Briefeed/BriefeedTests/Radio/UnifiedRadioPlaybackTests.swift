@@ -169,6 +169,7 @@ struct UnifiedRadioPlaybackTests {
         await player.playRadio()
         let radioID = try #require(transport.lastPlaybackID)
 
+        player.audioProgressUpdated(id: radioID, progress: 0.25, currentTime: 75, duration: 300)
         player.audioDidFinishPlaying(id: radioID, successfully: true)
         player.audioDidFinishPlaying(id: radioID, successfully: true)
         await player.play(at: 0)
@@ -177,6 +178,7 @@ struct UnifiedRadioPlaybackTests {
         #expect(repository.completed == [first.key])
         #expect(radio.currentKey == second.key)
         #expect(radio.entries.map(\.key) == [second.key])
+        #expect(radio.entries.first?.positionSeconds == 0)
         #expect(player.activeMode == .brief)
         #expect(transport.loads.count == 2)
         #expect(transport.loads.last?.1.absoluteString == "https://example.com/brief.mp3")
@@ -210,7 +212,7 @@ struct UnifiedRadioPlaybackTests {
         player.audioDidFinishPlaying(id: radioID, successfully: false)
         await player.play(at: 0)
         events.values.removeAll()
-        scheduler.fireCanceledActionAnyway()
+        scheduler.fire()
         await Task.yield()
 
         #expect(radio.entries.first?.playbackFailureCount == 1)

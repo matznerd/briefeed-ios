@@ -380,7 +380,10 @@ final class UnifiedAudioPlayer: ObservableObject {
         radioCoordinator.pendingNetworkIntentPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] intent in
-                Task { @MainActor in await self?.execute(intent) }
+                Task { @MainActor [weak self] in
+                    guard let self, self.activeMode == .radio else { return }
+                    await self.execute(intent)
+                }
             }
             .store(in: &cancellables)
 
@@ -584,7 +587,11 @@ final class UnifiedAudioPlayer: ObservableObject {
         guard index >= 0 && index < queue.count else { return }
 
         if activeMode == .radio {
-            _ = radioCoordinator.pauseByUser(positionSeconds: currentTime, duration: duration > 0 ? duration : nil)
+            let shouldPersistActiveRadioTransport = activeRadioKey == radioCoordinator.currentKey
+                && activePlaybackID.map { !consumedPlaybackIDs.contains($0) } == true
+            if shouldPersistActiveRadioTransport {
+                _ = radioCoordinator.pauseByUser(positionSeconds: currentTime, duration: duration > 0 ? duration : nil)
+            }
             audioPlayer.stop()
         } else if activePlaybackID != nil {
             queueCoordinator.updateCurrentPosition(currentTime)
