@@ -29,7 +29,14 @@
 ## Review Repair
 
 - A thrown Radio transport load now retires the failed playback identity before coordinator retry, guaranteeing a fresh identity and a real second load.
-- Deferred Radio completion, interruption, and route callbacks carry playback ID plus episode key and revalidate both with active mode before any coordinator mutation or transport intent.
+- Deferred Radio callbacks carry playback ID plus episode key. Interruption and route callbacks revalidate before coordinator mutation; terminal callbacks commit synchronously and revalidate before executing their transport intent.
 - Brief completion also revalidates its mode and playback identity before advancing.
 - Added regressions for fresh-ID retry exhaustion and stale Radio callbacks racing a switch to Brief.
 - Fresh `make radio-compile` passed with `TEST BUILD SUCCEEDED`; the hosted unit lane was safely refused because Simulator.app remained open after the fleet-prescribed hide step.
+
+## Terminal Ownership Repair
+
+- Matching Radio completion and failure callbacks now consume their coordinator transition synchronously and exactly once.
+- Only the returned transport intent is deferred and owner-checked, so switching to Brief cannot erase Radio completion/failure bookkeeping or later replace Brief playback.
+- Added callback-then-switch regressions for one-time completion/advance and one-time failure/retry-budget consumption, including delivery of a canceled retry action.
+- Final `make radio-compile` passed with `TEST BUILD SUCCEEDED`; hosted execution remained blocked by the fleet preflight because Simulator.app was open.

@@ -958,6 +958,13 @@ final class UnifiedAudioPlayer: ObservableObject {
         }
     }
 
+    private func scheduleRadioIntent(_ intent: RadioPlaybackIntent?, for context: RadioEventContext) {
+        Task { @MainActor [weak self] in
+            guard let self, self.isCurrent(context) else { return }
+            await self.execute(intent)
+        }
+    }
+
     private func updateRemoteAvailability() {
         switch activeMode {
         case .radio:
@@ -1568,17 +1575,16 @@ extension UnifiedAudioPlayer: SwiftAudioExServiceDelegate {
             let completedAt = Date()
             let position = currentTime
             let knownDuration = duration > 0 ? duration : nil
-            scheduleRadioEvent(context) { coordinator in
-                successfully
-                    ? coordinator.playbackCompleted(for: context.key, at: completedAt)
-                    : coordinator.playbackFailed(
-                        for: context.key,
-                        message: "Audio playback failed",
-                        positionSeconds: position,
-                        duration: knownDuration,
-                        connectivity: coordinator.currentConnectivityStatus
-                    )
-            }
+            let intent = successfully
+                ? radioCoordinator.playbackCompleted(for: context.key, at: completedAt)
+                : radioCoordinator.playbackFailed(
+                    for: context.key,
+                    message: "Audio playback failed",
+                    positionSeconds: position,
+                    duration: knownDuration,
+                    connectivity: radioCoordinator.currentConnectivityStatus
+                )
+            scheduleRadioIntent(intent, for: context)
         } else if successfully, activeMode == .brief {
             Task { @MainActor [weak self] in
                 guard let self, self.activeMode == .brief, self.activePlaybackID == id else { return }

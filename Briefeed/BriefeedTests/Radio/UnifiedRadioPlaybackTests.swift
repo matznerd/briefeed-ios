@@ -146,12 +146,13 @@ struct UnifiedRadioPlaybackTests {
         #expect(radio.state == .failed(.playback("No playable Radio episodes remain")))
     }
 
-    @Test func staleScheduledCompletionCannotReplaceNewBriefPlayback() async throws {
+    @Test func completionCommitsOnceButCannotReplaceNewBriefPlayback() async throws {
         let first = makeCandidate("one")
         let second = makeCandidate("two")
+        let repository = RecordingRadioRepository(candidates: [first, second])
         let radio = RadioSessionCoordinator(
             store: FakeRadioSessionStore(snapshot: makeSession([first.key, second.key], current: first.key)),
-            repository: RecordingRadioRepository(candidates: [first, second]),
+            repository: repository,
             connectivityStatus: { .online }
         )
         _ = await radio.restore(autoplayEnabled: false)
@@ -169,11 +170,55 @@ struct UnifiedRadioPlaybackTests {
         let radioID = try #require(transport.lastPlaybackID)
 
         player.audioDidFinishPlaying(id: radioID, successfully: true)
+        player.audioDidFinishPlaying(id: radioID, successfully: true)
         await player.play(at: 0)
         await Task.yield()
 
+        #expect(repository.completed == [first.key])
+        #expect(radio.currentKey == second.key)
+        #expect(radio.entries.map(\.key) == [second.key])
         #expect(player.activeMode == .brief)
+        #expect(transport.loads.count == 2)
         #expect(transport.loads.last?.1.absoluteString == "https://example.com/brief.mp3")
+    }
+
+    @Test func failureCommitsOnceButCannotMutateNewBriefPlayback() async throws {
+        let candidate = makeCandidate("one")
+        let scheduler = TestRadioRetryScheduler()
+        let radio = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(snapshot: makeSession(candidate.key)),
+            repository: RecordingRadioRepository(candidates: [candidate]),
+            connectivityStatus: { .online },
+            retryScheduler: scheduler
+        )
+        _ = await radio.restore(autoplayEnabled: false)
+        let brief = FakeBriefQueueCoordinator()
+        brief.queue = [makeBriefItem()]
+        brief.currentIndex = 0
+        let events = EventRecorder()
+        let transport = SpyAudioTransport { events.values.append($0) }
+        let player = UnifiedAudioPlayer(
+            audioPlayer: transport,
+            queueCoordinator: brief,
+            radioCoordinator: radio,
+            context: PersistenceController(inMemory: true).container.viewContext
+        )
+        await player.playRadio()
+        let radioID = try #require(transport.lastPlaybackID)
+
+        player.audioDidFinishPlaying(id: radioID, successfully: false)
+        player.audioDidFinishPlaying(id: radioID, successfully: false)
+        await player.play(at: 0)
+        events.values.removeAll()
+        scheduler.fireCanceledActionAnyway()
+        await Task.yield()
+
+        #expect(radio.entries.first?.playbackFailureCount == 1)
+        #expect(scheduler.scheduledDelays == [0.5])
+        #expect(player.activeMode == .brief)
+        #expect(transport.loads.count == 2)
+        #expect(transport.loads.last?.1.absoluteString == "https://example.com/brief.mp3")
+        #expect(events.values.isEmpty)
     }
 
     @Test func staleScheduledInterruptionAndRouteCannotPauseNewBriefPlayback() async throws {
