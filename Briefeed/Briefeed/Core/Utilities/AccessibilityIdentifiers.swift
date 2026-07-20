@@ -9,10 +9,26 @@ import Foundation
 
 enum AccessibilityID {
     enum Tab {
+        static let radio = "tab.radio"
         static let feed = "tab.feed"
         static let brief = "tab.brief"
-        static let liveNews = "tab.liveNews"
+        static let liveNews = radio
         static let settings = "tab.settings"
+    }
+
+    enum Navigation {
+        static let rail = "navigation.rail"
+        static let settings = "navigation.settings"
+    }
+
+    enum Radio {
+        static let currentTitle = "radio.currentTitle"
+        static let state = "radio.state"
+        static let refresh = "radio.refresh"
+        static let retry = "radio.retry"
+        static let addSource = "radio.addSource"
+        static let sourceList = "radio.sourceList"
+        static let sourceFailures = "radio.sourceFailures"
     }
 
     enum Feed {
@@ -75,6 +91,9 @@ enum AccessibilityID {
     }
 
     enum Settings {
+        static let done = "settings.done"
+        static let radioAutoplay = "settings.radioAutoplay"
+        static let playbackSpeed = "settings.playbackSpeed"
         static let darkMode = "settings.darkMode"
         static let textSize = "settings.textSize"
         static let summaryLength = "settings.summaryLength"

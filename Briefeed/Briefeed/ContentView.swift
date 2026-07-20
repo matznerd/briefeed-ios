@@ -8,75 +8,71 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var selectedTab = 0
-    @EnvironmentObject var userDefaultsManager: UserDefaultsManager
-    @EnvironmentObject var audioPlayerViewModel: AudioPlayerViewModelV2
+    @State private var selectedTab: AppTab = .radio
+    @State private var showingSettings = false
+    @EnvironmentObject private var userDefaultsManager: UserDefaultsManager
+    @EnvironmentObject private var audioPlayerViewModel: AudioPlayerViewModelV2
     @ObservedObject private var statusService = ProcessingStatusService.shared
-    
+
     var body: some View {
-        ZStack(alignment: .bottom) {
-            // Main content with tab view
-            VStack(spacing: 0) {
-                // Status banner at the top
-                if statusService.showStatusBanner {
-                    ProcessingStatusBanner()
-                        .padding(.horizontal)
-                        .padding(.top, 5)
-                        .zIndex(1)
-                }
-                
-                TabView(selection: $selectedTab) {
-                    FeedView()
-                        .tabItem {
-                            Label("Feed", systemImage: "newspaper")
-                        }
-                        .tag(0)
-
-                    FilteredBriefView()
-                        .tabItem {
-                            Label("Brief", systemImage: "music.note.list")
-                        }
-                        .tag(1)
-
-                    LiveNewsViewV2()
-                        .tabItem {
-                            Label("Live News", systemImage: "dot.radiowaves.left.and.right")
-                        }
-                        .tag(2)
-
-                    SettingsView()
-                        .tabItem {
-                            Label("Settings", systemImage: "gear")
-                        }
-                        .tag(3)
-                }
-                .accentColor(.briefeedRed)
+        VStack(spacing: 0) {
+            if statusService.showStatusBanner {
+                ProcessingStatusBanner()
+                    .padding(.horizontal)
+                    .padding(.top, 5)
+                    .zIndex(1)
             }
-            
-            if !audioPlayerViewModel.radioEntries.isEmpty || !audioPlayerViewModel.queueItems.isEmpty {
-                VStack(spacing: 0) {
-                    Spacer()
-                    MiniAudioPlayerV4()
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .animation(
-                            .easeInOut(duration: 0.3),
-                            value: !audioPlayerViewModel.radioEntries.isEmpty || !audioPlayerViewModel.queueItems.isEmpty
-                        )
-                        .padding(.bottom, 49) // Height of tab bar
-                }
+
+            TabView(selection: $selectedTab) {
+                RadioHomeView()
+                    .appSettingsToolbar { showingSettings = true }
+                    .tabItem {
+                        Label(AppTab.radio.title, systemImage: AppTab.radio.systemImage)
+                    }
+                    .tag(AppTab.radio)
+
+                FilteredBriefView()
+                    .appSettingsToolbar { showingSettings = true }
+                    .tabItem {
+                        Label(AppTab.brief.title, systemImage: AppTab.brief.systemImage)
+                    }
+                    .tag(AppTab.brief)
+
+                FeedView()
+                    .appSettingsToolbar { showingSettings = true }
+                    .tabItem {
+                        Label(AppTab.feed.title, systemImage: AppTab.feed.systemImage)
+                    }
+                    .tag(AppTab.feed)
             }
+            .toolbar(.hidden, for: .tabBar)
+            .tint(.briefeedRed)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            AppBottomChrome(
+                selection: $selectedTab,
+                showsMiniPlayer: shouldShowMiniPlayer
+            )
         }
         .ignoresSafeArea(.keyboard)
+        .sheet(isPresented: $showingSettings) {
+            SettingsView()
+                .presentationDetents([.large])
+        }
         .onAppear {
-            // Apply theme settings when view appears
             applyThemePreference()
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ThemeChanged"))) { _ in
-            // Update theme when notification is received
             applyThemePreference()
         }
     }
-    
+
+    private var shouldShowMiniPlayer: Bool {
+        !audioPlayerViewModel.radioEntries.isEmpty
+            || !audioPlayerViewModel.queueItems.isEmpty
+            || audioPlayerViewModel.radioState == .exhausted
+    }
+
     private func applyThemePreference() {
         if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
             windowScene.windows.forEach { window in
@@ -92,9 +88,58 @@ struct FeedView: View {
     }
 }
 
+private struct AppSettingsToolbarModifier: ViewModifier {
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        content.toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                AppSettingsButton(action: action)
+            }
+        }
+    }
+}
+
+private struct AppSettingsButton: View {
+    let action: () -> Void
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    var body: some View {
+        if #available(iOS 26.0, *), !reduceTransparency {
+            settingsButton
+                .buttonStyle(.glass)
+        } else {
+            settingsButton
+                .buttonStyle(.plain)
+                .background(
+                    reduceTransparency ? AnyShapeStyle(Color(uiColor: .secondarySystemBackground)) : AnyShapeStyle(.ultraThinMaterial),
+                    in: Circle()
+                )
+        }
+    }
+
+    private var settingsButton: some View {
+        Button(action: action) {
+            Image(systemName: "gearshape")
+                .font(.system(.body, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Settings")
+        .accessibilityIdentifier(AccessibilityID.Navigation.settings)
+    }
+}
+
+private extension View {
+    func appSettingsToolbar(action: @escaping () -> Void) -> some View {
+        modifier(AppSettingsToolbarModifier(action: action))
+    }
+}
 
 #Preview {
     ContentView()
         .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
         .environmentObject(UserDefaultsManager.shared)
+        .environmentObject(AudioPlayerViewModelV2())
+        .environmentObject(AppViewModel(audioPlayerViewModel: AudioPlayerViewModelV2()))
 }

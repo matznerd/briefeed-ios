@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var showingResetAlert = false
     @State private var showingDocumentPicker = false
     @State private var showingProcessingHistory = false
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) var colorScheme
     
     var body: some View {
@@ -85,6 +86,17 @@ struct SettingsView: View {
                 
                 // MARK: - Audio Section
                 Section {
+                    Toggle("Autoplay Radio", isOn: $viewModel.userDefaultsManager.autoPlayLiveNewsOnOpen)
+                        .accessibilityIdentifier(AccessibilityID.Settings.radioAutoplay)
+
+                    Picker("Radio Playback Speed", selection: $viewModel.userDefaultsManager.playbackSpeed) {
+                        ForEach(PlaybackSpeedPolicy.supported, id: \.self) { speed in
+                            Text(speed.formatted(.number.precision(.fractionLength(speed.rounded() == speed ? 0 : 2))))
+                                .tag(speed)
+                        }
+                    }
+                    .accessibilityIdentifier(AccessibilityID.Settings.playbackSpeed)
+
                     Toggle("Enable Audio", isOn: $viewModel.userDefaultsManager.audioEnabled)
                     
                     if viewModel.userDefaultsManager.audioEnabled {
@@ -288,6 +300,15 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .accessibilityIdentifier(AccessibilityID.Settings.done)
+                }
+            }
             .alert("Reset Settings?", isPresented: $showingResetAlert) {
                 Button("Cancel", role: .cancel) { }
                 Button("Reset", role: .destructive) {
