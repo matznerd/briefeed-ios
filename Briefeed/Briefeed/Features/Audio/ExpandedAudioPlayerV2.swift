@@ -3,7 +3,7 @@
 //  Briefeed
 //
 //  Full-screen audio player using AudioPlayerViewModelV2
-//  Supports up to 20x playback speed with SwiftAudioEx
+//  Shares the Radio transport, speed, sleep, and progress semantics.
 //
 
 import SwiftUI
@@ -11,9 +11,6 @@ import SwiftUI
 struct ExpandedAudioPlayerV2: View {
     @EnvironmentObject var viewModel: AudioPlayerViewModelV2
     @Environment(\.dismiss) var dismiss
-    @State private var isDraggingSlider = false
-    @State private var dragProgress: Float = 0
-    @State private var showSpeedPicker = false
     @State private var showQueue = false
     
     var body: some View {
@@ -74,13 +71,20 @@ struct ExpandedAudioPlayerV2: View {
             
             Spacer()
             
-            Button(action: { showQueue = true }) {
-                Image(systemName: "list.bullet")
-                    .font(.system(size: 18))
-                    .foregroundColor(.primary)
+            if viewModel.activeMode == .radio {
+                Color.clear
                     .frame(width: 44, height: 44)
+                    .accessibilityHidden(true)
+            } else {
+                Button(action: { showQueue = true }) {
+                    Image(systemName: "list.bullet")
+                        .font(.system(size: 18))
+                        .foregroundColor(.primary)
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Queue")
+                .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.queue)
             }
-            .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.queue)
         }
         .padding(.horizontal, 4)
         .overlay(
@@ -152,98 +156,50 @@ struct ExpandedAudioPlayerV2: View {
     
     // MARK: - Progress Section
     private var progressSection: some View {
-        VStack(spacing: 8) {
-            // Progress Slider
-            GeometryReader { geometry in
-                let width = max(1, geometry.size.width)
-                let displayedProgress = CGFloat(isDraggingSlider ? dragProgress : viewModel.progress)
-                let knobOffset = max(0, min(width - 16, (width * displayedProgress) - 8))
-
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(Color.gray.opacity(0.2))
-                        .frame(height: 6)
-
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(Color.accentColor)
-                        .frame(width: width * displayedProgress, height: 6)
-
-                    Circle()
-                        .fill(Color.accentColor)
-                        .frame(width: 16, height: 16)
-                        .offset(x: knobOffset)
-                }
-                .frame(height: 16)
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            isDraggingSlider = true
-                            dragProgress = progress(for: value.location.x, width: width)
-                        }
-                        .onEnded { value in
-                            let finalProgress = progress(for: value.location.x, width: width)
-                            viewModel.seek(to: finalProgress)
-                            dragProgress = finalProgress
-                            isDraggingSlider = false
-                        }
-                )
-            }
-            .frame(height: 16)
-            
-            // Time Labels
-            HStack {
-                Text(viewModel.formattedCurrentTime)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.secondary)
-                
-                Spacer()
-                
-                Text(viewModel.formattedRemainingTime)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.secondary)
-            }
-        }
+        PlayerScrubber(
+            position: viewModel.currentTime,
+            duration: viewModel.duration,
+            identifier: AccessibilityID.ExpandedPlayer.progress,
+            onSeek: viewModel.seek(to:)
+        )
     }
     
     // MARK: - Main Controls
     private var mainControls: some View {
-        HStack(spacing: 40) {
-            // Skip Backward
-            Button(action: {
-                viewModel.skipBackward(15)
-            }) {
-                VStack(spacing: 2) {
-                    Image(systemName: "gobackward.15")
-                        .font(.system(size: 32))
-                    Text("15s")
-                        .font(.system(size: 10, weight: .medium))
+        HStack(spacing: 8) {
+            if PlayerPresentationPolicy.showsPrevious(for: viewModel.activeMode) {
+                Button {
+                    Task { await viewModel.playPrevious() }
+                } label: {
+                    Image(systemName: "backward.end.fill")
+                        .font(.title2)
+                        .frame(width: 44, height: 44)
                 }
-                .foregroundColor(.primary)
+                .buttonStyle(.plain)
+                .disabled(!viewModel.canPlayPrevious)
+                .accessibilityLabel("Previous")
+                .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.previous)
             }
+
+            Button {
+                viewModel.skipBackward(10)
+            } label: {
+                Image(systemName: "gobackward.10")
+                    .font(.system(.title, design: .rounded, weight: .medium))
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Back 10 seconds")
             .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.skipBackward)
-            
-            // Previous
-            Button(action: {
-                Task {
-                    await viewModel.playPrevious()
-                }
-            }) {
-                Image(systemName: "backward.fill")
-                    .font(.system(size: 28))
-                    .foregroundColor(viewModel.canPlayPrevious ? .primary : .secondary.opacity(0.5))
-            }
-            .disabled(!viewModel.canPlayPrevious)
-            .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.previous)
 
             // Play/Pause
-            Button(action: {
+            Button {
                 viewModel.togglePlayPause()
-            }) {
+            } label: {
                 ZStack {
                     Circle()
-                        .fill(Color.accentColor)
-                        .frame(width: 72, height: 72)
+                        .fill(Color.briefeedRed)
+                        .frame(width: 64, height: 64)
                     
                     if viewModel.isLoading || viewModel.isGenerating {
                         ProgressView()
@@ -251,84 +207,77 @@ struct ExpandedAudioPlayerV2: View {
                             .scaleEffect(1.2)
                     } else {
                         Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 30, weight: .bold))
+                            .font(.system(.title2, design: .rounded, weight: .bold))
                             .foregroundColor(.white)
                             .offset(x: viewModel.isPlaying ? 0 : 2)
                     }
                 }
+                .frame(width: 64, height: 64)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel(viewModel.isPlaying ? "Pause" : "Play")
             .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.playPause)
 
-            // Next
-            Button(action: {
-                Task {
-                    await viewModel.playNext()
-                }
-            }) {
-                Image(systemName: "forward.fill")
-                    .font(.system(size: 28))
-                    .foregroundColor(viewModel.canPlayNext ? .primary : .secondary.opacity(0.5))
+            Button {
+                viewModel.skipForward(10)
+            } label: {
+                Image(systemName: "goforward.10")
+                    .font(.system(.title, design: .rounded, weight: .medium))
+                    .frame(width: 44, height: 44)
             }
-            .disabled(!viewModel.canPlayNext)
-            .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.next)
-
-            // Skip Forward
-            Button(action: {
-                viewModel.skipForward(30)
-            }) {
-                VStack(spacing: 2) {
-                    Image(systemName: "goforward.30")
-                        .font(.system(size: 32))
-                    Text("30s")
-                        .font(.system(size: 10, weight: .medium))
-                }
-                .foregroundColor(.primary)
-            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Forward 10 seconds")
             .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.skipForward)
+
+            Button {
+                Task { await viewModel.playNext() }
+            } label: {
+                Image(systemName: "forward.end.fill")
+                    .font(.title2)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .disabled(!viewModel.canPlayNext)
+            .accessibilityLabel("Next")
+            .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.next)
         }
+        .frame(maxWidth: .infinity)
     }
     
     // MARK: - Speed Control
     private var speedControl: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Text("Playback Speed")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.secondary)
-                
-                Spacer()
-                
-                Button(action: { showSpeedPicker.toggle() }) {
-                    HStack(spacing: 4) {
-                        Text(formatSpeed(viewModel.playbackSpeed))
-                            .font(.system(size: 16, weight: .semibold))
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Playback")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                PlayerSpeedMenu(viewModel: viewModel)
+                    .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.speed)
+            }
 
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .medium))
-                            .rotationEffect(.degrees(showSpeedPicker ? 90 : 0))
-                    }
-                    .foregroundColor(.accentColor)
+            if viewModel.activeMode == .radio {
+                Divider()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Sleep")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    RadioSleepMenu(viewModel: viewModel)
+                        .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.sleep)
                 }
-                .accessibilityIdentifier(AccessibilityID.ExpandedPlayer.speed)
             }
-            
-            if showSpeedPicker {
-                HorizontalSpeedSelector(selectedSpeed: $viewModel.playbackSpeed)
-                    .transition(.asymmetric(
-                        insertion: .scale(scale: 0.9).combined(with: .opacity),
-                        removal: .scale(scale: 0.9).combined(with: .opacity)
-                    ))
-            }
+
+            Spacer(minLength: 0)
         }
         .padding()
         .background(Color.gray.opacity(0.05))
-        .cornerRadius(12)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
     
     // MARK: - Queue Info
     private var queueInfo: some View {
         Group {
-            if !viewModel.queueItems.isEmpty {
+            if viewModel.activeMode != .radio, !viewModel.queueItems.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Queue")
@@ -357,7 +306,7 @@ struct ExpandedAudioPlayerV2: View {
                 }
                 .padding()
                 .background(Color.gray.opacity(0.05))
-                .cornerRadius(12)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .onTapGesture {
                     showQueue = true
                 }
@@ -389,20 +338,6 @@ struct ExpandedAudioPlayerV2: View {
         }
     }
     
-    private func formatSpeed(_ speed: Float) -> String {
-        if speed == 1.0 {
-            return "1×"
-        } else if speed == floor(speed) {
-            return "\(Int(speed))×"
-        } else {
-            return String(format: "%.1f×", speed)
-        }
-    }
-
-    private func progress(for xPosition: CGFloat, width: CGFloat) -> Float {
-        guard width > 0 else { return 0 }
-        return Float(max(0, min(1, xPosition / width)))
-    }
 }
 
 // MARK: - Queue View

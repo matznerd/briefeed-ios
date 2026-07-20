@@ -100,4 +100,50 @@ final class RadioUITests: XCTestCase {
         let details = app.descendants(matching: .any)["radio.sourceDetails"]
         XCTAssertTrue(details.waitForExistence(timeout: 3))
     }
+
+    @MainActor
+    func testCompactRadioPlayerExposesRightHandTransportAndAccessibleScrubber() throws {
+        app.launch()
+
+        let player = app.otherElements["miniPlayer.container"]
+        XCTAssertTrue(player.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["miniPlayer.previous"].exists)
+
+        for identifier in [
+            "miniPlayer.rewind",
+            "miniPlayer.playPause",
+            "miniPlayer.forward",
+            "miniPlayer.next"
+        ] {
+            let control = app.buttons[identifier]
+            XCTAssertTrue(control.waitForExistence(timeout: 3))
+            XCTAssertGreaterThanOrEqual(control.frame.width, 44)
+            XCTAssertGreaterThanOrEqual(control.frame.height, 44)
+        }
+
+        let scrubber = app.otherElements["miniPlayer.scrubber"]
+        XCTAssertTrue(scrubber.waitForExistence(timeout: 3))
+        XCTAssertGreaterThanOrEqual(scrubber.frame.height, 44)
+        XCTAssertFalse(scrubber.value as? String == nil)
+    }
+
+    @MainActor
+    func testCompactRadioPlayerOffersCanonicalSpeedAndSleepControls() throws {
+        app.launch()
+
+        let speed = app.buttons["miniPlayer.speed"]
+        XCTAssertTrue(speed.waitForExistence(timeout: 5))
+        speed.tap()
+        for label in ["0.5x", "0.75x", "1x", "1.25x", "1.5x", "1.75x", "2x", "2.5x", "3x"] {
+            XCTAssertTrue(app.buttons[label].exists || app.menuItems[label].exists)
+        }
+        app.tap()
+
+        let sleep = app.buttons["miniPlayer.sleep"]
+        XCTAssertTrue(sleep.waitForExistence(timeout: 3))
+        sleep.tap()
+        for label in ["Off", "End of Episode", "10 min", "20 min", "30 min", "45 min", "60 min", "Custom"] {
+            XCTAssertTrue(app.buttons[label].exists || app.menuItems[label].exists)
+        }
+    }
 }

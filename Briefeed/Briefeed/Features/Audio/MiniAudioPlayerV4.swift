@@ -1,246 +1,235 @@
-//
-//  MiniAudioPlayerV4.swift
-//  Briefeed
-//
-//  Unified mini audio player using AudioPlayerViewModelV2
-//
-
+import Foundation
 import SwiftUI
 
+enum PlayerSeekAdjustment {
+    case increment
+    case decrement
+}
+
+enum PlayerSeekGeometry {
+    static let hitLaneHeight: CGFloat = 44
+    static let adjustmentStep: TimeInterval = 10
+
+    static func clampedPosition(_ position: TimeInterval, duration: TimeInterval) -> TimeInterval {
+        guard position.isFinite, duration.isFinite, duration > 0 else { return 0 }
+        return min(max(position, 0), duration)
+    }
+
+    static func progress(position: TimeInterval, duration: TimeInterval) -> CGFloat {
+        guard duration.isFinite, duration > 0 else { return 0 }
+        return CGFloat(clampedPosition(position, duration: duration) / duration)
+    }
+
+    static func position(atX xPosition: CGFloat, width: CGFloat, duration: TimeInterval) -> TimeInterval {
+        guard xPosition.isFinite, width.isFinite, width > 0, duration.isFinite, duration > 0 else { return 0 }
+        let fraction = min(max(xPosition / width, 0), 1)
+        return TimeInterval(fraction) * duration
+    }
+
+    static func adjustedPosition(
+        from position: TimeInterval,
+        direction: PlayerSeekAdjustment,
+        duration: TimeInterval
+    ) -> TimeInterval {
+        let delta = direction == .increment ? adjustmentStep : -adjustmentStep
+        return clampedPosition(position + delta, duration: duration)
+    }
+}
+
+enum PlayerTransportControl: Equatable {
+    case previous
+    case backTen
+    case playPause
+    case forwardTen
+    case next
+}
+
+enum PlayerPresentationPolicy {
+    static let speedOptions = PlaybackSpeedPolicy.supported
+
+    static func transportControls(for mode: ActivePlaybackMode) -> [PlayerTransportControl] {
+        if mode == .radio {
+            return [.backTen, .playPause, .forwardTen, .next]
+        }
+        return [.previous, .backTen, .playPause, .forwardTen, .next]
+    }
+
+    static func showsPrevious(for mode: ActivePlaybackMode) -> Bool {
+        transportControls(for: mode).contains(.previous)
+    }
+}
+
+enum RadioSleepMenuOption: Equatable, Identifiable {
+    case off
+    case endOfEpisode
+    case minutes(Int)
+    case custom
+
+    static let customBounds = 1...180
+    static let defaultCustomMinutes = 20
+    static let all: [Self] = [
+        .off,
+        .endOfEpisode,
+        .minutes(10),
+        .minutes(20),
+        .minutes(30),
+        .minutes(45),
+        .minutes(60),
+        .custom
+    ]
+
+    var id: String {
+        switch self {
+        case .off: "off"
+        case .endOfEpisode: "endOfEpisode"
+        case .minutes(let value): "minutes-\(value)"
+        case .custom: "custom"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .off: "Off"
+        case .endOfEpisode: "End of Episode"
+        case .minutes(let value): "\(value) min"
+        case .custom: "Custom"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .off: "moon.zzz"
+        case .endOfEpisode: "moon.stars"
+        case .minutes: "timer"
+        case .custom: "slider.horizontal.3"
+        }
+    }
+
+    static func clampedCustomMinutes(_ minutes: Int) -> Int {
+        min(max(minutes, customBounds.lowerBound), customBounds.upperBound)
+    }
+
+    func timer(now: Date, customMinutes: Int = defaultCustomMinutes) -> RadioSleepTimer {
+        switch self {
+        case .off:
+            return .off
+        case .endOfEpisode:
+            return .endOfEpisode
+        case .minutes(let minutes):
+            return .deadline(now.addingTimeInterval(TimeInterval(minutes * 60)))
+        case .custom:
+            let minutes = Self.clampedCustomMinutes(customMinutes)
+            return .deadline(now.addingTimeInterval(TimeInterval(minutes * 60)))
+        }
+    }
+}
+
+enum PlayerPresentationFormat {
+    static func elapsed(_ seconds: TimeInterval) -> String {
+        clock(max(0, seconds))
+    }
+
+    static func remaining(position: TimeInterval, duration: TimeInterval) -> String {
+        "-\(clock(max(0, duration - position)))"
+    }
+
+    static func scrubberAccessibilityValue(position: TimeInterval, duration: TimeInterval) -> String {
+        let elapsed = components(max(0, position))
+        let remaining = components(max(0, duration - position))
+        return "\(spoken(elapsed)) elapsed, \(spoken(remaining)) remaining"
+    }
+
+    static func speed(_ speed: Float) -> String {
+        if speed.rounded() == speed {
+            return "\(Int(speed))x"
+        }
+        return "\(speed.formatted(.number.precision(.fractionLength(1...2))))x"
+    }
+
+    static func sleepTimer(_ timer: RadioSleepTimer, now: Date) -> String {
+        switch timer {
+        case .off:
+            return "Off"
+        case .endOfEpisode:
+            return "End of Episode"
+        case .deadline(let deadline):
+            let minutes = max(0, Int(ceil(deadline.timeIntervalSince(now) / 60)))
+            return "\(minutes) min"
+        }
+    }
+
+    static func compactSleepTimer(_ timer: RadioSleepTimer, now: Date) -> String {
+        switch timer {
+        case .endOfEpisode: "End"
+        default: sleepTimer(timer, now: now)
+        }
+    }
+
+    private static func clock(_ seconds: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(seconds.rounded(.down)))
+        let hours = totalSeconds / 3_600
+        let minutes = (totalSeconds % 3_600) / 60
+        let remainder = totalSeconds % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, remainder)
+        }
+        return String(format: "%d:%02d", minutes, remainder)
+    }
+
+    private static func components(_ seconds: TimeInterval) -> (minutes: Int, seconds: Int) {
+        let totalSeconds = max(0, Int(seconds.rounded(.down)))
+        return (totalSeconds / 60, totalSeconds % 60)
+    }
+
+    private static func spoken(_ value: (minutes: Int, seconds: Int)) -> String {
+        "\(value.minutes) \(value.minutes == 1 ? "minute" : "minutes"), \(value.seconds) \(value.seconds == 1 ? "second" : "seconds")"
+    }
+}
+
 struct MiniAudioPlayerV4: View {
-    @EnvironmentObject var viewModel: AudioPlayerViewModelV2
+    @EnvironmentObject private var viewModel: AudioPlayerViewModelV2
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+
     @State private var showTranscript = false
     @State private var showExpandedPlayer = false
 
     var body: some View {
         VStack(spacing: 0) {
-            // Divider
-            Divider()
-            
-            // Full-width title at the top
-            HStack {
-                if let title = viewModel.currentTitle {
-                    Text(title)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .accessibilityIdentifier(AccessibilityID.MiniPlayer.title)
-                } else {
-                    Text("Not Playing")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.secondary)
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .trailing, spacing: 4) {
+                    metadata
+                    transportCluster
                 }
-                
-                Spacer()
+                .padding(.horizontal, 10)
+                .padding(.top, 6)
+            } else {
+                HStack(spacing: 8) {
+                    metadata
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .layoutPriority(0)
 
-                Button {
-                    showExpandedPlayer = true
-                } label: {
-                    Image(systemName: "chevron.up")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.secondary)
-                        .frame(width: 32, height: 28)
-                        .contentShape(Rectangle())
+                    transportCluster
+                        .fixedSize(horizontal: true, vertical: false)
+                        .layoutPriority(2)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open player")
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color(UIColor.secondarySystemBackground))
-            .contentShape(Rectangle())
-            .onTapGesture {
-                if viewModel.currentItemType == .article {
-                    showTranscript = true
-                }
+                .padding(.horizontal, 10)
+                .padding(.top, 6)
             }
 
-            // Player content
-            HStack(spacing: 12) {
-                // Thumbnail or waveform
-                ZStack {
-                    if viewModel.isGenerating {
-                        ProgressView()
-                            .scaleEffect(0.7)
-                            .frame(width: 44, height: 44)
-                    } else if viewModel.isPlaying {
-                        WaveformMiniView(isPlaying: viewModel.isPlaying)
-                            .frame(width: 44, height: 44)
-                    } else {
-                        Image(systemName: itemIcon)
-                            .font(.system(size: 20))
-                            .foregroundColor(.secondary)
-                            .frame(width: 44, height: 44)
-                            .background(Color.gray.opacity(0.1))
-                            .cornerRadius(8)
-                    }
-                }
-                
-                // Source and speed info only (title is now at top)
-                VStack(alignment: .leading, spacing: 2) {
-                    if viewModel.isGenerating {
-                        HStack(spacing: 4) {
-                            // Phase-appropriate icon
-                            Image(systemName: phaseIcon)
-                                .font(.system(size: 10))
-                                .foregroundColor(phaseColor)
-
-                            Text(viewModel.generationPhase.shortMessage)
-                                .font(.system(size: 11))
-                                .foregroundColor(phaseColor)
-                                .lineLimit(1)
-                        }
-                    } else if let artist = viewModel.currentArtist {
-                        HStack(spacing: 4) {
-                            Text(artist)
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                            
-                            if viewModel.playbackSpeed != 1.0 {
-                                Text("• \(formatSpeed(viewModel.playbackSpeed))")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundColor(.accentColor)
-                            }
-                        }
-                    }
-                    
-                    // Time remaining or progress
-                    if viewModel.duration > 0 {
-                        Text("\(formatTime(viewModel.currentTime)) / \(formatTime(viewModel.duration))")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                
-                Spacer(minLength: 4)
-                
-                // Controls - 5 button layout: [⏮️] [-10] [⏸️/▶️] [+10] [⏭️]
-                HStack(spacing: 10) {
-                    // Previous track button
-                    Button(action: {
-                        Task { @MainActor in
-                            await viewModel.playPrevious()
-                        }
-                    }) {
-                        Image(systemName: "backward.end.fill")
-                            .font(.system(size: 20))
-                            .foregroundColor(viewModel.canPlayPrevious ? .primary : .secondary.opacity(0.5))
-                            .frame(width: 32, height: 32)
-                            .contentShape(Rectangle())
-                    }
-                    .disabled(!viewModel.canPlayPrevious)
-                    .accessibilityLabel("Previous track")
-                    .accessibilityIdentifier(AccessibilityID.MiniPlayer.previous)
-                    
-                    // Rewind 10 seconds button
-                    Button(action: {
-                        viewModel.seekBackward()
-                    }) {
-                        Image(systemName: "gobackward.10")
-                            .font(.system(size: 18))
-                            .foregroundColor(.primary)
-                            .frame(width: 32, height: 32)
-                            .contentShape(Rectangle())
-                    }
-                    .accessibilityLabel("Rewind 10 seconds")
-                    .accessibilityIdentifier(AccessibilityID.MiniPlayer.rewind)
-                    
-                    // Play/Pause button (center, larger)
-                    Button(action: {
-                        if viewModel.isPlaying {
-                            viewModel.pause()
-                        } else {
-                            Task { @MainActor in
-                                await viewModel.play()
-                            }
-                        }
-                    }) {
-                        ZStack {
-                            Circle()
-                                .fill(Color.accentColor)
-                                .frame(width: 44, height: 44)
-                            
-                            if viewModel.isLoading {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(0.7)
-                            } else {
-                                Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
-                                    .font(.system(size: 18, weight: .semibold))
-                                    .foregroundColor(.white)
-                                    .offset(x: viewModel.isPlaying ? 0 : 1) // Center play icon
-                            }
-                        }
-                    }
-                    .disabled(viewModel.radioEntries.isEmpty && viewModel.queueItems.isEmpty)
-                    .accessibilityLabel(viewModel.isPlaying ? "Pause" : "Play")
-                    .accessibilityIdentifier(AccessibilityID.MiniPlayer.playPause)
-                    
-                    // Forward 10 seconds button
-                    Button(action: {
-                        viewModel.seekForward()
-                    }) {
-                        Image(systemName: "goforward.10")
-                            .font(.system(size: 18))
-                            .foregroundColor(.primary)
-                            .frame(width: 32, height: 32)
-                            .contentShape(Rectangle())
-                    }
-                    .accessibilityLabel("Forward 10 seconds")
-                    .accessibilityIdentifier(AccessibilityID.MiniPlayer.forward)
-                    
-                    // Next track button
-                    Button(action: {
-                        Task { @MainActor in
-                            await viewModel.playNext()
-                        }
-                    }) {
-                        Image(systemName: "forward.end.fill")
-                            .font(.system(size: 20))
-                            .foregroundColor(viewModel.canPlayNext ? .primary : .secondary.opacity(0.5))
-                            .frame(width: 32, height: 32)
-                            .contentShape(Rectangle())
-                    }
-                    .disabled(!viewModel.canPlayNext)
-                    .accessibilityLabel("Next track")
-                    .accessibilityIdentifier(AccessibilityID.MiniPlayer.next)
-                }
-                .padding(.trailing, 8)
-            }
-            .padding(.horizontal, 16)
-            .frame(height: 54) // Controls section height
-            .background(
-                Color(UIColor.systemBackground)
-                    .shadow(color: Color.black.opacity(0.1), radius: 5, x: 0, y: -2)
+            PlayerScrubber(
+                position: viewModel.currentTime,
+                duration: viewModel.duration,
+                identifier: AccessibilityID.MiniPlayer.scrubber,
+                onSeek: viewModel.seek(to:)
             )
-            
-            // Progress bar
-            if viewModel.duration > 0 {
-                GeometryReader { geometry in
-                    ZStack(alignment: .leading) {
-                        Rectangle()
-                            .fill(Color.gray.opacity(0.2))
-                            .frame(height: 2)
-                        
-                        Rectangle()
-                            .fill(Color.accentColor)
-                            .frame(width: geometry.size.width * CGFloat(viewModel.progress), height: 2)
-                    }
-                    .frame(maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { value in
-                                viewModel.seek(to: progress(for: value.location.x, width: geometry.size.width))
-                            }
-                    )
-                }
-                .frame(height: 12)
-            }
+            .padding(.horizontal, 10)
         }
+        .background(playerBackground)
+        .overlay(playerBoundary)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier(AccessibilityID.MiniPlayer.container)
         .sheet(isPresented: $showTranscript) {
             TranscriptReaderView()
@@ -253,99 +242,396 @@ struct MiniAudioPlayerV4: View {
                 .environmentObject(viewModel)
         }
     }
-    
+
+    private var metadata: some View {
+        HStack(spacing: 8) {
+            Button {
+                showExpandedPlayer = true
+            } label: {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.briefeedRed.opacity(0.14))
+                    if viewModel.isGenerating {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: itemIcon)
+                            .font(.system(.body, design: .rounded, weight: .semibold))
+                            .foregroundStyle(Color.briefeedRed)
+                    }
+                }
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open player")
+            .accessibilityIdentifier(AccessibilityID.MiniPlayer.expand)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Button {
+                    if viewModel.currentItemType == .article {
+                        showTranscript = true
+                    } else {
+                        showExpandedPlayer = true
+                    }
+                } label: {
+                    Text(viewModel.currentTitle ?? "Not Playing")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier(AccessibilityID.MiniPlayer.title)
+
+                Text(metadataSubtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .accessibilityIdentifier(AccessibilityID.MiniPlayer.source)
+
+                HStack(spacing: 2) {
+                    PlayerSpeedMenu(viewModel: viewModel, compact: true)
+                    if viewModel.activeMode == .radio {
+                        RadioSleepMenu(viewModel: viewModel, compact: true)
+                    }
+                }
+            }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var transportCluster: some View {
+        HStack(spacing: 2) {
+            ForEach(Array(PlayerPresentationPolicy.transportControls(for: viewModel.activeMode).enumerated()), id: \.offset) { _, control in
+                transportButton(control)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func transportButton(_ control: PlayerTransportControl) -> some View {
+        switch control {
+        case .previous:
+            Button {
+                Task { await viewModel.playPrevious() }
+            } label: {
+                Image(systemName: "backward.end.fill")
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!viewModel.canPlayPrevious)
+            .accessibilityLabel("Previous")
+            .accessibilityIdentifier(AccessibilityID.MiniPlayer.previous)
+
+        case .backTen:
+            playerIconButton(
+                systemName: "gobackward.10",
+                label: "Back 10 seconds",
+                identifier: AccessibilityID.MiniPlayer.rewind,
+                action: viewModel.seekBackward
+            )
+
+        case .playPause:
+            Button {
+                viewModel.togglePlayPause()
+            } label: {
+                ZStack {
+                    Circle()
+                        .fill(Color.briefeedRed)
+                        .frame(width: 44, height: 44)
+                    if viewModel.isLoading || viewModel.isGenerating {
+                        ProgressView()
+                            .tint(.white)
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(.body, design: .rounded, weight: .bold))
+                            .foregroundStyle(.white)
+                            .offset(x: viewModel.isPlaying ? 0 : 1)
+                    }
+                }
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(viewModel.radioEntries.isEmpty && viewModel.queueItems.isEmpty)
+            .accessibilityLabel(viewModel.isPlaying ? "Pause" : "Play")
+            .accessibilityIdentifier(AccessibilityID.MiniPlayer.playPause)
+
+        case .forwardTen:
+            playerIconButton(
+                systemName: "goforward.10",
+                label: "Forward 10 seconds",
+                identifier: AccessibilityID.MiniPlayer.forward,
+                action: viewModel.seekForward
+            )
+
+        case .next:
+            Button {
+                Task { await viewModel.playNext() }
+            } label: {
+                Image(systemName: "forward.end.fill")
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!viewModel.canPlayNext)
+            .accessibilityLabel("Next")
+            .accessibilityIdentifier(AccessibilityID.MiniPlayer.next)
+        }
+    }
+
+    private func playerIconButton(
+        systemName: String,
+        label: String,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(.title3, design: .rounded, weight: .medium))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier(identifier)
+    }
+
+    private var metadataSubtitle: String {
+        if viewModel.isGenerating {
+            return viewModel.generationPhase.shortMessage
+        }
+        return viewModel.currentArtist ?? "Briefeed Radio"
+    }
+
     private var itemIcon: String {
         switch viewModel.currentItemType {
-        case .article:
-            return "doc.text"
-        case .rssEpisode:
-            return "mic.fill"
-        case .none:
-            return "music.note"
+        case .article: "doc.text.fill"
+        case .rssEpisode: "dot.radiowaves.left.and.right"
+        case .none: "play.fill"
         }
     }
 
-    /// Icon for the current generation phase
-    private var phaseIcon: String {
-        switch viewModel.generationPhase {
-        case .idle:
-            return "circle"
-        case .checkingCache:
-            return "magnifyingglass"
-        case .fetchingContent:
-            return "arrow.down.doc"
-        case .summarizing:
-            return "text.badge.star"
-        case .downloadingModels:
-            return "arrow.down.to.line"
-        case .initializingOnDevice:
-            return "cpu"
-        case .generatingAudio:
-            return "waveform"
-        case .downloadingAudio:
-            return "arrow.down.circle"
-        case .finalizing:
-            return "checkmark.circle"
-        case .failed:
-            return "exclamationmark.triangle"
-        }
+    private var playerBackground: some ShapeStyle {
+        reduceTransparency
+            ? AnyShapeStyle(Color(uiColor: .secondarySystemBackground))
+            : AnyShapeStyle(.regularMaterial)
     }
 
-    /// Color for the current generation phase
-    private var phaseColor: Color {
-        switch viewModel.generationPhase {
-        case .idle:
-            return .secondary
-        case .checkingCache:
-            return .blue
-        case .fetchingContent:
-            return .blue
-        case .summarizing:
-            return .purple
-        case .downloadingModels:
-            return .blue
-        case .initializingOnDevice:
-            return .orange
-        case .generatingAudio:
-            return .orange
-        case .downloadingAudio:
-            return .green
-        case .finalizing:
-            return .green
-        case .failed:
-            return .red
-        }
-    }
-
-    private func formatSpeed(_ speed: Float) -> String {
-        if speed == 1.0 {
-            return "1x"
-        } else if speed == floor(speed) {
-            return "\(Int(speed))x"
-        } else {
-            return String(format: "%.1fx", speed)
-        }
-    }
-    
-    private func formatTime(_ time: TimeInterval) -> String {
-        let minutes = Int(time) / 60
-        let seconds = Int(time) % 60
-        return String(format: "%d:%02d", minutes, seconds)
-    }
-
-    private func progress(for xPosition: CGFloat, width: CGFloat) -> Float {
-        guard width > 0 else { return 0 }
-        return Float(max(0, min(1, xPosition / width)))
+    private var playerBoundary: some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .stroke(
+                Color.primary.opacity(colorSchemeContrast == .increased ? 0.4 : 0.12),
+                lineWidth: colorSchemeContrast == .increased ? 1.5 : 0.5
+            )
     }
 }
 
-// MARK: - Preview
-struct MiniAudioPlayerV4_Previews: PreviewProvider {
-    static var previews: some View {
-        VStack {
-            Spacer()
-            MiniAudioPlayerV4()
-                .environmentObject(AudioPlayerViewModelV2())
+struct PlayerScrubber: View {
+    let position: TimeInterval
+    let duration: TimeInterval
+    let identifier: String
+    let onSeek: (TimeInterval) -> Void
+
+    @State private var draggedPosition: TimeInterval?
+
+    private var displayedPosition: TimeInterval {
+        draggedPosition ?? PlayerSeekGeometry.clampedPosition(position, duration: duration)
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(PlayerPresentationFormat.elapsed(displayedPosition))
+                .accessibilityHidden(true)
+
+            GeometryReader { geometry in
+                let progress = PlayerSeekGeometry.progress(position: displayedPosition, duration: duration)
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.secondary.opacity(0.22))
+                        .frame(height: 3)
+                    Capsule()
+                        .fill(Color.briefeedRed)
+                        .frame(width: max(0, geometry.size.width * progress), height: 3)
+                    Circle()
+                        .fill(Color.briefeedRed)
+                        .frame(width: 10, height: 10)
+                        .offset(x: max(0, min(geometry.size.width - 10, geometry.size.width * progress - 5)))
+                }
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            draggedPosition = PlayerSeekGeometry.position(
+                                atX: value.location.x,
+                                width: geometry.size.width,
+                                duration: duration
+                            )
+                        }
+                        .onEnded { value in
+                            let finalPosition = PlayerSeekGeometry.position(
+                                atX: value.location.x,
+                                width: geometry.size.width,
+                                duration: duration
+                            )
+                            draggedPosition = nil
+                            onSeek(finalPosition)
+                        }
+                )
+            }
+
+            Text(PlayerPresentationFormat.remaining(position: displayedPosition, duration: duration))
+                .accessibilityHidden(true)
         }
+        .font(.caption2.monospacedDigit())
+        .foregroundStyle(.secondary)
+        .frame(height: PlayerSeekGeometry.hitLaneHeight)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Playback position")
+        .accessibilityValue(PlayerPresentationFormat.scrubberAccessibilityValue(position: displayedPosition, duration: duration))
+        .accessibilityHint("Swipe up or down to move by 10 seconds")
+        .accessibilityAdjustableAction { direction in
+            let adjustment: PlayerSeekAdjustment = direction == .increment ? .increment : .decrement
+            onSeek(PlayerSeekGeometry.adjustedPosition(from: displayedPosition, direction: adjustment, duration: duration))
+        }
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+struct PlayerSpeedMenu: View {
+    @ObservedObject var viewModel: AudioPlayerViewModelV2
+    var compact = false
+
+    var body: some View {
+        Menu {
+            ForEach(PlayerPresentationPolicy.speedOptions, id: \.self) { speed in
+                Button {
+                    viewModel.setSpeed(speed)
+                } label: {
+                    if speed == viewModel.playbackSpeed {
+                        Label(PlayerPresentationFormat.speed(speed), systemImage: "checkmark")
+                    } else {
+                        Text(PlayerPresentationFormat.speed(speed))
+                    }
+                }
+            }
+        } label: {
+            Label(PlayerPresentationFormat.speed(viewModel.playbackSpeed), systemImage: "speedometer")
+                .font(compact ? .caption2.weight(.semibold) : .subheadline.weight(.semibold))
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Playback speed")
+        .accessibilityValue(PlayerPresentationFormat.speed(viewModel.playbackSpeed))
+        .accessibilityIdentifier(AccessibilityID.MiniPlayer.speed)
+    }
+}
+
+struct RadioSleepMenu: View {
+    @ObservedObject var viewModel: AudioPlayerViewModelV2
+    var compact = false
+
+    @State private var now = Date()
+    @State private var customMinutes = RadioSleepMenuOption.defaultCustomMinutes
+    @State private var showingCustomSheet = false
+
+    private let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        Menu {
+            ForEach(RadioSleepMenuOption.all) { option in
+                Button {
+                    select(option)
+                } label: {
+                    Label(option.title, systemImage: option.systemImage)
+                }
+            }
+        } label: {
+            Label(
+                compact
+                    ? PlayerPresentationFormat.compactSleepTimer(viewModel.sleepTimer, now: now)
+                    : PlayerPresentationFormat.sleepTimer(viewModel.sleepTimer, now: now),
+                systemImage: "moon.fill"
+            )
+            .font(compact ? .caption2.weight(.semibold) : .subheadline.weight(.semibold))
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Sleep timer")
+        .accessibilityValue(PlayerPresentationFormat.sleepTimer(viewModel.sleepTimer, now: now))
+        .accessibilityIdentifier(AccessibilityID.MiniPlayer.sleep)
+        .onReceive(clock) { now = $0 }
+        .sheet(isPresented: $showingCustomSheet) {
+            CustomSleepTimerSheet(
+                minutes: $customMinutes,
+                onCancel: { showingCustomSheet = false },
+                onSet: {
+                    viewModel.setSleepTimer(
+                        RadioSleepMenuOption.custom.timer(now: Date(), customMinutes: customMinutes)
+                    )
+                    showingCustomSheet = false
+                }
+            )
+            .presentationDetents([.medium])
+        }
+    }
+
+    private func select(_ option: RadioSleepMenuOption) {
+        if option == .custom {
+            customMinutes = RadioSleepMenuOption.defaultCustomMinutes
+            showingCustomSheet = true
+        } else {
+            viewModel.setSleepTimer(option.timer(now: Date()))
+        }
+    }
+}
+
+private struct CustomSleepTimerSheet: View {
+    @Binding var minutes: Int
+    let onCancel: () -> Void
+    let onSet: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Stepper(value: $minutes, in: RadioSleepMenuOption.customBounds) {
+                    Text("\(minutes) minutes")
+                        .font(.body.monospacedDigit())
+                }
+                .accessibilityLabel("Sleep timer minutes")
+                .accessibilityValue("\(minutes) minutes")
+                .accessibilityIdentifier(AccessibilityID.SleepTimer.customMinutes)
+            }
+            .navigationTitle("Sleep Timer")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                        .accessibilityIdentifier(AccessibilityID.SleepTimer.cancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Set", action: onSet)
+                        .accessibilityIdentifier(AccessibilityID.SleepTimer.set)
+                }
+            }
+        }
+    }
+}
+
+#Preview {
+    VStack {
+        Spacer()
+        MiniAudioPlayerV4()
+            .environmentObject(AudioPlayerViewModelV2())
     }
 }

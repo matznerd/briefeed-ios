@@ -60,11 +60,16 @@ enum AccessibilityID {
     enum MiniPlayer {
         static let container = "miniPlayer.container"
         static let title = "miniPlayer.title"
+        static let source = "miniPlayer.source"
+        static let expand = "miniPlayer.expand"
         static let previous = "miniPlayer.previous"
         static let rewind = "miniPlayer.rewind"
         static let playPause = "miniPlayer.playPause"
         static let forward = "miniPlayer.forward"
         static let next = "miniPlayer.next"
+        static let scrubber = "miniPlayer.scrubber"
+        static let speed = "miniPlayer.speed"
+        static let sleep = "miniPlayer.sleep"
     }
 
     enum ExpandedPlayer {
@@ -76,7 +81,14 @@ enum AccessibilityID {
         static let next = "expandedPlayer.next"
         static let skipForward = "expandedPlayer.skipForward"
         static let speed = "expandedPlayer.speed"
+        static let sleep = "expandedPlayer.sleep"
         static let progress = "expandedPlayer.progress"
+    }
+
+    enum SleepTimer {
+        static let customMinutes = "sleepTimer.customMinutes"
+        static let cancel = "sleepTimer.cancel"
+        static let set = "sleepTimer.set"
     }
 
     enum Brief {
