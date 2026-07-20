@@ -33,6 +33,16 @@ struct PlaybackSpeedSettingsTests {
         #expect(PlaybackSpeedPolicy.normalize(1.125) == 1.0)
     }
 
+    @Test func persistNormalizesEveryCanonicalWrite() {
+        let (defaults, suiteName) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let speed = PlaybackSpeedPolicy.persist(20, defaults: defaults)
+
+        #expect(speed == 3.0)
+        #expect(defaults.float(forKey: UserDefaultsKey.playbackSpeed.rawValue) == 3.0)
+    }
+
     private func isolatedDefaults() -> (UserDefaults, String) {
         let suiteName = "PlaybackSpeedSettingsTests.\(UUID().uuidString)"
         return (UserDefaults(suiteName: suiteName)!, suiteName)

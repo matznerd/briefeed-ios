@@ -104,6 +104,20 @@ struct RadioSessionStoreTests {
         #expect(try store.load(durations: [:])?.entries.first?.positionSeconds == 40)
     }
 
+    @Test func clearInvalidatesOlderDebounce() throws {
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let scheduler = TestDebounceScheduler()
+        let store = RadioSessionStore(defaults: defaults, scheduler: scheduler)
+        let key = RadioEpisodeKey(feedID: "feed", episodeID: "a")
+
+        store.saveDebounced(session(current: key, position: 10))
+        store.clear()
+        scheduler.fireCanceledActionAnyway()
+
+        #expect(try store.load(durations: [:]) == nil)
+        #expect(defaults.object(forKey: RadioSessionStore.storageKey) == nil)
+    }
+
     private func session(current key: RadioEpisodeKey, position: TimeInterval) -> PersistedRadioSession {
         PersistedRadioSession(
             schemaVersion: 1,

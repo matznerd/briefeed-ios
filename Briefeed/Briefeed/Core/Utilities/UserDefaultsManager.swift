@@ -222,7 +222,10 @@ class UserDefaultsManager: ObservableObject {
     
     @Published var playbackSpeed: Float = 1.0 {
         didSet {
-            userDefaults.set(playbackSpeed, forKey: UserDefaultsKey.playbackSpeed.rawValue)
+            let normalized = PlaybackSpeedPolicy.persist(playbackSpeed, defaults: userDefaults)
+            if playbackSpeed != normalized {
+                playbackSpeed = normalized
+            }
         }
     }
     

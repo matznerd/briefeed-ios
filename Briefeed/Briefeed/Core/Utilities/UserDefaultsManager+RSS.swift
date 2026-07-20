@@ -31,8 +31,13 @@ enum PlaybackSpeedPolicy {
         } else {
             raw = 1.0
         }
+        return persist(raw, defaults: defaults)
+    }
+
+    @discardableResult
+    static func persist(_ raw: Float, defaults: UserDefaults) -> Float {
         let normalized = normalize(raw)
-        defaults.set(normalized, forKey: canonical)
+        defaults.set(normalized, forKey: UserDefaultsKey.playbackSpeed.rawValue)
         return normalized
     }
 }

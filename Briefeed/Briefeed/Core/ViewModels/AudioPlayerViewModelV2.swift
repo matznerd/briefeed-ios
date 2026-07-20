@@ -3,7 +3,7 @@
 //  Briefeed
 //
 //  Updated ViewModel using UnifiedAudioPlayer with SwiftAudioEx
-//  Supports up to 20x speed playback
+//  Uses the app-wide supported playback speeds
 //
 
 import Foundation
@@ -30,6 +30,11 @@ final class AudioPlayerViewModelV2: ObservableObject {
     
     @Published var playbackSpeed: Float = 1.0 {
         didSet {
+            let normalized = PlaybackSpeedPolicy.normalize(playbackSpeed)
+            if playbackSpeed != normalized {
+                playbackSpeed = normalized
+                return
+            }
             unifiedPlayer.setRate(playbackSpeed)
         }
     }
@@ -50,8 +55,7 @@ final class AudioPlayerViewModelV2: ObservableObject {
         generationPhase.displayMessage
     }
     
-    // Speed options supporting up to 20x
-    let speedOptions: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0, 8.0, 10.0, 15.0, 20.0]
+    let speedOptions = PlaybackSpeedPolicy.supported
     
     enum ItemType {
         case none
@@ -276,8 +280,9 @@ final class AudioPlayerViewModelV2: ObservableObject {
     // MARK: - Speed Control
     
     func setSpeed(_ speed: Float) {
-        playbackSpeed = speed
-        UserDefaultsManager.shared.playbackSpeed = speed
+        let normalized = PlaybackSpeedPolicy.normalize(speed)
+        playbackSpeed = normalized
+        UserDefaultsManager.shared.playbackSpeed = normalized
     }
     
     func increaseSpeed() {
