@@ -20,6 +20,8 @@ class RSSAudioService: NSObject, ObservableObject {
     @Published private(set) var feeds: [RSSFeed] = []
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastError: Error?
+
+    var enabledFeedCount: Int { feeds.lazy.filter(\.isEnabled).count }
     
     // MARK: - Private Properties
     private let viewContext: NSManagedObjectContext

@@ -10,55 +10,46 @@ import AVFoundation
 
 @main
 struct BriefeedApp: App {
-    let persistenceController = PersistenceController.shared
-    @StateObject private var userDefaultsManager = UserDefaultsManager.shared
-    @StateObject private var audioPlayerViewModel = AudioPlayerViewModelV2()
+    @Environment(\.scenePhase) private var scenePhase
+
+    let persistenceController: PersistenceController
+    @StateObject private var userDefaultsManager: UserDefaultsManager
+    @StateObject private var audioPlayerViewModel: AudioPlayerViewModelV2
     @StateObject private var appViewModel: AppViewModel
+    let radioLifecycleDriver: RadioAppLifecycleDriver
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     init() {
         print("🚀 BriefeedApp initializing...")
         
-        // Create NEW audio player view model V2
+        // Task 12 installs deterministic fixture overrides at this preflight
+        // boundary, before any singleton-backed app dependency is resolved.
+        let defaultsManager = UserDefaultsManager.shared
+        defaultsManager.loadSettings()
+        persistenceController = PersistenceController.shared
+
         let audioVM = AudioPlayerViewModelV2()
+        _userDefaultsManager = StateObject(wrappedValue: defaultsManager)
         _audioPlayerViewModel = StateObject(wrappedValue: audioVM)
-        
-        // Create app view model with the SAME V2 audio player
         _appViewModel = StateObject(wrappedValue: AppViewModel(audioPlayerViewModel: audioVM))
-        
-        // Initialize UserDefaults on app launch
-        UserDefaultsManager.shared.loadSettings()
-        
-        // Apply dark mode preference early
-        applyThemeSettings()
 
-        if AppRuntime.shouldSkipAutomaticStartupWork {
-            print("🧪 Skipping automatic startup services for hosted XCTest")
-        } else {
-            // Initialize RSS features (using V2 version)
-            initializeRSSFeatures()
-
-            // Initialize V2 services asynchronously (no UI freeze!)
-            Task {
-                // Initialize services in background
-                await AudioServiceV2.shared.initialize()
-                // QueueCoordinator initializes automatically with persistence on access
-                _ = await MainActor.run { QueueCoordinator.shared }
-                await ArticleStateManagerV2.shared.initialize()
-
-                // Create default feeds
-                do {
-                    try await DefaultDataService.shared.createDefaultFeedsIfNeeded()
-                } catch {
-                    print("Failed to create default feeds: \(error)")
+        let radioServices = RadioServiceContainer.shared
+        radioLifecycleDriver = RadioAppLifecycleDriver(
+            connectivity: radioServices.connectivity,
+            cancelPendingColdLaunchAutoplay: {
+                radioServices.coordinator.cancelPendingColdLaunchAutoplay()
+            },
+            forceSave: { reason in
+                switch reason {
+                case .background:
+                    UnifiedAudioPlayer.shared.handleAppBackground()
+                case .termination:
+                    UnifiedAudioPlayer.shared.handleAppTermination()
                 }
-
-                #if DEBUG
-                await SimulatorAudioQueueProbe.runIfRequested(audioPlayerViewModel: audioVM)
-                #endif
             }
-        }
-        
+        )
+
+        applyThemeSettings()
         print("✅ BriefeedApp initialization complete")
     }
 
@@ -72,25 +63,43 @@ struct BriefeedApp: App {
                 .preferredColorScheme(userDefaultsManager.isDarkMode ? .dark : .light)
                 .onAppear {
                     print("🎯 ContentView appeared")
-                    // Apply theme settings when window is ready
                     applyThemeSettings()
-                    
-                    // Connect ViewModels to services
-                    Task {
-                        // AudioPlayerViewModelV2 doesn't need connect - it's lightweight
-                        await appViewModel.connect()
+                }
+                .task {
+                    await appViewModel.connect()
+
+                    guard !AppRuntime.shouldSkipAutomaticStartupWork else {
+                        print("🧪 Skipping automatic startup services for hosted XCTest or Radio fixture")
+                        return
+                    }
+
+                    handleScenePhase(scenePhase)
+                    await startRadioServices()
+                    await AudioServiceV2.shared.initialize()
+                    _ = QueueCoordinator.shared
+                    await ArticleStateManagerV2.shared.initialize()
+
+                    do {
+                        try await DefaultDataService.shared.createDefaultFeedsIfNeeded()
+                    } catch {
+                        print("Failed to create default feeds: \(error)")
+                    }
+
+                    #if DEBUG
+                    await SimulatorAudioQueueProbe.runIfRequested(audioPlayerViewModel: audioPlayerViewModel)
+                    #endif
+                }
+                .onChange(of: scenePhase) {
+                    let newPhase = scenePhase
+                    guard !AppRuntime.shouldSkipAutomaticStartupWork else { return }
+                    handleScenePhase(newPhase)
+                    if newPhase == .active {
+                        UnifiedAudioPlayer.shared.handleAppForeground()
                     }
                 }
-                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-                    // App became active - could refresh queue state if needed
-                }
-                .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
-                    // App going to background - save queue state immediately
-                    QueueCoordinator.shared.saveStateNow()
-                }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
-                    // App terminating - save queue state immediately
-                    QueueCoordinator.shared.saveStateNow()
+                    guard !AppRuntime.shouldSkipAutomaticStartupWork else { return }
+                    radioLifecycleDriver.handleTermination()
                 }
         }
     }

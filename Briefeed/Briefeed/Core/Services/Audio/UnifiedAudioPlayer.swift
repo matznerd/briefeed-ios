@@ -311,7 +311,6 @@ final class UnifiedAudioPlayer: ObservableObject {
         self.radioCoordinator = radioCoordinator
         self.context = context
         setupAudioPlayer()
-        setupNotifications()
         setupQueueCoordinatorBindings()
         setupRadioBindings()
     }
@@ -320,20 +319,6 @@ final class UnifiedAudioPlayer: ObservableObject {
 
     private func setupAudioPlayer() {
         audioPlayer.delegate = self
-    }
-
-    private func setupNotifications() {
-        NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)
-            .sink { [weak self] _ in
-                self?.handleEnterBackground()
-            }
-            .store(in: &cancellables)
-
-        NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
-            .sink { [weak self] _ in
-                self?.handleEnterForeground()
-            }
-            .store(in: &cancellables)
     }
 
     /// Subscribe to QueueCoordinator changes - QueueCoordinator is the single source of truth
@@ -1477,23 +1462,56 @@ final class UnifiedAudioPlayer: ObservableObject {
     
     // MARK: - Background Handling
     
-    private func handleEnterBackground() {
-        switch activeMode {
-        case .radio:
-            _ = radioCoordinator.handleBackground(positionSeconds: currentTime, duration: duration > 0 ? duration : nil)
-        case .brief:
-            queueCoordinator.updateCurrentPosition(currentTime)
-            queueCoordinator.saveStateNow()
-        case .none:
-            break
-        }
+    func handleAppBackground() {
+        saveAppLifecycleState(isTermination: false)
     }
-    
-    private func handleEnterForeground() {
-        // Resume UI updates
+
+    func handleAppTermination() {
+        saveAppLifecycleState(isTermination: true)
+    }
+
+    func handleAppForeground() {
         if isPlaying {
             startProgressTimer()
         }
+    }
+
+    private func saveAppLifecycleState(isTermination: Bool) {
+        if activeMode == .brief {
+            queueCoordinator.updateCurrentPosition(validLifecyclePosition(audioPlayer.currentTime))
+        }
+        queueCoordinator.saveStateNow()
+
+        let radioPosition: TimeInterval
+        let radioDuration: TimeInterval?
+        if activeMode == .radio, activeRadioKey == radioCoordinator.currentKey {
+            radioPosition = validLifecyclePosition(audioPlayer.currentTime)
+            let transportDuration = audioPlayer.duration
+            radioDuration = transportDuration.isFinite && transportDuration > 0
+                ? transportDuration
+                : radioCoordinator.currentEpisode?.durationSeconds
+        } else {
+            radioPosition = radioCoordinator.currentKey.flatMap { key in
+                radioCoordinator.entries.first(where: { $0.key == key })?.positionSeconds
+            } ?? 0
+            radioDuration = radioCoordinator.currentEpisode?.durationSeconds
+        }
+
+        if isTermination {
+            _ = radioCoordinator.handleTermination(
+                positionSeconds: radioPosition,
+                duration: radioDuration
+            )
+        } else {
+            _ = radioCoordinator.handleBackground(
+                positionSeconds: radioPosition,
+                duration: radioDuration
+            )
+        }
+    }
+
+    private func validLifecyclePosition(_ position: TimeInterval) -> TimeInterval {
+        position.isFinite ? max(0, position) : 0
     }
     
     private func startProgressTimer() {

@@ -1407,13 +1407,15 @@ func startRadioServices() async {
             enabledSourceCount: RSSAudioService.shared.enabledFeedCount
         )
         let result = await RSSAudioService.shared.refreshIfStale(now: Date())
-        let postRefreshIntent = radioServices.coordinator.applyRefresh(result)
+        // Only this first connectivity-gated refresh can consume the bounded
+        // cold-launch autoplay opportunity.
+        let postRefreshIntent = radioServices.coordinator.applyInitialRefresh(result)
         await UnifiedAudioPlayer.shared.execute(postRefreshIntent)
     }
 }
 ```
 
-Construct `radioLifecycleDriver` with `RadioServiceContainer.shared.connectivity`, which is the exact monitor already injected into its coordinator. `requestStaleRefreshWhenOnline` retains at most one pending request while status is `.unknown` or `.offline` without polling or consuming source/episode attempts; `.online` invokes its operation exactly once. An offline transition is already reflected in the coordinator's connectivity-driven `waitingForNetwork` state, so it does not fabricate a terminal refresh result. The coordinator independently enforces the 60-second active autoplay deadline. Cancellation on inactive/background removes the pending request and calls `cancelPendingColdLaunchAutoplay()` so a later network callback cannot start background work or audio; the next foreground creates a new stale-check request without creating a new autoplay opportunity.
+Construct `radioLifecycleDriver` with `RadioServiceContainer.shared.connectivity`, which is the exact monitor already injected into its coordinator. `requestStaleRefreshWhenOnline` retains at most one pending request while status is `.unknown` or `.offline` without polling or consuming source/episode attempts; `.online` invokes its operation exactly once. The cold-launch request applies its result through `applyInitialRefresh` exactly once, including when connectivity delays it. Foreground and 15-minute poll requests apply results through `applyRefresh`; they can replenish paused state but never create or consume another autoplay opportunity. An offline transition is already reflected in the coordinator's connectivity-driven `waitingForNetwork` state, so it does not fabricate a terminal refresh result. The coordinator independently enforces the 60-second active autoplay deadline. Cancellation on inactive/background removes the pending request and calls `cancelPendingColdLaunchAutoplay()` so a later network callback cannot start background work or audio; the next foreground creates a new stale-check request without creating a new autoplay opportunity.
 
 Skip production startup only in hosted unit tests or deterministic Radio fixture mode. Fixture seeding gets its own Task 12 path.
 
