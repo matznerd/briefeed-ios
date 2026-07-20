@@ -104,3 +104,6 @@ Briefeed/.orca/
 
 # Local Codex feature worktrees
 .worktrees/
+
+# Local Superpowers execution ledger and review packets
+.superpowers/
