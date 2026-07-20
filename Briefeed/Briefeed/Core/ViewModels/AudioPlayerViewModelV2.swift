@@ -576,6 +576,14 @@ extension AudioPlayerViewModelV2 {
         isLoading = false
     }
 
+    func radioSourceConfigurationDidChange(enabledSourceCount: Int) async {
+        await unifiedPlayer.execute(
+            radioCoordinator.sourceConfigurationDidChange(
+                enabledSourceCount: enabledSourceCount
+            )
+        )
+    }
+
     func setSleepTimer(_ timer: RadioSleepTimer) {
         unifiedPlayer.setRadioSleepTimer(timer)
     }

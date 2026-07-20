@@ -13,3 +13,4 @@ Tasks 7-8: complete (commits ec5195c..HEAD; compile green; hosted runtime deferr
 Tasks 7-8 review repair: complete (fresh-ID retry, stale async callback guards, 10-second defaults, replacement teardown, main-actor notification hop; compile green)
 Task 8 terminal ownership repair: complete (terminal coordinator mutation exactly once; stale transport intent suppressed after Brief switch; compile green)
 Task 10: implementation complete pending review (compile green; static gates pass; runtime UI and visual evidence deferred by critical simulator safety gate and Task 12 fixtures)
+Task 10 review repair: implemented (local source reconciliation, gated degraded state, shared source management/settings link, accessibility/contrast fixes; focused tests and static gates pass; global compile currently blocked by concurrent Task 9 lifecycle work)

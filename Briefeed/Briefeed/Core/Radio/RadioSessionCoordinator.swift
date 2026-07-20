@@ -48,6 +48,7 @@ protocol RadioSessionCoordinating: AnyObject {
     func refreshStarted(enabledSourceCount: Int)
     func applyRefresh(_ result: RSSRefreshBatchResult) -> RadioPlaybackIntent?
     func applyInitialRefresh(_ result: RSSRefreshBatchResult) -> RadioPlaybackIntent?
+    func sourceConfigurationDidChange(enabledSourceCount: Int) -> RadioPlaybackIntent?
     func beginCurrent() -> RadioPlaybackIntent?
     func selectEpisode(_ key: RadioEpisodeKey) -> RadioPlaybackIntent?
     func pauseByUser(positionSeconds: TimeInterval, duration: TimeInterval?) -> RadioPlaybackIntent?
@@ -222,6 +223,46 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
 
     func applyInitialRefresh(_ result: RSSRefreshBatchResult) -> RadioPlaybackIntent? {
         applyRefresh(result, isInitialColdLaunchRefresh: true)
+    }
+
+    func sourceConfigurationDidChange(enabledSourceCount: Int) -> RadioPlaybackIntent? {
+        let previousCurrentKey = currentKey
+        let previousState = state
+        let previousHadActivePlayback = hasActivePlaybackState
+        let candidates: [RadioEpisodeCandidate]
+        do {
+            candidates = try repository.candidates()
+        } catch {
+            return handleReadFailure(error)
+        }
+
+        self.enabledSourceCount = enabledSourceCount
+        let reconciled = RadioQueueBuilder(now: now()).reconcile(
+            snapshot: currentSession(),
+            candidates: candidates
+        )
+        let currentChanged = previousCurrentKey != reconciled.currentKey
+        if currentChanged {
+            cancelPendingRequest()
+            // The transport may still own the removed episode. Clear the stale
+            // playback state before installing the new local-only selection.
+            state = .idle
+        }
+        setCandidates(candidates)
+        install(
+            reconciled,
+            preservedPlaybackState: currentChanged ? nil : previousState
+        )
+
+        do {
+            try store.saveNow(currentSession())
+        } catch {
+            if !(previousHadActivePlayback && !currentChanged) {
+                state = .failed(.persistence(error.localizedDescription))
+            }
+        }
+
+        return currentChanged && previousHadActivePlayback ? .pause : nil
     }
 
     private func applyRefresh(_ result: RSSRefreshBatchResult, isInitialColdLaunchRefresh: Bool) -> RadioPlaybackIntent? {

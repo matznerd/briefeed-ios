@@ -103,11 +103,13 @@ private struct AppSettingsToolbarModifier: ViewModifier {
 private struct AppSettingsButton: View {
     let action: () -> Void
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     var body: some View {
         if #available(iOS 26.0, *), !reduceTransparency {
             settingsButton
                 .buttonStyle(.glass)
+                .overlay(settingsBoundary)
         } else {
             settingsButton
                 .buttonStyle(.plain)
@@ -115,7 +117,16 @@ private struct AppSettingsButton: View {
                     reduceTransparency ? AnyShapeStyle(Color(uiColor: .secondarySystemBackground)) : AnyShapeStyle(.ultraThinMaterial),
                     in: Circle()
                 )
+                .overlay(settingsBoundary)
         }
+    }
+
+    private var settingsBoundary: some View {
+        Circle()
+            .stroke(
+                Color.primary.opacity(colorSchemeContrast == .increased ? 0.42 : 0.12),
+                lineWidth: colorSchemeContrast == .increased ? 1.5 : 0.5
+            )
     }
 
     private var settingsButton: some View {

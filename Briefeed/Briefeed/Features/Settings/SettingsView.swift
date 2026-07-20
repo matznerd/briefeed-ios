@@ -97,6 +97,13 @@ struct SettingsView: View {
                     }
                     .accessibilityIdentifier(AccessibilityID.Settings.playbackSpeed)
 
+                    NavigationLink {
+                        RadioSourceManagementView()
+                    } label: {
+                        Label("Feed Order and Enablement", systemImage: "list.number")
+                    }
+                    .accessibilityIdentifier(AccessibilityID.Settings.feedOrder)
+
                     Toggle("Enable Audio", isOn: $viewModel.userDefaultsManager.audioEnabled)
                     
                     if viewModel.userDefaultsManager.audioEnabled {

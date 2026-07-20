@@ -1,19 +1,33 @@
 import CoreData
 import SwiftUI
 
+enum RadioHomePresentation {
+    static func showsDegradedBanner(
+        state: RadioSessionState,
+        activeMode: ActivePlaybackMode,
+        hasCurrentEpisode: Bool,
+        sourceFailureCount: Int
+    ) -> Bool {
+        guard activeMode == .radio, hasCurrentEpisode, sourceFailureCount > 0 else { return false }
+        switch state {
+        case .readyPaused, .loading, .playing, .pausedByUser:
+            return true
+        case .idle, .restoring, .refreshing, .waitingForNetwork, .noSources, .exhausted, .failed:
+            return false
+        }
+    }
+
+    static func currentControlLabel(
+        activeMode: ActivePlaybackMode,
+        isPlaying: Bool
+    ) -> String {
+        activeMode == .radio && isPlaying ? "Pause Radio" : "Play Radio"
+    }
+}
+
 struct RadioHomeView: View {
     @EnvironmentObject private var audioPlayerViewModel: AudioPlayerViewModelV2
-    @Environment(\.managedObjectContext) private var context
     @State private var showingAddSource = false
-    @State private var editMode = EditMode.inactive
-
-    @FetchRequest(
-        entity: RSSFeed.entity(),
-        sortDescriptors: [
-            NSSortDescriptor(keyPath: \RSSFeed.priority, ascending: true),
-            NSSortDescriptor(keyPath: \RSSFeed.displayName, ascending: true)
-        ]
-    ) private var feeds: FetchedResults<RSSFeed>
 
     var body: some View {
         NavigationStack {
@@ -25,7 +39,7 @@ struct RadioHomeView: View {
                     .listRowSeparator(.hidden)
                 }
 
-                if !audioPlayerViewModel.sourceFailures.isEmpty {
+                if showsDegradedBanner {
                     Section {
                         sourceFailureBanner
                     }
@@ -37,11 +51,13 @@ struct RadioHomeView: View {
                 }
                 .listRowSeparator(.hidden)
 
-                Section {
-                    ForEach(feeds) { feed in
-                        sourceRow(feed)
+                Section("Sources") {
+                    NavigationLink {
+                        RadioSourceManagementView()
+                    } label: {
+                        Label("Feed Order and Enablement", systemImage: "list.number")
                     }
-                    .onMove(perform: moveSources)
+                    .accessibilityIdentifier(AccessibilityID.Radio.manageSources)
 
                     Button {
                         showingAddSource = true
@@ -49,22 +65,11 @@ struct RadioHomeView: View {
                         Label("Add Source", systemImage: "plus.circle")
                     }
                     .accessibilityIdentifier(AccessibilityID.Radio.addSource)
-                } header: {
-                    Text("Sources")
                 }
-                .accessibilityIdentifier(AccessibilityID.Radio.sourceList)
             }
             .listStyle(.insetGrouped)
-            .environment(\.editMode, $editMode)
             .navigationTitle("Radio")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    if feeds.count > 1 {
-                        EditButton()
-                    }
-                }
-            }
             .refreshable {
                 await audioPlayerViewModel.refreshRadio()
             }
@@ -72,6 +77,19 @@ struct RadioHomeView: View {
                 AddRSSFeedViewV2()
             }
         }
+    }
+
+    private var isRadioActivelyPlaying: Bool {
+        audioPlayerViewModel.activeMode == .radio && audioPlayerViewModel.isPlaying
+    }
+
+    private var showsDegradedBanner: Bool {
+        RadioHomePresentation.showsDegradedBanner(
+            state: audioPlayerViewModel.radioState,
+            activeMode: audioPlayerViewModel.activeMode,
+            hasCurrentEpisode: audioPlayerViewModel.currentRadioEpisode != nil,
+            sourceFailureCount: audioPlayerViewModel.sourceFailures.count
+        )
     }
 
     private func currentEpisodeView(_ episode: RadioEpisodeCandidate) -> some View {
@@ -94,13 +112,13 @@ struct RadioHomeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Button {
-                if audioPlayerViewModel.activeMode == .radio && audioPlayerViewModel.isPlaying {
+                if isRadioActivelyPlaying {
                     audioPlayerViewModel.pause()
                 } else {
                     Task { await audioPlayerViewModel.playRadio() }
                 }
             } label: {
-                Image(systemName: audioPlayerViewModel.activeMode == .radio && audioPlayerViewModel.isPlaying ? "pause.fill" : "play.fill")
+                Image(systemName: isRadioActivelyPlaying ? "pause.fill" : "play.fill")
                     .font(.system(.title3, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 48, height: 48)
@@ -108,7 +126,10 @@ struct RadioHomeView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(audioPlayerViewModel.isPlaying ? "Pause Radio" : "Play Radio")
+            .accessibilityLabel(RadioHomePresentation.currentControlLabel(
+                activeMode: audioPlayerViewModel.activeMode,
+                isPlaying: audioPlayerViewModel.isPlaying
+            ))
         }
         .padding(.vertical, 6)
     }
@@ -221,26 +242,6 @@ struct RadioHomeView: View {
         .accessibilityIdentifier(AccessibilityID.Radio.sourceFailures)
     }
 
-    private func sourceRow(_ feed: RSSFeed) -> some View {
-        Toggle(isOn: Binding(
-            get: { feed.isEnabled },
-            set: { isEnabled in
-                feed.isEnabled = isEnabled
-                saveSources()
-            }
-        )) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(feed.displayName)
-                    .lineLimit(1)
-                Text(feed.updateFrequencyEnum.displayName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .accessibilityLabel(feed.displayName)
-        .accessibilityValue(feed.isEnabled ? "Enabled" : "Disabled")
-    }
-
     private func progressState(title: String) -> some View {
         HStack(spacing: 12) {
             ProgressView()
@@ -300,6 +301,93 @@ struct RadioHomeView: View {
         )
     }
 
+    private func failureMessage(_ failure: RadioFailure) -> String {
+        switch failure {
+        case .allSourcesUnavailable:
+            "None of your enabled sources responded."
+        case .playback(let message):
+            message
+        case .persistence:
+            "Your listening position could not be saved."
+        }
+    }
+}
+
+struct RadioSourceManagementView: View {
+    @EnvironmentObject private var audioPlayerViewModel: AudioPlayerViewModelV2
+    @Environment(\.managedObjectContext) private var context
+    @State private var editMode = EditMode.inactive
+    @State private var showingAddSource = false
+    @State private var saveErrorMessage: String?
+
+    @FetchRequest(
+        entity: RSSFeed.entity(),
+        sortDescriptors: [
+            NSSortDescriptor(keyPath: \RSSFeed.priority, ascending: true),
+            NSSortDescriptor(keyPath: \RSSFeed.displayName, ascending: true)
+        ]
+    ) private var feeds: FetchedResults<RSSFeed>
+
+    var body: some View {
+        List {
+            ForEach(feeds) { feed in
+                sourceRow(feed)
+            }
+            .onMove(perform: moveSources)
+
+            Button {
+                showingAddSource = true
+            } label: {
+                Label("Add Source", systemImage: "plus.circle")
+            }
+            .accessibilityIdentifier(AccessibilityID.Radio.addSource)
+        }
+        .environment(\.editMode, $editMode)
+        .navigationTitle("Radio Sources")
+        .navigationBarTitleDisplayMode(.inline)
+        .accessibilityIdentifier(AccessibilityID.Radio.sourceList)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if feeds.count > 1 {
+                    EditButton()
+                }
+            }
+        }
+        .sheet(isPresented: $showingAddSource) {
+            AddRSSFeedViewV2()
+        }
+        .alert("Could Not Save Sources", isPresented: Binding(
+            get: { saveErrorMessage != nil },
+            set: { if !$0 { saveErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {
+                saveErrorMessage = nil
+            }
+        } message: {
+            Text(saveErrorMessage ?? "")
+        }
+    }
+
+    private func sourceRow(_ feed: RSSFeed) -> some View {
+        Toggle(isOn: Binding(
+            get: { feed.isEnabled },
+            set: { isEnabled in
+                feed.isEnabled = isEnabled
+                saveSources()
+            }
+        )) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(feed.displayName)
+                    .lineLimit(1)
+                Text(feed.updateFrequencyEnum.displayName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityLabel(feed.displayName)
+        .accessibilityValue(feed.isEnabled ? "Enabled" : "Disabled")
+    }
+
     private func moveSources(from offsets: IndexSet, to destination: Int) {
         var ordered = Array(feeds)
         ordered.move(fromOffsets: offsets, toOffset: destination)
@@ -312,19 +400,15 @@ struct RadioHomeView: View {
     private func saveSources() {
         do {
             try context.save()
+            let enabledSourceCount = feeds.filter(\.isEnabled).count
+            Task {
+                await audioPlayerViewModel.radioSourceConfigurationDidChange(
+                    enabledSourceCount: enabledSourceCount
+                )
+            }
         } catch {
             context.rollback()
-        }
-    }
-
-    private func failureMessage(_ failure: RadioFailure) -> String {
-        switch failure {
-        case .allSourcesUnavailable:
-            "None of your enabled sources responded."
-        case .playback(let message):
-            message
-        case .persistence:
-            "Your listening position could not be saved."
+            saveErrorMessage = error.localizedDescription
         }
     }
 }

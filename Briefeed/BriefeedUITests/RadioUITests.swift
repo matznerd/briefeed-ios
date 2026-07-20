@@ -69,4 +69,18 @@ final class RadioUITests: XCTestCase {
             XCTAssertFalse(app.navigationBars["Settings"].exists)
         }
     }
+
+    @MainActor
+    func testSettingsLinksToFeedOrderAndEnablement() throws {
+        app.launch()
+        app.buttons["navigation.settings"].tap()
+
+        let sourceSettings = app.buttons["settings.feedOrder"]
+        for _ in 0..<4 where !sourceSettings.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(sourceSettings.waitForExistence(timeout: 3))
+        sourceSettings.tap()
+        XCTAssertTrue(app.navigationBars["Radio Sources"].waitForExistence(timeout: 3))
+    }
 }

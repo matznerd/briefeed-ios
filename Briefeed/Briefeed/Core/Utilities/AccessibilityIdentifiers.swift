@@ -27,6 +27,7 @@ enum AccessibilityID {
         static let refresh = "radio.refresh"
         static let retry = "radio.retry"
         static let addSource = "radio.addSource"
+        static let manageSources = "radio.manageSources"
         static let sourceList = "radio.sourceList"
         static let sourceFailures = "radio.sourceFailures"
     }
@@ -94,6 +95,7 @@ enum AccessibilityID {
         static let done = "settings.done"
         static let radioAutoplay = "settings.radioAutoplay"
         static let playbackSpeed = "settings.playbackSpeed"
+        static let feedOrder = "settings.feedOrder"
         static let darkMode = "settings.darkMode"
         static let textSize = "settings.textSize"
         static let summaryLength = "settings.summaryLength"
