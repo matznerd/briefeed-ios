@@ -715,7 +715,7 @@ bash Briefeed/skills/app-testing/scripts/run-radio.sh <lane-key> <unit|ui|smoke>
 
 `run-radio.sh` exports an absolute `AGENT_SIM_CONFIG`, acquires a per-lane adapter lock before claim resolution or cloning, runs the shared `sim-doctor.sh --gc` before allocation, and uses `sim-golden.sh clone <lane-key>` only when the exact lane has no valid recorded device. It reads the lane claim at `~/.local/state/briefeed-agent-simulators/<lane-key>.env`, verifies that recorded `SIM_UUID` exists, recorded `SIM_NAME` equals the device's actual name and has the fleet prefix, `sim_claims_for_uuid` returns exactly that one claim file, and the UUID is not protected. It then acquires `sim_use_lock "$SIM_UUID" "$$" "briefeed-<mode>-<lane-key>"` and runs all `xcodebuild`, `simctl install`, launch, log, screenshot, and UI commands with `platform=iOS Simulator,id=$SIM_UUID` or the exact UUID argument.
 
-An `EXIT` trap shuts down only the recorded lane UUID and touches that lane's lease while the per-device use lock is still held, then releases the device lock and per-lane adapter lock. The adapter keeps the shutdown clone and its claim for safe reuse; it never runs broad shutdown, erase, or delete commands. A malformed or multiply-owned claim, name mismatch, fleet-prefix mismatch, protected UUID, live use lock, full fleet, or clone exit `75` is a routing or capacity failure and exits `75` without running product tests.
+An `EXIT` trap touches the recorded lane's lease while the per-device use lock is still held, then releases the device lock and per-lane adapter lock. In accordance with the current shared-engine contract, the adapter leaves its owned simulator booted for warm reuse; the engine's lease-aware garbage collector later shuts down or deletes stale devices. The adapter never runs broad shutdown, erase, or delete commands. A malformed or multiply-owned claim, name mismatch, fleet-prefix mismatch, protected UUID, live use lock, full fleet, critical host pressure, or clone exit `75` is a routing or capacity failure and exits `75` without running product tests.
 
 Adapter rules:
 
@@ -729,7 +729,7 @@ Adapter rules:
 - Use the exact lane's recorded UUID, the shared per-device lock, bounded waits, and lane-specific fixed DerivedData paths under `/tmp/briefeed-radio-<lane-key>-derived-data`.
 - Exit 75 means capacity or routing failure, not a product test failure.
 - Run simulator-free compile and analysis gates before claiming a simulator.
-- Release the simulator promptly after a lane finishes.
+- Release the simulator's use lock promptly after a lane finishes, touch its lease, and leave the owned device booted for warm reuse.
 
 ### Deterministic Fixtures
 

@@ -23,6 +23,7 @@
 - Sleep timer values are Off, End of Episode, 10, 20, 30, 45, 60, and exact Custom 1 through 180 minutes. Sleep state does not survive process termination.
 - Production behavior never depends on live publisher feeds in automated tests.
 - All simulator commands use the repo adapter and an exact owned UUID. Never choose the first simulator, run `simctl shutdown all`, erase an unowned device, or open Simulator.app unless `SIMULATOR_GUI=1`.
+- The shared `/Users/me/ericode/skills/app-testing` engine is authoritative for simulator lifecycle. A completed lane touches its lease and releases its use lock but leaves the owned simulator booted for warm reuse; only the engine's lease-aware GC shuts down or deletes it.
 - An exit status of `75` from the simulator adapter is infrastructure capacity or routing failure, not a product failure.
 - New Swift files are discovered by the existing file-system-synchronized Xcode groups; do not churn `project.pbxproj` unless Xcode proves an exception is required.
 - Each task follows red, green, refactor and ends in its own reviewable commit.
@@ -230,16 +231,12 @@ printf 'pid=%s\n' "$$" > "$lane_lock/holder"
 sim_uuid=""
 state_file="$state_dir/$lane.env"
 use_locked=0
-created_clone=0
 cleanup() {
     rc=$?
     trap - EXIT INT TERM
     if [[ "$use_locked" == 1 ]]; then
-        sim_shutdown "$sim_uuid"
         sim_lease_touch "$state_file"
         sim_use_unlock "$sim_uuid"
-    elif [[ "$created_clone" == 1 && -n "$sim_uuid" ]]; then
-        sim_shutdown "$sim_uuid"
     fi
     rm -rf "$lane_lock"
     exit "$rc"
@@ -279,7 +276,6 @@ if [[ "$valid_claim" != 1 ]]; then
     }
     sim_uuid="$(printf '%s\n' "$clone_output" | sed -n 's/^SIM_UUID=//p' | tail -1)"
     [[ -n "$sim_uuid" ]] || exit 75
-    created_clone=1
     state_file="$state_dir/$lane.env"
     sim_name="$(sim_field "$sim_uuid" name)"
     recorded_name="$(sed -n 's/^SIM_NAME=//p' "$state_file" 2>/dev/null | tail -1)"
@@ -336,13 +332,16 @@ esac
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 : "${SIM_UUID:?SIM_UUID is required}"
+ENGINE="$HOME/ericode/skills/app-testing/scripts"
+export AGENT_SIM_CONFIG="$ROOT/skills/app-testing/config.sh"
+source "$ENGINE/sim-lib.sh"
 derived="${DERIVED_DATA_PATH:-/tmp/briefeed-radio-golden-derived-data}"
 xcodebuild build -project "$ROOT/Briefeed.xcodeproj" -scheme Briefeed \
   -configuration Debug -destination "platform=iOS Simulator,id=$SIM_UUID" \
   -derivedDataPath "$derived" COMPILER_INDEX_STORE_ENABLE=NO
 app_path="$(find "$derived/Build/Products/Debug-iphonesimulator" -maxdepth 1 -name 'Briefeed.app' -print -quit)"
 [[ -d "$app_path" ]] || { echo "Briefeed.app not found" >&2; exit 1; }
-xcrun simctl install "$SIM_UUID" "$app_path"
+sim_install_if_changed "$SIM_UUID" "$app_path" "$AGENT_SIM_BUNDLE_ID"
 ```
 
 - [ ] **Step 5: Add Makefile entry points and the repo runbook**
@@ -353,11 +352,12 @@ Add these Makefile entry points:
 APP_TEST_ENGINE := $(HOME)/ericode/skills/app-testing/scripts
 RADIO_SIM_CONFIG := $(CURDIR)/skills/app-testing/config.sh
 
-.PHONY: radio-compile radio-golden radio-unit radio-ui radio-smoke sim-status
+.PHONY: radio-compile radio-golden radio-unit radio-ui radio-smoke sim-doctor sim-status
 radio-compile:
 	xcodebuild build-for-testing -project Briefeed.xcodeproj -scheme Briefeed -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/briefeed-radio-compile CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO
 
 radio-golden:
+	AGENT_SIM_CONFIG=$(RADIO_SIM_CONFIG) bash $(APP_TEST_ENGINE)/sim-doctor.sh --gc
 	AGENT_SIM_CONFIG=$(RADIO_SIM_CONFIG) bash $(APP_TEST_ENGINE)/sim-golden.sh refresh
 
 radio-unit:
@@ -368,6 +368,9 @@ radio-ui:
 
 radio-smoke:
 	bash skills/app-testing/scripts/run-radio.sh radio-smoke smoke
+
+sim-doctor:
+	AGENT_SIM_CONFIG=$(RADIO_SIM_CONFIG) bash $(APP_TEST_ENGINE)/sim-doctor.sh --gc
 
 sim-status:
 	bash $(APP_TEST_ENGINE)/sim-status.sh
@@ -386,7 +389,7 @@ RADIO_TEST_SELECTOR=BriefeedTests/RadioRuntimeTests \
   bash skills/app-testing/scripts/run-radio.sh radio-runtime unit
 ```
 
-Expected: compile succeeds, the golden reports a non-empty `GOLDEN_UUID=<owned UUID>`, the test reports `RadioRuntimeTests` passed, and the exact lane simulator is Shutdown afterward. If capacity returns `75`, record infrastructure blocked and do not run a different unowned simulator.
+Expected: compile succeeds, the golden reports a non-empty `GOLDEN_UUID=<owned UUID>`, and the test reports `RadioRuntimeTests` passed. The adapter releases the exact lane's use lock and leaves that owned simulator booted for warm reuse; lease-aware GC reaps it later. If capacity or pressure returns `75`, record infrastructure blocked and do not run a different unowned simulator.
 
 - [ ] **Step 7: Commit**
 
@@ -1567,7 +1570,11 @@ if let scenario = AppRuntime.radioFixtureScenario {
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
+: "${BRIEFEED_APP_ROOT:?BRIEFEED_APP_ROOT is required}"
 : "${SIM_UUID:?SIM_UUID is required}"
+ENGINE="$HOME/ericode/skills/app-testing/scripts"
+export AGENT_SIM_CONFIG="$BRIEFEED_APP_ROOT/skills/app-testing/config.sh"
+source "$ENGINE/sim-lib.sh"
 scenario="${1:?fixture scenario is required}"
 reset="${2:-0}"
 case "$scenario" in
@@ -1575,7 +1582,7 @@ case "$scenario" in
   *) exit 64 ;;
 esac
 SIMCTL_CHILD_BRIEFEED_RADIO_RESET_STORE="$reset" \
-  xcrun simctl launch --terminate-running-process "$SIM_UUID" Matznerd.Briefeed \
+  with_timeout 30 xcrun simctl launch --terminate-running-process "$SIM_UUID" Matznerd.Briefeed \
   -briefeed-radio-fixture "$scenario"
 ```
 
@@ -1595,7 +1602,7 @@ bash skills/app-testing/scripts/run-radio.sh radio-ui ui
 bash skills/app-testing/scripts/run-radio.sh radio-smoke smoke
 ```
 
-Expected: unit, UI, and smoke lanes pass; each reports exact evidence paths and shuts down its own lane device.
+Expected: unit, UI, and smoke lanes pass; each reports exact evidence paths, releases its exact use lock, and leaves only its owned lane device booted for warm reuse.
 
 - [ ] **Step 7: Commit**
 
@@ -1685,6 +1692,7 @@ Expected: the branch is clean and reports up to date with its origin. Work is no
 - A fresh independent Fable High review of `radio-plan-82e80e6-v2` completed with observed Anthropic/Fable routing and returned `PLAN_APPROVED`. Result SHA-256: `0d9968be7de072fbea6ab786590c1cf4503af75210bb05bf3139b20bdd880ebc`. It found no critical/high issue and raised two medium plus three low hardening items.
 - Revision `68c2b94` bounded deferred autoplay to 60 active seconds, made canonical-enclosure ingestion preserve durable identity across shifted publication dates, specified exact foreground poll re-arming, strengthened the Task 7/8 adjacency gate, and carried the already-existing crash-window proof into the review evidence.
 - A fresh Fable High debate round reviewed every finding disposition and declared the plan converged with no remaining critical, high, or material medium disagreement. Result SHA-256: `7da462e6eb40d51107cc571214a56db4106ca6f9bf75c93fbd8c9d8dff5f3e1d`; round: `debate-round-1`; remaining disagreements: none.
+- Before implementation on July 20, 2026, Task 1 and Task 12 were reconciled with the current shared `app-testing` engine: content-addressed bounded install, doctor preflight, bounded manual fixture launch, and warm owned-simulator reuse now replace raw install/launch and eager lane shutdown. These are simulator-infrastructure updates and do not alter the approved Radio product behavior.
 - The independent review and debate approve implementation readiness only. Product implementation, simulator evidence, physical-device checks, signing, archive validation, and distribution remain undone.
 
 ## Final Acceptance Matrix
