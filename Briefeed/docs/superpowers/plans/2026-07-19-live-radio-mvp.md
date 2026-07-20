@@ -1,11 +1,14 @@
 # Briefeed Live Radio MVP Implementation Plan
 
 > **Execution status (July 20, 2026):** Tasks 1-12 are implemented on
-> `codex/live-radio-mvp`. Task 13's deterministic unit, focused Brief, complete
-> Radio UI, Analyze, signed archive, and App Store export gates pass. The build
-> is ready for an explicitly approved phone test. Physical-device listening,
-> remote controls, routes, interruptions, and sleep-under-lock remain open and
-> are required before distribution-candidate status. The exact evidence and
+> `codex/live-radio-mvp`. Task 13's focused deterministic unit, prior focused
+> Brief baseline, complete Radio UI, Analyze, signed archive, and App Store
+> export gates pass. The broad legacy test target is not green. The exported
+> IPA is approved for an explicitly authorized local phone test only because it
+> contains packaged Firecrawl and Gemini values. Physical-device listening,
+> remote controls, routes, interruptions, sleep-under-lock, and the credential
+> remediation in GitHub #16 remain open and are required before
+> distribution-candidate status. The exact evidence and
 > CoreSimulator audio limitation are recorded in
 > [`docs/release/LIVE-RADIO-DISTRIBUTION-RECEIPT.md`](../../release/LIVE-RADIO-DISTRIBUTION-RECEIPT.md).
 
@@ -1723,6 +1726,11 @@ xcodebuild -exportArchive \
 
 Inspect bundle ID, version/build, `UIBackgroundModes`, signing identity, entitlements, packaged resources, and any Info.plist-substituted API values. Do not upload. A successful physical-device checklist and a validated signed archive/export are mandatory before labeling this work a distribution candidate. If a device, certificate, profile, or export configuration is unavailable, record the exact blocker and preserve the green implementation evidence, but leave Task 13 open and label the result `implementation verified; distribution candidate blocked`. An unsigned generic build is useful evidence but cannot satisfy this gate.
 
+If an exported app contains a privileged credential or another unapproved
+nonempty packaged API value, classify it as local physical-test only. Do not
+upload or share it. Rotate/revoke the value, move privileged service access
+off device, add a packaging gate, and rebuild before distribution review.
+
 - [ ] **Step 5: Update product and release documentation**
 
 Mark only actually implemented Radio requirements and test evidence in `PRD-REFACTOR-V2.md`. `LIVE-RADIO-DISTRIBUTION-RECEIPT.md` must include commands, results, evidence paths, device checklist, archive SHA, gate status, known limitations, and human-only actions: create App Store Connect record for `Matznerd.Briefeed` per GitHub issue #7, confirm agreements/roles/certificates/profiles/privacy/export compliance, approve version/build, initiate upload, select tester groups, and submit beta/App Review. Do not mark the implementation goal complete as a distribution candidate while either the physical-device or signed-archive gate is blocked.
@@ -1751,7 +1759,10 @@ Expected: the branch is clean and reports up to date with its origin. Work is no
 - Revision `68c2b94` bounded deferred autoplay to 60 active seconds, made canonical-enclosure ingestion preserve durable identity across shifted publication dates, specified exact foreground poll re-arming, strengthened the Task 7/8 adjacency gate, and carried the already-existing crash-window proof into the review evidence.
 - A fresh Fable High debate round reviewed every finding disposition and declared the plan converged with no remaining critical, high, or material medium disagreement. Result SHA-256: `7da462e6eb40d51107cc571214a56db4106ca6f9bf75c93fbd8c9d8dff5f3e1d`; round: `debate-round-1`; remaining disagreements: none.
 - Before implementation on July 20, 2026, Task 1 and Task 12 were reconciled with the current shared `app-testing` engine: content-addressed bounded install, doctor preflight, bounded manual fixture launch, and warm owned-simulator reuse now replace raw install/launch and eager lane shutdown. These are simulator-infrastructure updates and do not alter the approved Radio product behavior.
-- The independent review and debate approve implementation readiness only. Product implementation, simulator evidence, physical-device checks, signing, archive validation, and distribution remain undone.
+- The independent review and debate approved implementation readiness only at
+  planning time. Current implementation and focused simulator/archive evidence
+  are recorded in the distribution receipt; physical-device checks and
+  credential-clean distribution approval remain undone.
 
 ## Final Acceptance Matrix
 

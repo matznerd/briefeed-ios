@@ -5,12 +5,19 @@ not satisfy any row below. Run it on one explicitly selected developer iPhone
 using the exact commit and archive recorded in
 `LIVE-RADIO-DISTRIBUTION-RECEIPT.md`.
 
+> **Local test only:** The current IPA contains nonempty packaged Firecrawl and
+> Gemini values. It may be installed only on an explicitly approved local test
+> phone. Do not upload it to TestFlight/App Store Connect or share it externally.
+> GitHub #16 must be cleared before distribution.
+
 ## Test Identity
 
 | Field | Value |
 | --- | --- |
-| Build commit | `b3950b9` |
-| Archive | `/tmp/Briefeed-Live-Radio-b3950b9.xcarchive` |
+| Build commit | `12ec494` |
+| Archive | `/tmp/Briefeed-Live-Radio-12ec494.xcarchive` |
+| IPA | `/tmp/Briefeed-Live-Radio-12ec494-export/Briefeed.ipa` |
+| IPA SHA-256 | `514e336ebd3d6d128ed54622f1dc7dee8516b9760a723c772d26cf92f03b640f` |
 | Device | Not selected |
 | iOS version | Not recorded |
 | Tester | Not recorded |
@@ -23,6 +30,8 @@ No build was installed and this device was not selected for the gate.
 ## Preconditions
 
 - [ ] Confirm the device owner approves installing this exact build.
+- [ ] Confirm this is an authorized local test only and that the IPA will not
+  be uploaded or shared while GitHub #16 remains open.
 - [ ] Record device model, iOS version, build commit, archive checksum, tester,
   and test date above.
 - [ ] Start with Radio autoplay Off and at least two enabled sources.
@@ -78,4 +87,5 @@ No build was installed and this device was not selected for the gate.
 Status: **OPEN - physical-device verification not run**
 
 Do not call the build a distribution candidate until every required row passes
-on the selected device and the signed archive/export gate also passes.
+on the selected device, GitHub #16 is cleared by a newly inspected
+credential-clean artifact, and the signed archive/export gate also passes.

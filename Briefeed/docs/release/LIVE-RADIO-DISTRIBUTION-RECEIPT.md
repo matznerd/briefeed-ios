@@ -3,23 +3,24 @@
 Date: July 20, 2026
 Branch: `codex/live-radio-mvp`
 Implementation base commit: `2f260fa`
-Verified implementation commit: `b3950b9`
-Status: **simulator-verified and ready for approved phone testing; not yet a distribution candidate**
+Verified implementation commit: `12ec494`
+Status: **focused simulator verification complete; exported IPA approved for authorized local phone testing only; public distribution blocked**
 
 ## Gate Summary
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| Build for testing | PASS | `make radio-compile`; `/tmp/briefeed-live-radio-final-compile.log`; `** TEST BUILD SUCCEEDED **` |
-| Adapter fresh-claim regression | PASS | `bash skills/app-testing/scripts/run-radio-selftest.sh` |
-| Deterministic Radio unit suites | PASS | Focused suites passed; final examples include Audio completion 6/6, Unified playback 11/11, and playback state 30/30 |
-| Radio UI suite | PASS | `/tmp/briefeed-live-radio-final-ui.log`; 15/15 tests in 226.8 seconds |
+| Build for testing | PASS | `make radio-compile`; `/tmp/briefeed-live-radio-12ec494-compile.log`; `** TEST BUILD SUCCEEDED **` |
+| Adapter safety regression | PASS | `bash skills/app-testing/scripts/run-radio-selftest.sh`; `/tmp/briefeed-live-radio-cb04d12-adapter-selftest.log`; covers fresh/ownerless claims and critical-pressure refusal |
+| Deterministic Radio unit suites | PASS | Exact-commit suites: restore 17/17, lifecycle 11/11, empty state 4/4, RSS refresh 8/8, Unified playback 11/11, playback state 30/30 |
+| Radio UI suite | PASS | `/tmp/briefeed-live-radio-12ec494-ui.log`; 15/15 tests in 226.6 seconds |
 | Headless Radio smoke behavior | PASS | `RadioUITests.testHeadlessRadioSmoke` passed inside the complete UI suite |
-| Standalone smoke evidence bundle | BLOCKED | Fleet doctor returned critical swap pressure before new work; no override; no screenshot receipt created |
-| Focused Brief regression | PASS | `/tmp/briefeed-live-radio-final-brief-selectors.log`; MiniPlayer navigation 13/13 plus focused isolation/state selectors |
-| Analyze | PASS | `/tmp/briefeed-live-radio-final-analyze.log`; `** ANALYZE SUCCEEDED **` |
+| Standalone smoke evidence bundle | NOT RUN | An earlier attempt was refused at critical pressure; pressure later recovered for focused/UI suites, but the separate script was not retried and no screenshot receipt was created |
+| Focused Brief regression | PASS ON PRIOR BASELINE | `/tmp/briefeed-live-radio-final-brief-selectors.log`; MiniPlayer navigation 13/13 plus focused isolation/state selectors passed at `b3950b9`; not rerun after the scoped Radio/RSS repairs in `12ec494` |
+| Analyze | PASS | `/tmp/briefeed-live-radio-12ec494-analyze.log`; `** ANALYZE SUCCEEDED **` |
 | Physical-device checklist | NOT RUN | No developer device was selected or modified |
-| Signed archive/export | PASS | `/tmp/Briefeed-Live-Radio-b3950b9.xcarchive`; `/tmp/Briefeed-Live-Radio-b3950b9-export/Briefeed.ipa`; code-sign verification passed |
+| Signed archive/export | PASS | `/tmp/Briefeed-Live-Radio-12ec494.xcarchive`; `/tmp/Briefeed-Live-Radio-12ec494-export/Briefeed.ipa`; code-sign verification passed |
+| Packaged credential audit | BLOCKED | Exported IPA contains nonempty Firecrawl and Gemini values. Do not upload or share it. Remediation is tracked in GitHub #16 |
 | Visual size/appearance matrix | NOT RUN | One iPhone 15 Pro / iOS 18.6 runtime verified; follow-up GitHub #15 |
 | App Store Connect upload | BLOCKED / NOT ATTEMPTED | No app record for `Matznerd.Briefeed`; GitHub #7 |
 
@@ -39,8 +40,10 @@ missing first-use claim, and `run-radio-selftest.sh` proves that a fresh claim
 is created and reaches the test command.
 
 The adapter also now refuses **all** new simulator work at critical host
-pressure, including reuse of an already booted claim. Its self-test proves that
-the test command is never invoked in that state. No
+pressure, including when the doctor reports `PRESSURE=critical` with exit zero
+and when reusing an already booted claim. Its self-test proves that an active
+lane cannot be stolen, an ownerless claim-lock can recover after a bounded
+wait, and the test command is never invoked at critical pressure. No
 `AGENT_SIM_PRESSURE_OVERRIDE` was used.
 
 ## CoreSimulator Audio Limitation
@@ -101,19 +104,30 @@ again reported critical swap pressure (`swap_free` approximately 786-794 MB),
 so the redundant standalone smoke/screenshot bundle was not started. The owned
 simulator remained warm.
 
-## Automated Verification Detail
+## Focused Automated Verification Detail
 
-- Audio completion routing: 6/6 tests passed, including deterministic fixture
-  media readability and callback ordering.
+- Coordinator restore/autoplay state: 17/17 tests passed. Cold-launch restore
+  and initial-refresh autoplay remain `loading` until transport start promotes
+  them to `playing`.
+- App lifecycle: 11/11 tests passed.
+- Empty-state precedence: 4/4 tests passed.
+- RSS refresh policy: 8/8 tests passed, including failed-save recovery that
+  preserves an unrelated unsaved draft and pre-existing Core Data undo history.
 - Unified Radio playback: 11/11 tests passed.
 - Radio playback state: 30/30 tests passed.
-- Focused Brief navigation: 13/13 tests passed; additional Brief isolation and
-  mini-player selectors also passed.
-- Focused autoplay: passed in 26.3 seconds with Off producing zero bootstrap
+- Focused Brief navigation: 13/13 tests passed at `b3950b9`; additional Brief
+  isolation and mini-player selectors passed on that prior baseline. They were
+  not rerun after the final scoped Radio/RSS repairs.
+- Focused autoplay UI: passed in 26.9 seconds with Off producing zero bootstrap
   play intents and On producing exactly one per process launch.
 - Complete `RadioUITests`: 15/15 passed, covering navigation, settings, source
   management, compact player ergonomics, speed/sleep controls, partial resume,
   completion, autoplay, state recovery, and headless smoke behavior.
+
+This is focused release verification, not an all-tests claim. The broad hosted
+`BriefeedTests` target is not green for the independent reasons recorded above,
+and a separate standalone smoke evidence bundle with screenshots was not
+captured. Those gaps remain tracked in GitHub #11, #12, #14, and #15.
 
 ## Signing and Package Inventory
 
@@ -136,11 +150,11 @@ Archive/export result:
 
 | Artifact | Value |
 | --- | --- |
-| Implementation commit | `b3950b9` |
-| Archive | `/tmp/Briefeed-Live-Radio-b3950b9.xcarchive` |
-| Exported IPA | `/tmp/Briefeed-Live-Radio-b3950b9-export/Briefeed.ipa` |
+| Implementation commit | `12ec494` |
+| Archive | `/tmp/Briefeed-Live-Radio-12ec494.xcarchive` |
+| Exported IPA | `/tmp/Briefeed-Live-Radio-12ec494-export/Briefeed.ipa` |
 | IPA size | 5.8 MB |
-| IPA SHA-256 | `08f16472e1bf4dc598ff463e475cddbb43e5d9030ad52a40ef6769f70777aefd` |
+| IPA SHA-256 | `514e336ebd3d6d128ed54622f1dc7dee8516b9760a723c772d26cf92f03b640f` |
 | Export signature | `iPhone Distribution: Eric Matzner (X273WR8MT2)` |
 | Export profile | `iOS Team Store Provisioning Profile: Matznerd.Briefeed` |
 | Signature verification | `codesign --verify --deep --strict` passed |
@@ -148,7 +162,12 @@ Archive/export result:
 
 The archived `Info.plist` contains nonempty packaged values for the configured
 Firecrawl and Gemini keys; their contents were not printed. The IPA was exported
-locally with destination `export`; it was not uploaded.
+locally with destination `export`; it was not uploaded. This credential finding
+is a release blocker, not an accepted client-configuration decision. The current
+IPA must not be uploaded to TestFlight/App Store Connect or shared externally.
+GitHub issue #16 requires rotation/revocation, provider restrictions, a
+server-owned Firecrawl boundary, and a packaging gate before a new distribution
+artifact is produced.
 
 `Info.plist` declares `FirecrawlAPIKey` and `GeminiAPIKey` through build-setting
 substitution. Their packaged values were checked without printing secrets. The
@@ -164,26 +183,32 @@ row remains open.
 
 ## Distribution Decision
 
-Current label: **simulator-verified and ready for an explicitly approved phone
-test; not yet a distribution candidate**.
+Current label: **focused simulator verification complete; signed IPA approved
+only for an explicitly authorized local phone test; public distribution
+blocked**.
 
 The deterministic simulator and signed archive/export gates pass, and the
-artifact is tied to implementation commit `b3950b9`. The label can change to a
+artifact is tied to implementation commit `12ec494`. The label can change to a
 distribution candidate only after the complete physical-device checklist
-passes.
+passes, GitHub #16 is cleared by a newly inspected clean artifact, and the
+App Store Connect blocker in GitHub #7 is resolved.
 
 ## Human-Only Distribution Actions
 
-1. Approve a physical developer iPhone and run the device checklist.
-2. Create the App Store Connect app record for `Matznerd.Briefeed` through the
+1. Rotate/revoke the packaged credentials, move privileged Firecrawl access off
+   device, decide and enforce the Gemini trust boundary, and pass the clean IPA
+   packaging gate in GitHub #16.
+2. Approve a physical developer iPhone and run the device checklist with this
+   local-only artifact or a newer clean artifact.
+3. Create the App Store Connect app record for `Matznerd.Briefeed` through the
    official web interface as tracked by GitHub issue #7.
-3. Confirm App Store Connect agreements, roles, certificates, provisioning
+4. Confirm App Store Connect agreements, roles, certificates, provisioning
    profiles, privacy answers, and export-compliance answers.
-4. Approve the marketing version and build number.
-5. Approve and initiate upload of the validated IPA. No upload is performed by
-   this verification task.
-6. Select internal/external tester groups and complete beta review if needed.
-7. Submit App Review only after explicit human approval.
+5. Approve the marketing version and build number.
+6. Approve and initiate upload of a newly validated, credential-clean IPA. No
+   upload is performed by this verification task.
+7. Select internal/external tester groups and complete beta review if needed.
+8. Submit App Review only after explicit human approval.
 
 Future on-device transcription and smart ad-boundary skipping remain outside
 this MVP and are tracked by GitHub issue #10.

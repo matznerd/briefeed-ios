@@ -1,7 +1,7 @@
 # Briefeed Live Radio MVP Design
 
 **Date:** 2026-07-19  
-**Status:** Implemented; automated simulator/archive verification passed, physical-device gate open
+**Status:** Implemented; focused simulator/archive verification passed; physical-device and packaged-credential distribution gates open
 
 **Product focus:** Reliable, quick, lean-back news radio from RSS podcast audio  
 **Relationship to existing PRD:** This specification governs the Live Radio vertical slice. It does not delete or redesign the Brief, Feed, Reddit, article summarization, or TTS systems. Where `PRD-REFACTOR-V2.md` describes Live News as a temporary non-persisted playback list, this specification supersedes that behavior for Radio playback.
@@ -835,7 +835,15 @@ Automation may:
 
 A green unsigned generic build is implementation evidence only. The build may be called a distribution candidate only after the physical-device checklist passes and a fresh signed archive/export is validated. If device access, signing, provisioning, or export configuration is unavailable, the receipt must say `implementation verified; distribution candidate blocked` and leave the release gate open.
 
-The release audit must treat API values substituted into the application `Info.plist` as extractable public client configuration. Shipping credentials must be removed, restricted to the bundle and allowed APIs where the provider supports it, or explicitly accepted as non-secret client keys before archive approval.
+The release audit must treat API values substituted into the application
+`Info.plist` as extractable public client configuration. A privileged Firecrawl
+credential must never ship in the client: move that access behind an
+authenticated server-owned endpoint and rotate/revoke the packaged value. A
+Gemini client credential may remain only after an explicit trust decision plus
+provider-enforced API, app-identity, quota, and abuse restrictions; otherwise
+it also moves server-side. A distribution archive must pass an automated gate
+that rejects forbidden or nonempty privileged credentials. GitHub #16 blocks
+public sharing, TestFlight, and App Store upload until these conditions are met.
 
 Human-only actions include:
 
@@ -870,6 +878,8 @@ The Live Radio MVP is ready for a distribution candidate when all of the followi
 - The custom navigation is accessible, safe-area correct, and usable with Dynamic Type and reduced-transparency settings.
 - All focused automated gates pass using deterministic fixtures and owned simulator lanes.
 - The physical-device checklist passes.
+- A newly inspected archive contains no privileged Firecrawl credential and
+  satisfies the documented Gemini trust decision and packaging gate.
 - A fresh archive is validated and the remaining human-only App Store Connect actions are identified.
 
 ## Evidence Map
