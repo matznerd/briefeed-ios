@@ -10,11 +10,33 @@ struct RadioQueueBuilder {
     }
 
     func restore(snapshot: PersistedRadioSession, candidates: [RadioEpisodeCandidate]) -> PersistedRadioSession {
-        validated(snapshot: snapshot, candidates: candidates, resetSessionFailures: true)
+        let restored = validated(
+            snapshot: snapshot,
+            candidates: candidates,
+            normalizePlaying: true,
+            resetSessionFailures: true
+        )
+        let candidatesByKey = dictionaryByKey(candidates)
+        let existingKeys = Set(restored.entries.map(\.key))
+        let existingEnclosures = Set(restored.entries.compactMap { candidatesByKey[$0.key]?.canonicalEnclosureURL })
+        let appended = newestCandidatePerSource(from: candidates)
+            .filter(isFresh)
+            .filter { !existingKeys.contains($0.key) }
+            .filter { !existingEnclosures.contains($0.canonicalEnclosureURL) }
+            .map(makePendingEntry)
+        let entries = restored.entries + appended
+        let currentKey = restored.currentKey ?? entries.first(where: { $0.disposition == .pending })?.key
+            ?? entries.first(where: { $0.disposition == .deferred })?.key
+        return makeSession(entries: entries, currentKey: currentKey)
     }
 
     func reconcile(snapshot: PersistedRadioSession, candidates: [RadioEpisodeCandidate]) -> PersistedRadioSession {
-        let restored = validated(snapshot: snapshot, candidates: candidates, resetSessionFailures: false)
+        let restored = validated(
+            snapshot: snapshot,
+            candidates: candidates,
+            normalizePlaying: false,
+            resetSessionFailures: false
+        )
         let candidatesByKey = dictionaryByKey(candidates)
         let currentEntry = restored.currentKey.flatMap { currentKey in
             restored.entries.first(where: { $0.key == currentKey })
@@ -45,6 +67,7 @@ struct RadioQueueBuilder {
     private func validated(
         snapshot: PersistedRadioSession,
         candidates: [RadioEpisodeCandidate],
+        normalizePlaying: Bool,
         resetSessionFailures: Bool
     ) -> PersistedRadioSession {
         let candidatesByKey = dictionaryByKey(candidates)
@@ -55,12 +78,18 @@ struct RadioQueueBuilder {
         for entry in snapshot.entries where seenKeys.insert(entry.key).inserted {
             guard let candidate = candidatesByKey[entry.key], isRetained(candidate),
                   seenEnclosures.insert(candidate.canonicalEnclosureURL).inserted else { continue }
-            retained.append(repaired(entry, candidate: candidate, resetSessionFailures: resetSessionFailures))
+            retained.append(repaired(
+                entry,
+                candidate: candidate,
+                normalizePlaying: normalizePlaying,
+                resetSessionFailures: resetSessionFailures
+            ))
         }
 
-        let currentKey = retained.contains(where: { $0.key == snapshot.currentKey })
+        let currentKey = retained.contains(where: { $0.key == snapshot.currentKey && $0.disposition != .failedThisSession })
             ? snapshot.currentKey
-            : retained.first(where: { $0.disposition != .failedThisSession })?.key
+            : retained.first(where: { $0.disposition == .pending })?.key
+                ?? retained.first(where: { $0.disposition == .deferred })?.key
         return makeSession(entries: retained, currentKey: currentKey)
     }
 
@@ -113,13 +142,18 @@ struct RadioQueueBuilder {
         frequency == .hourly ? 24 * 60 * 60 : 7 * 24 * 60 * 60
     }
 
-    private func repaired(_ entry: RadioQueueEntry, candidate: RadioEpisodeCandidate, resetSessionFailures: Bool) -> RadioQueueEntry {
+    private func repaired(
+        _ entry: RadioQueueEntry,
+        candidate: RadioEpisodeCandidate,
+        normalizePlaying: Bool,
+        resetSessionFailures: Bool
+    ) -> RadioQueueEntry {
         var repaired = entry
         repaired.positionSeconds = entry.positionSeconds.isFinite && entry.positionSeconds > 0 ? entry.positionSeconds : 0
         if let duration = candidate.durationSeconds, duration.isFinite, duration > 0 {
             repaired.positionSeconds = min(repaired.positionSeconds, duration)
         }
-        if repaired.disposition == .playing { repaired.disposition = .pending }
+        if normalizePlaying && repaired.disposition == .playing { repaired.disposition = .pending }
         if resetSessionFailures && repaired.disposition == .failedThisSession {
             repaired.disposition = .pending
             repaired.playbackFailureCount = 0

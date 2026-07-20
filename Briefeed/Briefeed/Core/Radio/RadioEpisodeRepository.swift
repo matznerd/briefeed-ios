@@ -52,13 +52,18 @@ final class CoreDataRadioEpisodeRepository: RadioEpisodeRepository {
 
     func markCompleted(key: RadioEpisodeKey, at date: Date) throws {
         guard let episode = try episode(for: key) else { return }
+        let previousIsListened = episode.isListened
+        let previousListenedDate = episode.listenedDate
+        let previousLastPosition = episode.lastPosition
         episode.isListened = true
         episode.listenedDate = date
         episode.lastPosition = 1
         do {
             try saveContext()
         } catch {
-            context.rollback()
+            episode.isListened = previousIsListened
+            episode.listenedDate = previousListenedDate
+            episode.lastPosition = previousLastPosition
             throw error
         }
     }

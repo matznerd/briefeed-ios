@@ -30,6 +30,16 @@ struct RadioQueueBuilderTests {
         #expect(result.currentKey == nil)
     }
 
+    @Test func initialBuildAcceptsExactFreshnessBoundaryAndUsesEpisodeIDForEqualDates() {
+        let first = candidate("feed", "a", priority: 1, date: now.addingTimeInterval(-7_200))
+        let second = candidate("other", "b", priority: 1, date: now.addingTimeInterval(-7_200))
+        let third = candidate("other", "a", priority: 1, date: now.addingTimeInterval(-7_200))
+
+        let result = RadioQueueBuilder(now: now).buildInitial(candidates: [second, first, third])
+
+        #expect(result.entries.map(\.key) == [first.key, third.key])
+    }
+
     @Test func restoreDropsDuplicateCompletedAndExpiredEntriesButPreservesCurrentOrder() {
         let current = candidate("hourly", "current", priority: 1, date: now.addingTimeInterval(-86_399))
         let deferred = candidate("daily", "deferred", priority: 2, date: now.addingTimeInterval(-604_799), frequency: .daily)
@@ -44,6 +54,29 @@ struct RadioQueueBuilderTests {
         #expect(result.entries.map(\.key) == [current.key, deferred.key])
         #expect(result.entries.first?.disposition == .pending)
         #expect(result.currentKey == current.key)
+    }
+
+    @Test func restoreAcceptsExactRetentionBoundaryAndAppendsNewCandidates() {
+        let retained = candidate("retained", "one", priority: 9, date: now.addingTimeInterval(-86_400))
+        let deferred = candidate("deferred", "one", priority: 1, date: now)
+        let appended = candidate("appended", "one", priority: 0, date: now)
+        let snapshot = session(entries: [entry(retained.key, .playing), entry(deferred.key, .deferred)], current: retained.key)
+
+        let result = RadioQueueBuilder(now: now).restore(snapshot: snapshot, candidates: [retained, deferred, appended])
+
+        #expect(result.entries.map(\.key) == [retained.key, deferred.key, appended.key])
+        #expect(result.currentKey == retained.key)
+    }
+
+    @Test func restoreRepairsFailedCurrentBySelectingPendingBeforeDeferred() {
+        let failed = candidate("failed", "one", priority: 0, date: now)
+        let deferred = candidate("deferred", "one", priority: 0, date: now)
+        let pending = candidate("pending", "one", priority: 0, date: now)
+        let snapshot = session(entries: [entry(failed.key, .failedThisSession), entry(deferred.key, .deferred), entry(pending.key, .pending)], current: failed.key)
+
+        let result = RadioQueueBuilder(now: now).restore(snapshot: snapshot, candidates: [failed, deferred, pending])
+
+        #expect(result.currentKey == pending.key)
     }
 
     @Test func reconcilePreservesCurrentAndPartitionsNewPendingBeforeDeferred() {
@@ -71,6 +104,20 @@ struct RadioQueueBuilderTests {
 
         #expect(result.entries.map(\.key) == [current.key, pending.key, deferred.key, failed.key])
         #expect(RadioQueueBuilder(now: now).nextEligible(in: result) == pending.key)
+    }
+
+    @Test func reconcilePreservesLivePlayingCurrentAndStableDeferredAndFailedOrder() {
+        let current = candidate("current", "one", priority: 9, date: now)
+        let deferredOne = candidate("deferred", "one", priority: 0, date: now)
+        let deferredTwo = candidate("deferred", "two", priority: 0, date: now)
+        let failedOne = candidate("failed", "one", priority: 0, date: now)
+        let failedTwo = candidate("failed", "two", priority: 0, date: now)
+        let snapshot = session(entries: [entry(current.key, .playing), entry(deferredOne.key, .deferred), entry(deferredTwo.key, .deferred), entry(failedOne.key, .failedThisSession), entry(failedTwo.key, .failedThisSession)], current: current.key)
+
+        let result = RadioQueueBuilder(now: now).reconcile(snapshot: snapshot, candidates: [current, deferredOne, deferredTwo, failedOne, failedTwo])
+
+        #expect(result.entries.first?.disposition == .playing)
+        #expect(result.entries.map(\.key) == [current.key, deferredOne.key, deferredTwo.key, failedOne.key, failedTwo.key])
     }
 
     @Test func reconcileAppendsWithoutInsertingBeforeCurrentAndDeduplicatesKeysAndEnclosures() {

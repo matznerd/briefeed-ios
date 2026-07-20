@@ -32,9 +32,26 @@ struct CoreDataRadioEpisodeRepositoryTests {
 
         try repository.saveProgress(key: RadioEpisodeKey(feedID: "feed", episodeID: "target"), seconds: 30, duration: 120)
         try repository.saveProgress(key: RadioEpisodeKey(feedID: "feed", episodeID: "sibling"), seconds: 50, duration: .infinity)
+        try repository.saveProgress(key: RadioEpisodeKey(feedID: "feed", episodeID: "sibling"), seconds: .nan, duration: 0)
 
         #expect(target.lastPosition == 0.25)
         #expect(sibling.lastPosition == 0)
+    }
+
+    @Test @MainActor func candidateUsesCompositeKeyAndOriginalPlaybackURL() throws {
+        let persistence = PersistenceController(inMemory: true)
+        let context = persistence.container.viewContext
+        let one = makeFeed(in: context, id: "one", enabled: true)
+        let two = makeFeed(in: context, id: "two", enabled: true)
+        _ = makeEpisode(in: context, feed: one, id: "same", audioURL: "HTTPS://Example.COM:443/one.mp3?b=2&a=1#fragment")
+        _ = makeEpisode(in: context, feed: two, id: "same", audioURL: "https://example.com/two.mp3")
+        try context.save()
+
+        let fetched = try CoreDataRadioEpisodeRepository(context: context).candidate(for: RadioEpisodeKey(feedID: "one", episodeID: "same"))
+        let candidate = try #require(fetched)
+
+        #expect(candidate.originalPlaybackURL.absoluteString == "HTTPS://Example.COM:443/one.mp3?b=2&a=1#fragment")
+        #expect(candidate.canonicalEnclosureURL == "https://example.com/one.mp3?a=1&b=2")
     }
 
     @Test @MainActor func completionSetsAllFieldsAndSavesAtomically() throws {
@@ -53,13 +70,14 @@ struct CoreDataRadioEpisodeRepositoryTests {
         #expect(episode.lastPosition == 1)
     }
 
-    @Test @MainActor func failedCompletionSaveRollsBackAllFields() throws {
+    @Test @MainActor func failedCompletionSaveRestoresCompletionFieldsWithoutRollingBackUnrelatedChanges() throws {
         enum SaveError: Error { case denied }
         let persistence = PersistenceController(inMemory: true)
         let context = persistence.container.viewContext
         let feed = makeFeed(in: context, id: "feed", enabled: true)
         let episode = makeEpisode(in: context, feed: feed, id: "episode")
         try context.save()
+        feed.displayName = "Unsaved name"
         let repository = CoreDataRadioEpisodeRepository(context: context, saveContext: { throw SaveError.denied })
 
         #expect(throws: SaveError.denied) {
@@ -69,7 +87,8 @@ struct CoreDataRadioEpisodeRepositoryTests {
         #expect(!episode.isListened)
         #expect(episode.listenedDate == nil)
         #expect(episode.lastPosition == 0)
-        #expect(!context.hasChanges)
+        #expect(feed.displayName == "Unsaved name")
+        #expect(context.hasChanges)
     }
 
     @MainActor private func makeFeed(in context: NSManagedObjectContext, id: String, enabled: Bool) -> RSSFeed {
