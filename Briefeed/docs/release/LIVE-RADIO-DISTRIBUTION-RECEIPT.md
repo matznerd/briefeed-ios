@@ -413,3 +413,48 @@ failure. Both new playback-state regressions pass: explicit completed selection
 replays from zero, while an expired completed episode remains completed and is
 not reset. Evidence: `/tmp/briefeed-radio-row-expired-green-test.log`. This
 interaction correction does not claim that suite is fully green.
+
+## July 21 Opening Refresh and Autoplay Correction
+
+The 5:04 AM phone report showed NPR and ABC still pinned to their midnight
+episodes until pull-to-refresh. Read-only inspection established that the
+publishers were current and that the app's persisted autoplay and opening
+refresh settings were both enabled. After the manual refresh, the copied Core
+Data store contained NPR episodes published at 2:11, 3:11, and 4:11 AM PDT and
+an ABC episode published at 4:32 AM PDT. The defect was therefore in cold-launch
+ordering, not feed publication or user configuration.
+
+Cold launch previously restored and played the persisted remote episode before
+starting its refresh. The later reconciliation then preserved that active
+episode. Opening also used the periodic staleness policy, unlike the
+unconditional pull-to-refresh path. The correction now:
+
+- holds remote autoplay until the opening refresh has reconciled the queue;
+- force-refreshes enabled sources on cold launch and foreground return;
+- autoplays the reconciled current episode only once during the bounded
+  cold-launch opportunity;
+- still permits an immediately readable local download to autoplay offline;
+- leaves the 15-minute active heartbeat on the normal stale-only policy; and
+- never creates a second autoplay opportunity or interrupts active playback on
+  foreground return.
+
+Verification evidence:
+
+- Red coordinator regression: `/tmp/briefeed-opening-refresh-red.log`.
+- Coordinator restore/autoplay suite: 17/17 passed;
+  `/tmp/briefeed-opening-refresh-green-2.log`.
+- Lifecycle suite, including the distinct forced-opening and stale-heartbeat
+  paths: 14/14 passed; `/tmp/briefeed-opening-poll-green.log`.
+- Focused Radio regression: 71/71 passed across lifecycle, restore, queue
+  builder, RSS refresh policy, and unified playback;
+  `/tmp/briefeed-opening-refresh-regression.log`.
+- Unsigned generic iOS Simulator app/unit/UI test-target compilation:
+  `/tmp/briefeed-opening-refresh-simulator-build-final.log`
+  (`** TEST BUILD SUCCEEDED **`).
+
+No simulator runtime was started because the shared app-testing doctor reported
+critical host pressure and explicitly refused new boots. No phone build or
+installation was performed for this correction after the owner requested local
+verification only. The phone therefore remains on the prior build; runtime
+visual and audible confirmation of this exact correction remains deferred to
+GitHub issues #15 and #13 respectively.

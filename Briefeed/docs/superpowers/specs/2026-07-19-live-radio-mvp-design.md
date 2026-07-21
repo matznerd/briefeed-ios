@@ -394,7 +394,7 @@ Reconciliation may reorder only the pending partition. Manual Next moves the cur
 
 - Save position in seconds at least every 5 seconds while playing.
 - Force a save on pause, seek completion, Next, background transition, route loss, interruption, and termination notification.
-- On a cold launch with autoplay enabled, resume the current partial episode if it remains within retention.
+- On a cold launch with autoplay enabled, a remote automatic entry waits for the opening refresh. It resumes only if it remains the source's newest eligible entry after reconciliation; a newer source episode replaces it. Explicitly queued partial archive episodes retain their resume position.
 - On a cold launch with autoplay disabled, restore it in a paused ready state.
 
 ### Manual Next
@@ -483,21 +483,21 @@ endOfEpisode
 1. Load user settings and Core Data.
 2. Run local-only `ensureDefaultFeedsExist`; it inserts missing default feed rows but performs no network request.
 3. Restore and reconcile the Radio snapshot using local data only.
-4. If autoplay is enabled and an eligible entry exists, start or resume it immediately.
-5. Begin `refreshIfStale` only after connectivity resolves online, without blocking playback from readable local episode metadata.
-6. Reconcile and append after refresh returns.
-7. If no local entry exists, show an updating/checking-connection state while connectivity or refresh is unresolved.
-8. If refresh produces an entry and autoplay is enabled, start it.
+4. If autoplay is enabled and the restored entry is a readable local file, it may start immediately without network access.
+5. Otherwise keep the one autoplay opportunity pending and, once connectivity resolves online, force-refresh every enabled source even when its last-success timestamp is inside the periodic stale window.
+6. Reconcile the source-centric queue after the opening refresh, replacing an older automatic source slot with that source's newest eligible episode.
+7. If autoplay remains eligible, start the reconciled current episode only after that refresh; never start a persisted remote episode first and refresh behind it.
+8. If no local entry exists, show an updating/checking-connection state while connectivity or refresh is unresolved.
 9. Resolve an empty session using the state precedence defined below; do not assume it is exhausted.
 
-Autoplay is off by default and is exposed as a clear Radio setting. Preserve the existing canonical `autoPlayLiveNewsOnOpen` UserDefaults key while renaming its visible setting to Radio autoplay. It runs once per process cold launch, not every time the scene becomes active or the Radio tab appears. If no local episode exists, the one cold-launch opportunity may remain pending for at most 60 seconds while the app stays active, through the first connectivity-resolved refresh. It expires at the deadline, on inactive/background transition, or on any user-initiated playback command. A qualifying refresh may start the first newly eligible episode; that refresh or a terminal empty result consumes the opportunity. Later foreground, poll, and manual refreshes never autoplay.
+Autoplay is off by default and is exposed as a clear Radio setting. Preserve the existing canonical `autoPlayLiveNewsOnOpen` UserDefaults key while renaming its visible setting to Radio autoplay. It runs once per process cold launch, not every time the scene becomes active or the Radio tab appears. For remote content, the one cold-launch opportunity remains pending for at most 60 seconds while the app stays active, through the first connectivity-resolved forced opening refresh. It expires at the deadline, on inactive/background transition, or on any user-initiated playback command. A qualifying initial refresh may start the reconciled current episode whether it was newly inserted or already stored; that refresh or a terminal empty result consumes the opportunity. Later foreground, poll, and manual refreshes never autoplay.
 
 ### Foreground Return
 
 - If audio is playing, continue playing.
 - If the user paused, remain paused.
 - Do not invoke autoplay again.
-- Refresh only when source data is stale, and reconcile without replacing the session.
+- Force one enabled-source refresh on the foreground return, and reconcile without interrupting active audio or invoking autoplay.
 - Idempotently establish exactly one 15-minute active poll. A background-to-foreground cycle re-arms one canceled poll and never leaves zero or creates two.
 
 ### Background Transition
@@ -530,7 +530,7 @@ Autoplay is off by default and is exposed as a clear Radio setting. Preserve the
 
 - Hourly sources become stale 30 minutes after their last successful refresh.
 - Daily sources become stale 6 hours after their last successful refresh.
-- On cold launch and every foreground return, evaluate `refreshIfStale`.
+- On cold launch and every foreground return, force one enabled-source refresh so opening the app cannot trust a recently checked feed that published just afterward.
 - While the app remains active, one authoritative 15-minute poll invokes only `refreshIfStale`; it does not force a network request for fresh sources. Entering background cancels it, and the next foreground re-arms exactly one poll.
 - Manual Refresh ignores the stale threshold.
 - No background task is added for this MVP.

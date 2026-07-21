@@ -199,16 +199,9 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         guard !didEvaluateColdLaunchAutoplay else { return nil }
         didEvaluateColdLaunchAutoplay = true
         guard autoplayEnabled else { return nil }
-        if let request = requestForCurrent() {
-            if canLoad(request.url) {
-                state = .loading
-                return .play(request)
-            }
-            coldLaunchAutoplayDeadline = now().addingTimeInterval(60)
-            hasPendingColdLaunchAutoplay = true
-            setPending(request, purpose: .coldLaunchAutoplay)
-            state = .waitingForNetwork
-            return nil
+        if let request = requestForCurrent(), request.url.isFileURL, canLoad(request.url) {
+            state = .loading
+            return .play(request)
         }
         coldLaunchAutoplayDeadline = now().addingTimeInterval(60)
         hasPendingColdLaunchAutoplay = true
@@ -286,7 +279,6 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         }
         setCandidates(candidates)
         var session = currentSession()
-        let preReconcileKeys = Set(entries.map(\.key))
         let refreshedSources = Set(result.results.compactMap { item -> String? in
             if case .success = item.outcome { return item.feedID }
             return nil
@@ -320,10 +312,7 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
             cancelPendingColdLaunchAutoplay()
             return nil
         }
-        let appendedKeys = Set(reconciled.entries.map(\.key)).subtracting(preReconcileKeys)
         if result.successfulSourceEvidenceCount > 0,
-           let currentKey,
-           appendedKeys.contains(currentKey),
            let request = requestForCurrent() {
             if canLoad(request.url) {
                 cancelPendingColdLaunchAutoplay()

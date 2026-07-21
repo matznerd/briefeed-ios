@@ -56,7 +56,7 @@
 - Radio remains independent of Reddit discovery, article summarization, Gemini TTS, and any future Supabase or Render backend.
 - `QueueCoordinator` remains the single source of truth for Brief only. `RadioSessionCoordinator` is the single source of truth for Radio only.
 - Core Data remains authoritative for RSS sources, episode metadata, normalized progress, and completion. `briefeed_radio_session_v1` remains authoritative for Radio order and seconds-based resume position.
-- Autoplay uses the existing `autoPlayLiveNewsOnOpen` key, defaults Off, and runs once per process cold launch only. When no local episode exists, its deferred online-refresh opportunity lasts at most 60 foreground seconds and is canceled by inactive/background or any manual playback command.
+- Autoplay uses the existing `autoPlayLiveNewsOnOpen` key, defaults Off, and runs once per process cold launch only. Remote autoplay is gated on a forced opening refresh and starts the reconciled newest eligible entry; its opportunity lasts at most 60 foreground seconds and is canceled by inactive/background or any manual playback command. Readable downloaded content may start immediately offline.
 - Playback speed uses the canonical `playbackSpeed` key and exactly `0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0`.
 - In-app and remote skip intervals are exactly 10 seconds. Radio Previous is disabled.
 - Manual Next never marks the episode complete. It retires an automatic hourly
@@ -939,7 +939,7 @@ Expected: pure and hosted repository suites pass.
 
 - [ ] **Step 1: Write coordinator tests with fakes**
 
-Use deterministic `FakeRadioSessionStore`, `FakeRadioEpisodeRepository`, and injected `now`. Cover paused restore, autoplay resume intent, autoplay once per process, deferred autoplay still eligible at 59 seconds and expired at 60 seconds, manual playback canceling the opportunity, invalid current repair, local playback before refresh, and exact empty precedence: active playback, no sources, offline, unknown connectivity, refreshing, all attempted failed, then exhausted only after at least one successful or prior-success-backed skipped-fresh result.
+Use deterministic `FakeRadioSessionStore`, `FakeRadioEpisodeRepository`, and injected `now`. Cover paused restore, remote autoplay waiting for the opening refresh and choosing a newer same-source episode, readable local autoplay before refresh, autoplay once per process, deferred autoplay still eligible at 59 seconds and expired at 60 seconds, manual playback canceling the opportunity, invalid current repair, and exact empty precedence: active playback, no sources, offline, unknown connectivity, refreshing, all attempted failed, then exhausted only after at least one successful or prior-success-backed skipped-fresh result.
 
 Also cover explicit episode selection: selecting an eligible repository candidate defers the prior partial current entry, inserts or moves the selected key to current without duplication, force-saves, and returns its restored-position play request. An ineligible, completed, missing, or expired key is a no-op.
 
@@ -992,7 +992,7 @@ protocol RadioSessionCoordinating: AnyObject {
 
 Implement `RadioSessionCoordinator` as an `ObservableObject` conforming to this surface, with each property `@Published private(set)` and the cold-launch opportunity flag `private(set)`.
 
-`restore` reads local candidates and snapshot without awaiting network. It emits `.play` with a `RadioPlaybackRequest` built from the selected candidate and restored seconds position once only when autoplay is enabled and an eligible current item exists. If autoplay is enabled but no local entry exists, record an injected-clock deadline exactly 60 seconds after restore and keep one cold-launch opportunity pending only while the scene remains active. `applyRefresh` may return one play intent only before that deadline when the initial refresh appends an eligible entry; it then consumes the opportunity. The deadline, a terminal initial refresh with no entry, inactive/background, or any manual playback command consumes it. Later foreground, timer, and manual refreshes never autoplay. A refresh can append entries but cannot replace or interrupt current playback.
+`restore` reads local candidates and snapshot without awaiting network. A readable local file may emit `.play` immediately when autoplay is enabled. A remote entry instead records an injected-clock deadline exactly 60 seconds after restore and remains paused until the initial opening refresh reconciles the newest candidate per source. `applyInitialRefresh` may return one play intent for that reconciled current entry before the deadline, whether the entry was newly inserted or already stored. The deadline, a terminal initial refresh with no entry, inactive/background, or any manual playback command consumes the opportunity. Later foreground, timer, and manual refreshes never autoplay, and refresh never interrupts audio already playing.
 
 Implement `selectEpisode(_:)` in this task using the same eligibility and persistence rules covered by Step 1. `beginCurrent`, `selectEpisode`, and the explicit cancellation command consume the deferred autoplay opportunity before returning. Expose the six explicit publishers by erasing the matching `@Published` projections so injected consumers and test fakes never depend on concrete coordinator storage.
 
@@ -1427,7 +1427,7 @@ Expected: Radio playback tests and Brief isolation tests pass; no temporary Live
 
 - [ ] **Step 1: Write lifecycle tests around an extracted driver**
 
-Create `RadioAppLifecycleDriver` in `BriefeedApp+RSSV2.swift` with fakeable closures and an injected `ConnectivityMonitoring`. Test that cold launch restores before refresh, autoplay evaluates once, unknown and offline connectivity defer rather than start refresh, online at 59 seconds may consume the opportunity while online at 60 seconds only replenishes paused state, the first timely online event starts the single pending stale refresh, foreground refreshes stale only, background cancels pending refresh/autoplay and force-saves, and active-background-active-background cycles re-arm exactly one poll without autoplay or duplication.
+Create `RadioAppLifecycleDriver` in `BriefeedApp+RSSV2.swift` with fakeable closures and an injected `ConnectivityMonitoring`. Test that cold launch restores before refresh but remote autoplay waits for the initial result, unknown and offline connectivity defer rather than start refresh, online at 59 seconds may consume the opportunity while online at 60 seconds only replenishes paused state, opening/foreground work is distinct from the stale-only heartbeat, background cancels pending refresh/autoplay and force-saves, and active-background-active-background cycles re-arm exactly one poll without autoplay or duplication.
 
 - [ ] **Step 2: Verify red**
 
@@ -1450,7 +1450,7 @@ func startRadioServices() async {
         radioServices.coordinator.refreshStarted(
             enabledSourceCount: RSSAudioService.shared.enabledFeedCount
         )
-        let result = await RSSAudioService.shared.refreshIfStale(now: Date())
+        let result = await RSSAudioService.shared.refreshAll(now: Date())
         // Only this first connectivity-gated refresh can consume the bounded
         // cold-launch autoplay opportunity.
         let postRefreshIntent = radioServices.coordinator.applyInitialRefresh(result)
@@ -1459,13 +1459,13 @@ func startRadioServices() async {
 }
 ```
 
-Construct `radioLifecycleDriver` with `RadioServiceContainer.shared.connectivity`, which is the exact monitor already injected into its coordinator. `requestStaleRefreshWhenOnline` retains at most one pending request while status is `.unknown` or `.offline` without polling or consuming source/episode attempts; `.online` invokes its operation exactly once. The cold-launch request applies its result through `applyInitialRefresh` exactly once, including when connectivity delays it. Foreground and 15-minute poll requests apply results through `applyRefresh`; they can replenish paused state but never create or consume another autoplay opportunity. An offline transition is already reflected in the coordinator's connectivity-driven `waitingForNetwork` state, so it does not fabricate a terminal refresh result. The coordinator independently enforces the 60-second active autoplay deadline. Cancellation on inactive/background removes the pending request and calls `cancelPendingColdLaunchAutoplay()` so a later network callback cannot start background work or audio; the next foreground creates a new stale-check request without creating a new autoplay opportunity.
+Construct `radioLifecycleDriver` with `RadioServiceContainer.shared.connectivity`, which is the exact monitor already injected into its coordinator. `requestStaleRefreshWhenOnline` retains at most one pending request while status is `.unknown` or `.offline` without polling or consuming source/episode attempts; `.online` invokes its operation exactly once. Cold-launch and foreground-open work force `refreshAll`; only the separate 15-minute heartbeat uses `refreshIfStale`. The initial result is applied through `applyInitialRefresh` exactly once and is the gate for remote autoplay. Foreground and heartbeat results apply through `applyRefresh`; they can replenish paused state but never create or consume another autoplay opportunity. An offline transition is already reflected in the coordinator's connectivity-driven `waitingForNetwork` state, so it does not fabricate a terminal refresh result. The coordinator independently enforces the 60-second active autoplay deadline. Cancellation on inactive/background removes the pending request and calls `cancelPendingColdLaunchAutoplay()` so a later network callback cannot start background work or audio; the next foreground creates a forced opening refresh without creating a new autoplay opportunity.
 
 Skip production startup only in hosted unit tests or deterministic Radio fixture mode. Fixture seeding gets its own Task 12 path.
 
 - [ ] **Step 4: Own one active poll and scene lifecycle**
 
-Use `scenePhase` plus a cancellable `Task` that sleeps 15 minutes while active and calls only `requestStaleRefreshWhenOnline` with a stale-refresh operation. Cancel both poll and pending connectivity wait on inactive/background. Every transition to active idempotently creates exactly one new poll when none exists; repeated active notifications leave the existing poll unchanged. On every foreground, evaluate stale refresh but never create a new autoplay opportunity. On background and termination, cancel deferred autoplay and force-save both Radio and Brief state. Let playing audio continue.
+Use `scenePhase` plus a cancellable `Task` that sleeps 15 minutes while active and calls only `requestStaleRefreshWhenOnline` with a stale-refresh operation. Keep that heartbeat work distinct from the forced opening/foreground work. Cancel both poll and pending connectivity wait on inactive/background. Every transition to active idempotently creates exactly one new poll when none exists; repeated active notifications leave the existing poll unchanged. On every foreground, force one refresh but never create a new autoplay opportunity. On background and termination, cancel deferred autoplay and force-save both Radio and Brief state. Let playing audio continue.
 
 - [ ] **Step 5: Run tests and inspect timer ownership**
 

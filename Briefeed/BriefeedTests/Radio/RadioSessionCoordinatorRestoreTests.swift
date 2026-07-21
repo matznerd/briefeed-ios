@@ -19,19 +19,34 @@ struct RadioSessionCoordinatorRestoreTests {
         #expect(coordinator.state == .readyPaused)
     }
 
-    @Test func eligibleRestoreAutoplaysOnceOnly() async {
-        let episode = candidate("npr", "one")
-        let coordinator = makeCoordinator(store: FakeRadioSessionStore(snapshot: session([entry(episode.key, position: 17)], current: episode.key)), candidates: [episode])
+    @Test func remoteRestoreWaitsForOpeningRefreshAndAutoplaysLatestOnce() async {
+        let previous = candidate("npr", "previous", date: now.addingTimeInterval(-3_600))
+        let latest = candidate("npr", "latest")
+        let repository = FakeRadioEpisodeRepository(candidates: [previous])
+        let coordinator = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(snapshot: session([entry(previous.key, position: 17)], current: previous.key)),
+            repository: repository,
+            now: { now },
+            connectivityStatus: { .online }
+        )
 
-        #expect(await coordinator.restore(autoplayEnabled: true) == .play(request(for: episode, position: 17)))
+        #expect(await coordinator.restore(autoplayEnabled: true) == nil)
+        #expect(coordinator.hasPendingColdLaunchAutoplay)
+        #expect(coordinator.currentKey == previous.key)
+        #expect(coordinator.state == .readyPaused)
+
+        repository.values = [previous, latest]
+        coordinator.refreshStarted(enabledSourceCount: 1)
+        #expect(coordinator.applyInitialRefresh(success()) == .play(request(for: latest, position: 0)))
+        #expect(coordinator.currentKey == latest.key)
         #expect(coordinator.state == .loading)
-        coordinator.transportDidStart(for: episode.key)
+        coordinator.transportDidStart(for: latest.key)
         #expect(coordinator.state == .playing)
         #expect(await coordinator.restore(autoplayEnabled: true) == nil)
         #expect(coordinator.state == .playing)
     }
 
-    @Test func remoteRestoreAutoplayWaitsForKnownOnlineConnectivityAndEmitsOnceAfterDelay() async {
+    @Test func connectivityAloneCannotBypassOpeningRefreshGate() async {
         let episode = candidate("npr", "one")
         let monitor = TestConnectivityMonitor(.unknown)
         let scheduler = TestRadioRetryScheduler()
@@ -49,10 +64,14 @@ struct RadioSessionCoordinatorRestoreTests {
         monitor.send(.offline)
         #expect(scheduler.scheduledDelays.isEmpty)
         monitor.send(.online)
-        #expect(scheduler.scheduledDelays == [0.5])
+        #expect(scheduler.scheduledDelays.isEmpty)
         scheduler.fire()
         scheduler.fire()
-        #expect(intents == [.play(request(for: episode, position: 17))])
+        #expect(intents.isEmpty)
+        #expect(coordinator.hasPendingColdLaunchAutoplay)
+
+        coordinator.refreshStarted(enabledSourceCount: 1)
+        #expect(coordinator.applyInitialRefresh(success()) == .play(request(for: episode, position: 17)))
         #expect(!coordinator.hasPendingColdLaunchAutoplay)
         withExtendedLifetime(cancellable) {}
     }
@@ -132,6 +151,7 @@ struct RadioSessionCoordinatorRestoreTests {
         clock = now.addingTimeInterval(60)
         expiredMonitor.send(.online)
         expiredScheduler.fire()
+        #expect(expired.applyInitialRefresh(success()) == nil)
         #expect(expiredIntents.isEmpty)
         #expect(!expired.hasPendingColdLaunchAutoplay)
         withExtendedLifetime((cancellable, expiredCancellable)) {}
@@ -300,7 +320,7 @@ struct RadioSessionCoordinatorRestoreTests {
         clock = now.addingTimeInterval(59)
         #expect(coordinator.applyRefresh(success()) == nil)
         #expect(coordinator.hasPendingColdLaunchAutoplay)
-        #expect(coordinator.applyInitialRefresh(success()) == nil)
+        #expect(coordinator.applyInitialRefresh(success()) == .play(request(for: repository.values[0], position: 0)))
         #expect(!coordinator.hasPendingColdLaunchAutoplay)
 
         let offlineRepository = FakeRadioEpisodeRepository(candidates: [])

@@ -191,6 +191,33 @@ struct RadioAppLifecycleTests {
         #expect(forceSaveCount == 2)
     }
 
+    @Test func activeHeartbeatUsesItsStaleCheckInsteadOfTheForcedOpeningRefresh() async {
+        let monitor = LifecycleConnectivityMonitor(.online)
+        var sleepCount = 0
+        var initialCount = 0
+        var openingCount = 0
+        var heartbeatCount = 0
+        let driver = makeDriver(monitor: monitor, sleep: { _ in
+            sleepCount += 1
+            if sleepCount == 1 { return }
+            throw CancellationError()
+        })
+        driver.handleScenePhase(.active)
+
+        await driver.startColdLaunch(
+            restore: { _ in nil },
+            initialRefresh: refreshWork(begin: { initialCount += 1 }, load: { self.emptyRefresh }),
+            foregroundRefresh: refreshWork(begin: { openingCount += 1 }, load: { self.emptyRefresh }),
+            pollRefresh: refreshWork(begin: { heartbeatCount += 1 }, load: { self.emptyRefresh })
+        )
+        await settle()
+
+        #expect(initialCount == 1)
+        #expect(openingCount == 0)
+        #expect(heartbeatCount == 1)
+        driver.handleScenePhase(.background)
+    }
+
     @Test func terminationCancelsWorkAndForceSavesOnce() async {
         let monitor = LifecycleConnectivityMonitor(.unknown)
         var cancelAutoplayCount = 0

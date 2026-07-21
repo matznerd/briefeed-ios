@@ -12,6 +12,8 @@
 
 > **Radio row interaction clarification (July 21, 2026):** Radio Home rows have two explicit targets. The large leading icon/title region plays the source's latest episode, pauses the active episode, resumes a partial episode, retries a failed episode, or explicitly replays a completed latest episode from the beginning. The separate 44-point trailing chevron opens that source's descending episode archive. A checkmark is not used as the primary row control. Completion remains authoritative for automatic queue reconciliation and same-hour relaunch protection; only a deliberate Play/Replay action clears completion and progress for that episode. The archive applies the same explicit replay behavior to completed retained episodes.
 
+> **Opening freshness and autoplay correction (July 21, 2026):** Opening Radio while online performs an unconditional enabled-source refresh instead of relying on the periodic stale threshold. Remote autoplay is held until that opening refresh reconciles the source-centric queue, then starts the newest eligible episode; it must not begin a persisted older hourly bulletin and refresh afterward. A readable downloaded file may still start immediately while offline. Foreground returns also force one opening refresh but never create a second autoplay opportunity or interrupt audio already playing. The single 15-minute active heartbeat remains a stale-only check to avoid unnecessary requests.
+
 **Date:** December 17, 2025
 **Version:** 2.1 - All Requirements Finalized
 **Status:** Live Radio MVP implemented; focused simulator verification complete; physical-device and credential-remediation gates open

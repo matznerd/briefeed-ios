@@ -66,6 +66,7 @@ final class RadioAppLifecycleDriver {
     private var pollID: UUID?
     private var initialRefreshWork: RefreshWork?
     private var foregroundRefreshWork: RefreshWork?
+    private var pollRefreshWork: RefreshWork?
     private var generation = 0
     private var didStartColdLaunch = false
     private var didFinishRestore = false
@@ -106,7 +107,8 @@ final class RadioAppLifecycleDriver {
         restore: @escaping @MainActor (Bool) async -> RadioPlaybackIntent?,
         applyRestoreIntent: @escaping @MainActor (RadioPlaybackIntent?) async -> Void = { _ in },
         initialRefresh: RefreshWork,
-        foregroundRefresh: RefreshWork
+        foregroundRefresh: RefreshWork,
+        pollRefresh: RefreshWork? = nil
     ) async {
         guard !didStartColdLaunch, !didTerminate else { return }
         didStartColdLaunch = true
@@ -116,6 +118,7 @@ final class RadioAppLifecycleDriver {
 
         initialRefreshWork = initialRefresh
         foregroundRefreshWork = foregroundRefresh
+        pollRefreshWork = pollRefresh ?? foregroundRefresh
 
         let restoreGeneration = generation
         let restoreIntent = await restore(coldLaunchAutoplayAllowed)
@@ -286,7 +289,7 @@ final class RadioAppLifecycleDriver {
     private func armPollIfNeeded() {
         guard isActive,
               didFinishRestore,
-              foregroundRefreshWork != nil,
+              pollRefreshWork != nil,
               pollTask == nil,
               !didTerminate else { return }
 
@@ -304,8 +307,8 @@ final class RadioAppLifecycleDriver {
                 guard !Task.isCancelled,
                       taskGeneration == self.generation,
                       self.isActive,
-                      let foregroundRefreshWork = self.foregroundRefreshWork else { break }
-                self.requestStaleRefreshWhenOnline(now: self.now(), operation: foregroundRefreshWork)
+                      let pollRefreshWork = self.pollRefreshWork else { break }
+                self.requestStaleRefreshWhenOnline(now: self.now(), operation: pollRefreshWork)
             }
             self.finishPoll(id: id)
         }
@@ -369,8 +372,18 @@ extension BriefeedApp {
             applyRestoreIntent: { intent in
                 await UnifiedAudioPlayer.shared.execute(intent)
             },
-            initialRefresh: makeRadioRefreshWork(useInitialAutoplayOpportunity: true),
-            foregroundRefresh: makeRadioRefreshWork(useInitialAutoplayOpportunity: false)
+            initialRefresh: makeRadioRefreshWork(
+                useInitialAutoplayOpportunity: true,
+                forceNetworkRefresh: true
+            ),
+            foregroundRefresh: makeRadioRefreshWork(
+                useInitialAutoplayOpportunity: false,
+                forceNetworkRefresh: true
+            ),
+            pollRefresh: makeRadioRefreshWork(
+                useInitialAutoplayOpportunity: false,
+                forceNetworkRefresh: false
+            )
         )
     }
 
@@ -378,7 +391,10 @@ extension BriefeedApp {
         radioLifecycleDriver.handleScenePhase(phase)
     }
 
-    private func makeRadioRefreshWork(useInitialAutoplayOpportunity: Bool) -> RadioAppLifecycleDriver.RefreshWork {
+    private func makeRadioRefreshWork(
+        useInitialAutoplayOpportunity: Bool,
+        forceNetworkRefresh: Bool
+    ) -> RadioAppLifecycleDriver.RefreshWork {
         let services = RadioServiceContainer.shared
         return RadioAppLifecycleDriver.RefreshWork(
             begin: {
@@ -387,7 +403,10 @@ extension BriefeedApp {
                 )
             },
             load: {
-                await RSSAudioService.shared.refreshIfStale(now: Date())
+                let now = Date()
+                return forceNetworkRefresh
+                    ? await RSSAudioService.shared.refreshAll(now: now)
+                    : await RSSAudioService.shared.refreshIfStale(now: now)
             },
             apply: { result in
                 let intent = useInitialAutoplayOpportunity
