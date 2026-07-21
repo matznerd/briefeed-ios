@@ -350,10 +350,16 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
     func selectEpisode(_ key: RadioEpisodeKey) -> RadioPlaybackIntent? {
         cancelPendingColdLaunchAutoplay()
         cancelPendingRequest()
-        let candidate: RadioEpisodeCandidate
+        var candidate: RadioEpisodeCandidate
         do {
             guard let loaded = try repository.candidate(for: key) else { return nil }
             candidate = loaded
+            if candidate.isCompleted {
+                guard entries.first(where: { $0.key == key })?.disposition != .failedThisSession,
+                      isEligibleForSelection(replayCandidate(from: candidate)) else { return nil }
+                guard let restarted = try repository.restartForReplay(key: key) else { return nil }
+                candidate = restarted
+            }
         } catch {
             return handleReadFailure(error)
         }
@@ -947,6 +953,22 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         guard let duration = candidate.durationSeconds, duration.isFinite, duration > 0,
               candidate.normalizedCoreDataProgress.isFinite else { return 0 }
         return min(max(candidate.normalizedCoreDataProgress, 0), 1) * duration
+    }
+
+    private func replayCandidate(from candidate: RadioEpisodeCandidate) -> RadioEpisodeCandidate {
+        RadioEpisodeCandidate(
+            key: candidate.key,
+            originalPlaybackURL: candidate.originalPlaybackURL,
+            canonicalEnclosureURL: candidate.canonicalEnclosureURL,
+            title: candidate.title,
+            sourceName: candidate.sourceName,
+            publicationDate: candidate.publicationDate,
+            durationSeconds: candidate.durationSeconds,
+            normalizedCoreDataProgress: 0,
+            isCompleted: false,
+            sourcePriority: candidate.sourcePriority,
+            sourceFrequency: candidate.sourceFrequency
+        )
     }
 
     private func isEligibleForSelection(_ candidate: RadioEpisodeCandidate) -> Bool {

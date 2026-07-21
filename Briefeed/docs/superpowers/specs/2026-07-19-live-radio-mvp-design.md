@@ -371,7 +371,7 @@ After a successful or partially successful refresh:
 - Append new candidates in source priority order.
 - Append no more than one new latest episode per source per reconciliation pass.
 - Never insert a new episode ahead of the currently playing or paused episode.
-- Never replay an entry already completed.
+- Never automatically replay an entry already completed.
 
 ### Source Reordering
 
@@ -417,7 +417,7 @@ Mark an episode completed when either condition is true:
 - The transport reports a successful natural end.
 - The user leaves or advances after reaching at least 95 percent of a known duration.
 
-Completion writes `isListened = true`, `listenedDate = now`, and normalized `lastPosition = 1.0`, then removes the entry from the Radio snapshot. A completed episode is never selected again during its retention lifetime.
+Completion writes `isListened = true`, `listenedDate = now`, and normalized `lastPosition = 1.0`, then removes the entry from the Radio snapshot. A completed episode is never selected again automatically during its retention lifetime. An explicit user Replay action atomically clears those completion fields and progress before selecting the episode from the beginning; a failed reset leaves completion intact and does not start playback.
 
 Completion must be crash-consistent. First update and successfully save the Core Data episode. Only after that save succeeds may the coordinator remove the Radio entry and persist the updated snapshot. If Core Data save fails, keep the entry and its position in the Radio session, pause automatic advancement, and expose a recoverable persistence error with Retry. Never remove an entry based only on an in-memory completion mutation. If the process dies after the Core Data save but before snapshot removal, restore treats Core Data completion as authoritative and drops the lingering snapshot entry, so it cannot replay.
 
@@ -699,13 +699,19 @@ playlist.
 - Each row shows title, source, relative publication time, archive availability,
   and one of: Ready, Up next, percent listened, Listened, Latest update, or
   unavailable for this session.
+- Each row has two explicit 44-point-or-larger actions. The leading icon and
+  title region is the primary Play, Pause, Resume, Replay, or Retry action. The
+  separate trailing chevron is the only source-archive navigation target.
+  Never use a checkmark in the primary action position or make an invisible
+  whole-row navigation rule compete with playback.
 - A completed newest episode remains visible as a muted, non-playing Listened
-  source row even though it is absent from the eligible playback queue.
+  source row even though it is absent from the eligible playback queue. Its
+  explicit Replay action resets completion and starts it from the beginning.
 - Hourly title-only dates are normalized into `Source: local time · local date`
   using the user's current time zone. Known networks use compact identities:
   `NPR`, `ABC`, `CBS`, and `CBC`. Editorial daily episode titles remain
   unchanged, with publication timing subordinate in metadata.
-- Selecting a source row opens a descending source archive. Retained prior
+- Selecting the trailing chevron opens a descending source archive. Retained prior
   episodes offer Play Now and Play Later. Explicit Play Later entries are
   persisted manual queue exceptions and may coexist with the source's automatic
   latest slot; automatic reconciliation itself never creates that duplication.

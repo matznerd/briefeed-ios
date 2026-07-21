@@ -377,3 +377,39 @@ No simulator was booted for this correction because the shared app-testing
 doctor reported critical swap pressure. Duplicate low-level 0.1-second progress
 timers remain follow-up GitHub issue #20; they are not evidence that this fixed
 build has passed a formal energy benchmark.
+
+## July 21 Radio Row Interaction Correction
+
+The phone screenshot showed that a leading completion checkmark looked like a
+button while the invisible whole-row action opened the source archive. The row
+now exposes two independent controls: its large leading icon/title region is
+Play, Pause, Resume, Replay, or Retry, and its trailing 44-point chevron alone
+opens earlier episodes. Explicit Replay atomically clears Core Data completion
+and progress before starting from zero. Automatic restore and refresh still
+exclude completed episodes, so same-hour relaunch does not replay them.
+
+- The new completed-episode selection regression failed before implementation
+  in `/tmp/briefeed-radio-row-red-test.log` and passes after the correction.
+- Core Data replay/reset and rollback tests: 10/10 passed on the approved
+  iPhone; `/tmp/briefeed-radio-row-green-repository-test.log`.
+- Radio Home presentation tests: 11/11 passed on the approved iPhone;
+  `/tmp/briefeed-radio-row-action-green-test.log`.
+- Unified playback and restore regressions: 28/28 passed on the approved
+  iPhone; `/tmp/briefeed-radio-row-regression-tests.log`.
+- App, unit-test, and UI-test target compilation after the final ineligible
+  replay guard: `/tmp/briefeed-radio-row-expired-green-build.log`
+  (`** TEST BUILD SUCCEEDED **`). The new split-action UI test compiled but was
+  not run because the shared simulator doctor reported critical pressure with
+  rising load and only 901 MB swap free.
+- Signed product build: `/tmp/briefeed-radio-row-device-build.log`
+  (`** BUILD SUCCEEDED **`); strict signature verification passed.
+- The clean product app was installed over the existing phone build without
+  clearing user data, launched successfully, and remained present as a running
+  process. Final visual and tap-target confirmation remains owner-observed.
+
+The broader Radio playback-state suite continues to contain the unrelated
+pre-existing `directPauseNextCompletionInterruptionAndRouteSaveBeforeReturningIntent`
+failure. Both new playback-state regressions pass: explicit completed selection
+replays from zero, while an expired completed episode remains completed and is
+not reset. Evidence: `/tmp/briefeed-radio-row-expired-green-test.log`. This
+interaction correction does not claim that suite is fully green.

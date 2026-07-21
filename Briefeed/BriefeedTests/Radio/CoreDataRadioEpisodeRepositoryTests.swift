@@ -91,6 +91,52 @@ struct CoreDataRadioEpisodeRepositoryTests {
         #expect(context.hasChanges)
     }
 
+    @Test @MainActor func restartingForReplayClearsCompletionAndProgress() throws {
+        let persistence = PersistenceController(inMemory: true)
+        let context = persistence.container.viewContext
+        let feed = makeFeed(in: context, id: "feed", enabled: true)
+        let episode = makeEpisode(in: context, feed: feed, id: "episode")
+        episode.isListened = true
+        episode.listenedDate = Date(timeIntervalSince1970: 42)
+        episode.lastPosition = 1
+        try context.save()
+
+        let candidate = try CoreDataRadioEpisodeRepository(context: context).restartForReplay(
+            key: RadioEpisodeKey(feedID: "feed", episodeID: "episode")
+        )
+
+        #expect(candidate?.isCompleted == false)
+        #expect(candidate?.normalizedCoreDataProgress == 0)
+        #expect(!episode.isListened)
+        #expect(episode.listenedDate == nil)
+        #expect(episode.lastPosition == 0)
+    }
+
+    @Test @MainActor func failedReplaySaveRestoresCompletionWithoutRollingBackUnrelatedChanges() throws {
+        enum SaveError: Error { case denied }
+        let persistence = PersistenceController(inMemory: true)
+        let context = persistence.container.viewContext
+        let feed = makeFeed(in: context, id: "feed", enabled: true)
+        let episode = makeEpisode(in: context, feed: feed, id: "episode")
+        let listenedDate = Date(timeIntervalSince1970: 42)
+        episode.isListened = true
+        episode.listenedDate = listenedDate
+        episode.lastPosition = 1
+        try context.save()
+        feed.displayName = "Unsaved name"
+        let repository = CoreDataRadioEpisodeRepository(context: context, saveContext: { throw SaveError.denied })
+
+        #expect(throws: SaveError.denied) {
+            try repository.restartForReplay(key: RadioEpisodeKey(feedID: "feed", episodeID: "episode"))
+        }
+
+        #expect(episode.isListened)
+        #expect(episode.listenedDate == listenedDate)
+        #expect(episode.lastPosition == 1)
+        #expect(feed.displayName == "Unsaved name")
+        #expect(context.hasChanges)
+    }
+
     @Test @MainActor func progressCannotLowerAnAuthoritativelyCompletedRow() throws {
         let persistence = PersistenceController(inMemory: true)
         let context = persistence.container.viewContext

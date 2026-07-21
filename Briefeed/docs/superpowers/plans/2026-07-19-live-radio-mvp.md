@@ -1539,7 +1539,7 @@ Use SF Symbols `dot.radiowaves.left.and.right`, `text.page`, and `newspaper`; no
 
 - [ ] **Step 5: Implement Radio state surfaces**
 
-`RadioHomeView` renders the one-row-per-source listening list plus explicit `refreshing`, `waitingForNetwork`, `noSources`, `failed`, and true `exhausted` actions. Only exhausted uses `You're caught up`. Partial per-source failures never displace the list or create a Radio Home banner; `RadioSourceManagementView` marks each affected source with an accessible warning indicator instead.
+`RadioHomeView` renders the one-row-per-source listening list plus explicit `refreshing`, `waitingForNetwork`, `noSources`, `failed`, and true `exhausted` actions. Only exhausted uses `You're caught up`. Partial per-source failures never displace the list or create a Radio Home banner; `RadioSourceManagementView` marks each affected source with an accessible warning indicator instead. Each source row is split into a large primary Play/Pause/Resume/Replay/Retry region and an independent 44-point trailing archive chevron. Explicit replay atomically clears completion and progress before playback; automatic restore and reconciliation continue to exclude completed episodes.
 
 - [ ] **Step 6: Run navigation UI tests and visual captures**
 

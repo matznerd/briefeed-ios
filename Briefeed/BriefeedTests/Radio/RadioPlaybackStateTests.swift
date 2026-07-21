@@ -130,6 +130,50 @@ struct RadioPlaybackStateTests {
         #expect(store.savedNow?.currentKey == selected.key)
     }
 
+    @Test func explicitlySelectingACompletedEpisodeReplaysItFromTheBeginning() async {
+        let completed = RadioEpisodeCandidate(
+            key: .init(feedID: "replay-feed", episodeID: "completed"),
+            originalPlaybackURL: URL(string: "https://example.com/replay.mp3")!,
+            canonicalEnclosureURL: "https://example.com/replay.mp3",
+            title: "Replay me", sourceName: "Replay", publicationDate: now,
+            durationSeconds: 300, normalizedCoreDataProgress: 1, isCompleted: true,
+            sourcePriority: 0, sourceFrequency: .daily
+        )
+        let repository = CompletionRepository(candidates: [completed])
+        let coordinator = make(store: FakeRadioSessionStore(), repository: repository)
+        _ = await coordinator.restore(autoplayEnabled: false)
+
+        let intent = coordinator.selectEpisode(completed.key)
+        let request: RadioPlaybackRequest? = if case .play(let request)? = intent {
+            request
+        } else {
+            nil
+        }
+
+        #expect(request?.key == completed.key)
+        #expect(request?.positionSeconds == 0)
+        #expect(repository.replayAttempts == [completed.key])
+    }
+
+    @Test func expiredCompletedEpisodeIsNotResetWhenReplayCannotStart() async {
+        let completed = RadioEpisodeCandidate(
+            key: .init(feedID: "replay-feed", episodeID: "expired"),
+            originalPlaybackURL: URL(string: "https://example.com/expired.mp3")!,
+            canonicalEnclosureURL: "https://example.com/expired.mp3",
+            title: "Expired", sourceName: "Replay",
+            publicationDate: now.addingTimeInterval(-8 * 24 * 60 * 60),
+            durationSeconds: 300, normalizedCoreDataProgress: 1, isCompleted: true,
+            sourcePriority: 0, sourceFrequency: .daily
+        )
+        let repository = CompletionRepository(candidates: [completed])
+        let coordinator = make(store: FakeRadioSessionStore(), repository: repository)
+        _ = await coordinator.restore(autoplayEnabled: false)
+
+        #expect(coordinator.selectEpisode(completed.key) == nil)
+        #expect(repository.replayAttempts.isEmpty)
+        #expect(repository.values.first?.isCompleted == true)
+    }
+
     @Test func queueingAnArchiveEpisodePersistsItAtTheDeferredTail() async {
         let current = candidate("current")
         let archive = RadioEpisodeCandidate(
@@ -710,6 +754,7 @@ final class CompletionRepository: RadioEpisodeRepository {
     private let onProgress: () -> Void
 
     var completionAttempts: [RadioEpisodeKey] = []
+    var replayAttempts: [RadioEpisodeKey] = []
     private let onCompletion: () -> Void
 
     init(
@@ -744,6 +789,20 @@ final class CompletionRepository: RadioEpisodeRepository {
                 isCompleted: true, sourcePriority: value.sourcePriority, sourceFrequency: value.sourceFrequency
             )
         }
+    }
+    func restartForReplay(key: RadioEpisodeKey) throws -> RadioEpisodeCandidate? {
+        replayAttempts.append(key)
+        values = values.map { value in
+            guard value.key == key else { return value }
+            return RadioEpisodeCandidate(
+                key: value.key, originalPlaybackURL: value.originalPlaybackURL,
+                canonicalEnclosureURL: value.canonicalEnclosureURL, title: value.title,
+                sourceName: value.sourceName, publicationDate: value.publicationDate,
+                durationSeconds: value.durationSeconds, normalizedCoreDataProgress: 0,
+                isCompleted: false, sourcePriority: value.sourcePriority, sourceFrequency: value.sourceFrequency
+            )
+        }
+        return values.first { $0.key == key }
     }
 }
 

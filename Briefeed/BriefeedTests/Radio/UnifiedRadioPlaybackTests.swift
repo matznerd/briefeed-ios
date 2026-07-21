@@ -480,4 +480,7 @@ final class RecordingRadioRepository: RadioEpisodeRepository {
     func candidate(for key: RadioEpisodeKey) throws -> RadioEpisodeCandidate? { values.first { $0.key == key } }
     func saveProgress(key: RadioEpisodeKey, seconds: TimeInterval, duration: TimeInterval?) throws { progress.append((key, seconds)) }
     func markCompleted(key: RadioEpisodeKey, at date: Date) throws { completed.append(key) }
+    func restartForReplay(key: RadioEpisodeKey) throws -> RadioEpisodeCandidate? {
+        values.first { $0.key == key }
+    }
 }

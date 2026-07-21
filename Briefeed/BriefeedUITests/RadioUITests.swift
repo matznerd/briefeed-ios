@@ -206,9 +206,9 @@ final class RadioUITests: XCTestCase {
     func testSourceArchiveExposesEarlierEpisodesAndManualQueueing() throws {
         app.launch()
 
-        let npr = app.buttons["radio.episode.fixture-npr.fixture-partial"]
-        XCTAssertTrue(npr.waitForExistence(timeout: 5))
-        npr.tap()
+        let sourceEpisodes = app.buttons["radio.sourceEpisodes.fixture-npr"]
+        XCTAssertTrue(sourceEpisodes.waitForExistence(timeout: 5))
+        sourceEpisodes.tap()
 
         XCTAssertTrue(app.otherElements["radio.sourceArchive"].waitForExistence(timeout: 3))
         let options = app.buttons["radio.archiveOptions.fixture-npr.fixture-duplicate-guid"]
@@ -220,6 +220,23 @@ final class RadioUITests: XCTestCase {
         XCTAssertTrue(playLater.waitForExistence(timeout: 2))
         playLater.tap()
         XCTAssertTrue(app.staticTexts["Queued for later"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testRadioRowControlsPlaybackWhileTrailingButtonOpensArchive() throws {
+        app.launch()
+
+        let npr = app.buttons["radio.episode.fixture-npr.fixture-partial"]
+        XCTAssertTrue(npr.waitForExistence(timeout: 5))
+        XCTAssertTrue(npr.label.hasPrefix("Resume"))
+        npr.tap()
+        XCTAssertTrue(waitForLabel("Pause", on: app.buttons["miniPlayer.playPause"]))
+        XCTAssertFalse(app.otherElements["radio.sourceArchive"].exists)
+
+        let sourceEpisodes = app.buttons["radio.sourceEpisodes.fixture-npr"]
+        XCTAssertTrue(sourceEpisodes.isHittable)
+        sourceEpisodes.tap()
+        XCTAssertTrue(app.otherElements["radio.sourceArchive"].waitForExistence(timeout: 3))
     }
 
     @MainActor

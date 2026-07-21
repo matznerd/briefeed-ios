@@ -14,6 +14,34 @@ enum RadioPlaylistStatus: Equatable {
     case failed
 }
 
+enum RadioRowPrimaryAction: Equatable {
+    case play
+    case pause
+    case resume
+    case replay
+    case retry
+
+    var systemImage: String {
+        switch self {
+        case .play: "play.circle.fill"
+        case .pause: "pause.circle.fill"
+        case .resume: "play.circle.fill"
+        case .replay: "arrow.counterclockwise.circle.fill"
+        case .retry: "arrow.clockwise.circle.fill"
+        }
+    }
+
+    var accessibilityVerb: String {
+        switch self {
+        case .play: "Play"
+        case .pause: "Pause"
+        case .resume: "Resume"
+        case .replay: "Replay"
+        case .retry: "Retry"
+        }
+    }
+}
+
 struct RadioPlaylistItem: Identifiable, Equatable {
     var id: RadioEpisodeKey { candidate.key }
     let candidate: RadioEpisodeCandidate
@@ -116,6 +144,20 @@ enum RadioHomePresentation {
         activeMode == .radio && isPlaying ? "Pause Radio" : "Play Radio"
     }
 
+    static func primaryAction(
+        for item: RadioPlaylistItem,
+        activeMode: ActivePlaybackMode,
+        isPlaying: Bool
+    ) -> RadioRowPrimaryAction {
+        if item.isCurrent, activeMode == .radio, isPlaying { return .pause }
+        switch item.status {
+        case .listened: return .replay
+        case .inProgress: return .resume
+        case .failed: return .retry
+        case .upNext, .latest: return .play
+        }
+    }
+
     static func failureRecovery(for failure: RadioFailure) -> RadioFailureRecoveryAction {
         switch failure {
         case .allSourcesUnavailable:
@@ -127,13 +169,16 @@ enum RadioHomePresentation {
 }
 
 struct RadioHomeView: View {
-    private struct SourceRoute: Hashable {
+    private struct SourceRoute: Hashable, Identifiable {
         let feedID: String
         let sourceName: String
+
+        var id: String { feedID }
     }
 
     @EnvironmentObject private var audioPlayerViewModel: AudioPlayerViewModelV2
     @State private var showingAddSource = false
+    @State private var selectedSourceRoute: SourceRoute?
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \RSSEpisode.pubDate, ascending: false)],
         predicate: NSPredicate(format: "feed.isEnabled == YES"),
@@ -162,7 +207,7 @@ struct RadioHomeView: View {
             .listStyle(.plain)
             .navigationTitle("Radio")
             .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(for: SourceRoute.self) { route in
+            .navigationDestination(item: $selectedSourceRoute) { route in
                 RadioSourceEpisodesView(
                     sourceName: route.sourceName,
                     episodes: sourceCandidates(for: route.feedID)
@@ -188,10 +233,6 @@ struct RadioHomeView: View {
         #endif
     }
 
-    private var isRadioActivelyPlaying: Bool {
-        audioPlayerViewModel.activeMode == .radio && audioPlayerViewModel.isPlaying
-    }
-
     private var playlistItems: [RadioPlaylistItem] {
         RadioHomePresentation.playlistItems(
             candidates: enabledEpisodes.compactMap { RadioEpisodeCandidate(episode: $0) },
@@ -212,47 +253,77 @@ struct RadioHomeView: View {
     }
 
     private func playlistRow(_ item: RadioPlaylistItem) -> some View {
-        NavigationLink(value: SourceRoute(
-            feedID: item.candidate.key.feedID,
-            sourceName: item.candidate.sourceName
-        )) {
-            HStack(spacing: 12) {
-                Image(systemName: playlistIcon(for: item))
-                    .font(.system(.body, weight: .semibold))
-                    .foregroundStyle(playlistTint(for: item))
-                    .frame(width: 30)
+        let action = RadioHomePresentation.primaryAction(
+            for: item,
+            activeMode: audioPlayerViewModel.activeMode,
+            isPlaying: audioPlayerViewModel.isPlaying
+        )
+        return HStack(spacing: 0) {
+            Button {
+                perform(action, for: item)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: action.systemImage)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(action == .retry ? Color.orange : Color.briefeedRed)
+                        .frame(width: 44, height: 44)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(RadioHomePresentation.displayTitle(for: item.candidate))
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-                        .accessibilityIdentifier(AccessibilityID.Radio.episodeTitle(item.candidate.key))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(RadioHomePresentation.displayTitle(for: item.candidate))
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                            .lineLimit(2)
+                            .accessibilityIdentifier(AccessibilityID.Radio.episodeTitle(item.candidate.key))
 
-                    Text(sourceSummary(for: item))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                        Text(sourceSummary(for: item))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
 
-                    Text(playlistStatusText(for: item))
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(playlistTint(for: item))
-                        .accessibilityIdentifier(AccessibilityID.Radio.episodeState(item.candidate.key))
+                        Text(playlistStatusText(for: item))
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(playlistTint(for: item))
+                            .accessibilityIdentifier(AccessibilityID.Radio.episodeState(item.candidate.key))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                if item.isCurrent {
-                    Image(systemName: isRadioActivelyPlaying ? "waveform" : "pause.circle")
-                        .foregroundStyle(Color.briefeedRed)
-                        .accessibilityLabel(isRadioActivelyPlaying ? "Playing" : "Current episode")
-                        .accessibilityIdentifier(AccessibilityID.Radio.currentTitle)
-                }
+                .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .padding(.vertical, 5)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(action.accessibilityVerb) \(RadioHomePresentation.displayTitle(for: item.candidate))")
+            .accessibilityValue(playlistStatusText(for: item))
+            .accessibilityIdentifier(AccessibilityID.Radio.episode(item.candidate.key))
+
+            Button {
+                selectedSourceRoute = SourceRoute(
+                    feedID: item.candidate.key.feedID,
+                    sourceName: item.candidate.sourceName
+                )
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Episodes for \(RadioHomePresentation.sourceIdentity(for: item.candidate))")
+            .accessibilityIdentifier(AccessibilityID.Radio.sourceEpisodes(item.candidate.key.feedID))
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier(AccessibilityID.Radio.episode(item.candidate.key))
+        .padding(.vertical, 5)
+    }
+
+    private func perform(_ action: RadioRowPrimaryAction, for item: RadioPlaylistItem) {
+        switch action {
+        case .pause:
+            audioPlayerViewModel.pause()
+        case .retry:
+            Task { await audioPlayerViewModel.retryRadio() }
+        case .play, .resume, .replay:
+            Task { await audioPlayerViewModel.playRadioEpisode(item.candidate.key) }
+        }
     }
 
     private func sourceCandidates(for feedID: String) -> [RadioEpisodeCandidate] {
@@ -278,15 +349,6 @@ struct RadioHomeView: View {
         return item.earlierEpisodeCount > 0
             ? "\(item.candidate.sourceName) · \(published) · \(archive)"
             : "\(item.candidate.sourceName) · \(published)"
-    }
-
-    private func playlistIcon(for item: RadioPlaylistItem) -> String {
-        switch item.status {
-        case .listened: "checkmark.circle.fill"
-        case .inProgress: "circle.lefthalf.filled"
-        case .failed: "exclamationmark.circle.fill"
-        case .upNext, .latest: item.isCurrent ? "dot.radiowaves.left.and.right" : "radio"
-        }
     }
 
     private func playlistTint(for item: RadioPlaylistItem) -> Color {
@@ -525,7 +587,6 @@ private struct RadioSourceEpisodesView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(episode.isCompleted)
             .accessibilityIdentifier(AccessibilityID.Radio.archivePlay(episode.key))
 
             Menu {
@@ -546,7 +607,6 @@ private struct RadioSourceEpisodesView: View {
                     .font(.title3)
                     .frame(width: 44, height: 44)
             }
-            .disabled(episode.isCompleted)
             .accessibilityLabel("Options for \(episode.title)")
             .accessibilityIdentifier(AccessibilityID.Radio.archiveOptions(episode.key))
         }

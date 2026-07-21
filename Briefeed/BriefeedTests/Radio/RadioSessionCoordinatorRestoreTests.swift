@@ -193,14 +193,15 @@ struct RadioSessionCoordinatorRestoreTests {
         #expect(store.savedNow?.currentKey == selected.key)
     }
 
-    @Test func selectingCompletedMissingOrExpiredEpisodeIsNoOp() async {
+    @Test func selectingMissingOrExpiredEpisodeIsNoOp() async {
         let current = candidate("npr", "one")
-        let completed = candidate("bbc", "done", completed: true)
-        let expired = candidate("bbc", "old", date: now.addingTimeInterval(-7_201))
-        let coordinator = makeCoordinator(store: FakeRadioSessionStore(snapshot: session([entry(current.key)], current: current.key)), candidates: [current, completed, expired])
+        let expired = candidate("bbc", "old", date: now.addingTimeInterval(-86_401))
+        let coordinator = makeCoordinator(
+            store: FakeRadioSessionStore(snapshot: session([entry(current.key)], current: current.key)),
+            candidates: [current, expired]
+        )
         _ = await coordinator.restore(autoplayEnabled: false)
 
-        #expect(coordinator.selectEpisode(completed.key) == nil)
         #expect(coordinator.selectEpisode(expired.key) == nil)
         #expect(coordinator.selectEpisode(key("missing", "x")) == nil)
         #expect(coordinator.currentKey == current.key)
@@ -359,6 +360,9 @@ final class FakeRadioEpisodeRepository: RadioEpisodeRepository {
     func candidate(for key: RadioEpisodeKey) throws -> RadioEpisodeCandidate? { if let readError { throw readError }; return values.first { $0.key == key } }
     func saveProgress(key: RadioEpisodeKey, seconds: TimeInterval, duration: TimeInterval?) throws {}
     func markCompleted(key: RadioEpisodeKey, at date: Date) throws {}
+    func restartForReplay(key: RadioEpisodeKey) throws -> RadioEpisodeCandidate? {
+        values.first { $0.key == key }
+    }
 }
 
 private enum FakeError: LocalizedError { case failed; var errorDescription: String? { "test failure" } }

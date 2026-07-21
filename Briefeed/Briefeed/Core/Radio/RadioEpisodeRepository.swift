@@ -98,6 +98,7 @@ protocol RadioEpisodeRepository: AnyObject {
     func candidate(for key: RadioEpisodeKey) throws -> RadioEpisodeCandidate?
     func saveProgress(key: RadioEpisodeKey, seconds: TimeInterval, duration: TimeInterval?) throws
     func markCompleted(key: RadioEpisodeKey, at date: Date) throws
+    func restartForReplay(key: RadioEpisodeKey) throws -> RadioEpisodeCandidate?
 }
 
 @MainActor
@@ -138,6 +139,25 @@ final class CoreDataRadioEpisodeRepository: RadioEpisodeRepository {
         episode.lastPosition = 1
         do {
             try saveContext()
+        } catch {
+            episode.isListened = previousIsListened
+            episode.listenedDate = previousListenedDate
+            episode.lastPosition = previousLastPosition
+            throw error
+        }
+    }
+
+    func restartForReplay(key: RadioEpisodeKey) throws -> RadioEpisodeCandidate? {
+        guard let episode = try episode(for: key) else { return nil }
+        let previousIsListened = episode.isListened
+        let previousListenedDate = episode.listenedDate
+        let previousLastPosition = episode.lastPosition
+        episode.isListened = false
+        episode.listenedDate = nil
+        episode.lastPosition = 0
+        do {
+            try saveContext()
+            return RadioEpisodeCandidate(episode: episode)
         } catch {
             episode.isListened = previousIsListened
             episode.listenedDate = previousListenedDate

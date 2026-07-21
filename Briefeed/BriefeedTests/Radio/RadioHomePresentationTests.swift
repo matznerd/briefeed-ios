@@ -10,6 +10,53 @@ struct RadioHomePresentationTests {
         #expect(RadioHomePresentation.currentControlLabel(activeMode: .radio, isPlaying: false) == "Play Radio")
     }
 
+    @Test func rowPrimaryActionsMakePlaybackAndArchiveRolesUnambiguous() {
+        let episode = candidate(
+            feedID: "source",
+            episodeID: "latest",
+            title: "Latest",
+            publishedAt: Date(),
+            priority: 0
+        )
+        func item(_ status: RadioPlaylistStatus, current: Bool = false) -> RadioPlaylistItem {
+            RadioPlaylistItem(
+                candidate: episode,
+                entry: nil,
+                isCurrent: current,
+                status: status,
+                earlierEpisodeCount: 3
+            )
+        }
+
+        #expect(RadioHomePresentation.primaryAction(
+            for: item(.upNext, current: true),
+            activeMode: .radio,
+            isPlaying: true
+        ) == .pause)
+        #expect(RadioHomePresentation.primaryAction(
+            for: item(.inProgress(fraction: 0.4)),
+            activeMode: .none,
+            isPlaying: false
+        ) == .resume)
+        #expect(RadioHomePresentation.primaryAction(
+            for: item(.listened),
+            activeMode: .none,
+            isPlaying: false
+        ) == .replay)
+        #expect(RadioHomePresentation.primaryAction(
+            for: item(.latest),
+            activeMode: .none,
+            isPlaying: false
+        ) == .play)
+        #expect(RadioHomePresentation.primaryAction(
+            for: item(.failed),
+            activeMode: .none,
+            isPlaying: false
+        ) == .retry)
+        #expect(RadioRowPrimaryAction.play.systemImage == "play.circle.fill")
+        #expect(RadioRowPrimaryAction.replay.accessibilityVerb == "Replay")
+    }
+
     @Test func allSourceFailureRefreshesSourcesWhileTransportFailuresRetryPlayback() {
         #expect(RadioHomePresentation.failureRecovery(for: .allSourcesUnavailable) == .refreshSources)
         #expect(RadioHomePresentation.failureRecovery(for: .playback("failed")) == .retryPlayback)
