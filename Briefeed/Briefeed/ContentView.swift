@@ -11,7 +11,6 @@ struct ContentView: View {
     @State private var selectedTab: AppTab = .radio
     @State private var showingSettings = false
     @EnvironmentObject private var userDefaultsManager: UserDefaultsManager
-    @EnvironmentObject private var audioPlayerViewModel: AudioPlayerViewModelV2
     @ObservedObject private var statusService = ProcessingStatusService.shared
 
     var body: some View {
@@ -24,24 +23,15 @@ struct ContentView: View {
             }
 
             ZStack(alignment: .topTrailing) {
-                ZStack {
-                    RadioHomeView()
-                        .opacity(selectedTab == .radio ? 1 : 0)
-                        .allowsHitTesting(selectedTab == .radio)
-                        .accessibilityHidden(selectedTab != .radio)
-                        .zIndex(selectedTab == .radio ? 1 : 0)
-
-                    FilteredBriefView()
-                        .opacity(selectedTab == .brief ? 1 : 0)
-                        .allowsHitTesting(selectedTab == .brief)
-                        .accessibilityHidden(selectedTab != .brief)
-                        .zIndex(selectedTab == .brief ? 1 : 0)
-
-                    FeedView()
-                        .opacity(selectedTab == .feed ? 1 : 0)
-                        .allowsHitTesting(selectedTab == .feed)
-                        .accessibilityHidden(selectedTab != .feed)
-                        .zIndex(selectedTab == .feed ? 1 : 0)
+                Group {
+                    switch selectedTab {
+                    case .radio:
+                        RadioHomeView()
+                    case .brief:
+                        FilteredBriefView()
+                    case .feed:
+                        FeedView()
+                    }
                 }
                 .tint(.briefeedRed)
 
@@ -51,10 +41,7 @@ struct ContentView: View {
                     .zIndex(2)
             }
 
-            AppBottomChrome(
-                selection: $selectedTab,
-                showsMiniPlayer: shouldShowMiniPlayer
-            )
+            AppBottomChromeHost(selection: $selectedTab)
         }
         .ignoresSafeArea(.keyboard)
         .sheet(isPresented: $showingSettings) {
@@ -69,18 +56,26 @@ struct ContentView: View {
         }
     }
 
-    private var shouldShowMiniPlayer: Bool {
-        !audioPlayerViewModel.radioEntries.isEmpty
-            || !audioPlayerViewModel.queueItems.isEmpty
-            || audioPlayerViewModel.radioState == .exhausted
-    }
-
     private func applyThemePreference() {
         if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
             windowScene.windows.forEach { window in
                 window.overrideUserInterfaceStyle = userDefaultsManager.isDarkMode ? .dark : .light
             }
         }
+    }
+}
+
+private struct AppBottomChromeHost: View {
+    @Binding var selection: AppTab
+    @EnvironmentObject private var audioPlayerViewModel: AudioPlayerViewModelV2
+
+    var body: some View {
+        AppBottomChrome(
+            selection: $selection,
+            showsMiniPlayer: !audioPlayerViewModel.radioEntries.isEmpty
+                || !audioPlayerViewModel.queueItems.isEmpty
+                || audioPlayerViewModel.radioState == .exhausted
+        )
     }
 }
 

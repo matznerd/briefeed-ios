@@ -317,12 +317,11 @@ root cause was architectural: `ContentView` still embedded the three sections
 in a native `TabView` and relied on `.toolbar(.hidden, for: .tabBar)`. iOS 26
 rendered that system bar after the lower chrome moved into the root layout.
 
-The correction removes the native tab container. Radio, Brief, and Feed now
-remain alive in a selection-controlled root `ZStack`, and only the selected
-section is visible, hittable, and exposed to accessibility. The custom rail is
-therefore the sole menu by construction. `RadioUITests` now asserts that exactly
-one custom rail exists and that no hittable native tab bar exists. The signed
-phone build and installation evidence for this correction is:
+The correction removes the native tab container. The root mounts only the
+selected Radio, Brief, or Feed section, and the custom rail is therefore the
+sole menu by construction. `RadioUITests` now asserts that exactly one custom
+rail exists and that no hittable native tab bar exists. The signed phone build
+and installation evidence for this correction is:
 
 - Signed device build: `/tmp/briefeed-radio-single-rail-device-v2.log`
   (`** BUILD SUCCEEDED **`).
@@ -341,3 +340,40 @@ The simulator runtime assertion is not claimed for this correction. The shared
 host remained at warning-level scheduler pressure with no booted simulators, so
 starting a new simulator was intentionally avoided. The owner is performing the
 final visual confirmation on the installed phone.
+
+## July 20 Playback CPU Termination Correction
+
+The approved phone later produced seven `Briefeed.cpu_resource_fatal` reports.
+The two fresh reports at 10:08 PM and 10:14 PM record iOS killing the process
+after 48 seconds of CPU in 54 seconds (89 percent average) and 48 seconds in 49
+seconds (99 percent average). The report UUID matched the installed Debug dylib.
+Symbolication placed the hot application frames in `FilteredBriefView`, queue
+conversion, `RadioHomeView.playlistRow`, and source-candidate construction under
+SwiftUI/AttributeGraph. No hot frame implicated Gemini TTS or FluidAudio.
+
+The fix mounts only the selected application root, isolates mini-player
+observation below that root, publishes display time at most once per whole
+second, moves Radio entry publication behind the five-second durable-progress
+bucket, and derives source-archive candidates only when the archive opens.
+Exact progress is still force-saved on user and lifecycle transitions.
+
+- Focused presentation tests: 19/19 passed on the approved iPhone;
+  `/tmp/briefeed-radio-cpu-green-player-test.log`.
+- Radio progress publication/persistence regression: passed on the approved
+  iPhone; `/tmp/briefeed-radio-cpu-green-state-test.log`. The complete state
+  suite remains 31/32 because the unrelated pre-existing
+  `directPauseNextCompletionInterruptionAndRouteSaveBeforeReturningIntent`
+  assertion still fails.
+- Signed test-target build: `/tmp/briefeed-radio-cpu-green-build2.log`
+  (`** TEST BUILD SUCCEEDED **`).
+- Signed product build: `/tmp/briefeed-radio-cpu-device-build.log`
+  (`** BUILD SUCCEEDED **`); strict signature verification passed.
+- Physical install and launch: `/tmp/briefeed-radio-cpu-device-install.log` and
+  `/tmp/briefeed-radio-cpu-device-launch.log`.
+- Post-fix smoke: the installed process remained alive beyond 80 seconds, past
+  the previous kill window, and the phone reported no crash newer than 10:14 PM.
+
+No simulator was booted for this correction because the shared app-testing
+doctor reported critical swap pressure. Duplicate low-level 0.1-second progress
+timers remain follow-up GitHub issue #20; they are not evidence that this fixed
+build has passed a formal energy benchmark.

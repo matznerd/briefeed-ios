@@ -626,7 +626,9 @@ enum AppTab: Hashable {
 }
 ```
 
-`ContentView` owns the selected `AppTab`, defaulting to `.radio`. Keep the three root sections alive in a selection-controlled `ZStack`; only the selected section is visible, hittable, and exposed to accessibility. Do not use a native `TabView`: its system tab bar can reappear on iOS 26 even when hidden and duplicate the custom rail. Place the custom lower chrome after the flexible root content in the vertical layout rather than overlaying it or using a fixed offset. This gives the list a hard visible boundary above the chrome while preserving each section's state.
+`ContentView` owns the selected `AppTab`, defaulting to `.radio`, and mounts only the selected root through a `switch`. Do not retain hidden Radio, Brief, and Feed trees: high-frequency audio publications can otherwise invalidate all three roots and exceed iOS CPU limits. Durable playback and queue state lives in shared coordinators and services; root-local presentation state may reset when switching tabs. Do not use a native `TabView`: its system tab bar can reappear on iOS 26 even when hidden and duplicate the custom rail. Place the custom lower chrome after the flexible root content in the vertical layout rather than overlaying it or using a fixed offset. This gives the list a hard visible boundary above the chrome.
+
+The lower chrome is isolated in a small host view that observes player state. Playback time exposed to SwiftUI updates at most once per displayed second. Radio session entry publications and debounced durable progress writes occur at five-second boundaries, while pause, seek completion, Next, background, interruption, route loss, and termination force-save the exact position. Source-archive episode candidates are derived only after navigation into an archive, not while every Radio Home row is rendered.
 
 The lower chrome order is:
 

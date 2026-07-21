@@ -100,6 +100,7 @@ final class AudioPlayerViewModelV2: ObservableObject {
             .assign(to: &$isPlaying)
         
         unifiedPlayer.$currentTime
+            .removeDuplicates(by: Self.isSameDisplayedSecond)
             .assign(to: &$currentTime)
         
         unifiedPlayer.$duration
@@ -145,13 +146,19 @@ final class AudioPlayerViewModelV2: ObservableObject {
 
         unifiedPlayer.$generationPhase
             .assign(to: &$generationPhase)
-        
-        // Calculate progress
-        Publishers.CombineLatest(unifiedPlayer.$currentTime, unifiedPlayer.$duration)
+
+        Publishers.CombineLatest($currentTime, $duration)
             .map { currentTime, duration in
-                duration > 0 ? Float(currentTime / duration) : 0
+                guard currentTime.isFinite, duration.isFinite, duration > 0 else { return 0 }
+                return Float(min(max(currentTime / duration, 0), 1))
             }
+            .removeDuplicates()
             .assign(to: &$progress)
+    }
+
+    private static func isSameDisplayedSecond(_ previous: TimeInterval, _ next: TimeInterval) -> Bool {
+        guard previous.isFinite, next.isFinite else { return previous == next }
+        return Int(previous.rounded(.down)) == Int(next.rounded(.down))
     }
 
     private func refreshNowPlaying() {

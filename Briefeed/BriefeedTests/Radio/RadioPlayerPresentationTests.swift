@@ -16,6 +16,28 @@ struct RadioPlayerPresentationTests {
         #expect(PlayerPresentationPolicy.showsPrevious(for: .brief))
     }
 
+    @Test func playbackTimePublishesAtMostOncePerDisplayedSecond() async throws {
+        let setup = await makeRestoredPlayer()
+        await setup.viewModel.play()
+        let playbackID = try #require(setup.transport.lastPlaybackID)
+        var publishedTimes: [TimeInterval] = []
+        let cancellable = setup.viewModel.$currentTime
+            .dropFirst()
+            .sink { publishedTimes.append($0) }
+
+        for time in [0.1, 0.2, 0.9, 1.0] {
+            setup.player.audioProgressUpdated(
+                id: playbackID,
+                progress: Float(time / 300),
+                currentTime: time,
+                duration: 300
+            )
+        }
+
+        #expect(publishedTimes == [1])
+        withExtendedLifetime(cancellable) {}
+    }
+
     @Test func speedMenuUsesCanonicalOptionsAndPersistsSelection() {
         #expect(PlayerPresentationPolicy.speedOptions == PlaybackSpeedPolicy.supported)
         #expect(PlayerPresentationPolicy.speedOptions == [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3])

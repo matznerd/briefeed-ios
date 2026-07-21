@@ -127,6 +127,11 @@ enum RadioHomePresentation {
 }
 
 struct RadioHomeView: View {
+    private struct SourceRoute: Hashable {
+        let feedID: String
+        let sourceName: String
+    }
+
     @EnvironmentObject private var audioPlayerViewModel: AudioPlayerViewModelV2
     @State private var showingAddSource = false
     @FetchRequest(
@@ -157,6 +162,12 @@ struct RadioHomeView: View {
             .listStyle(.plain)
             .navigationTitle("Radio")
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(for: SourceRoute.self) { route in
+                RadioSourceEpisodesView(
+                    sourceName: route.sourceName,
+                    episodes: sourceCandidates(for: route.feedID)
+                )
+            }
             .refreshable {
                 await audioPlayerViewModel.refreshRadio()
             }
@@ -201,12 +212,10 @@ struct RadioHomeView: View {
     }
 
     private func playlistRow(_ item: RadioPlaylistItem) -> some View {
-        NavigationLink {
-            RadioSourceEpisodesView(
-                sourceName: item.candidate.sourceName,
-                episodes: sourceCandidates(for: item.candidate.key.feedID)
-            )
-        } label: {
+        NavigationLink(value: SourceRoute(
+            feedID: item.candidate.key.feedID,
+            sourceName: item.candidate.sourceName
+        )) {
             HStack(spacing: 12) {
                 Image(systemName: playlistIcon(for: item))
                     .font(.system(.body, weight: .semibold))

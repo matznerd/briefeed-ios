@@ -8,19 +8,24 @@ import Testing
 struct RadioPlaybackStateTests {
     let now = Date(timeIntervalSince1970: 20_000)
 
-    @Test func progressPersistsAtRealFiveSecondBoundariesAndAlwaysUpdatesMemory() async {
+    @Test func progressPublishesAndPersistsOnlyAtFiveSecondBoundaries() async {
         let episode = candidate("one")
         let store = FakeRadioSessionStore(snapshot: session([entry(episode.key)], current: episode.key))
         let repository = CompletionRepository(candidates: [episode])
         let coordinator = make(store: store, repository: repository)
         _ = await coordinator.restore(autoplayEnabled: false)
         store.resetCalls()
+        var entryPublicationCount = 0
+        let entriesCancellable = coordinator.entriesPublisher
+            .dropFirst()
+            .sink { _ in entryPublicationCount += 1 }
 
         coordinator.recordProgress(for: episode.key, positionSeconds: 1, duration: 100)
         coordinator.recordProgress(for: episode.key, positionSeconds: 4.9, duration: 100)
         #expect(repository.progressWrites.isEmpty)
         #expect(store.debouncedSaves.isEmpty)
-        #expect(coordinator.entries[0].positionSeconds == 4.9)
+        #expect(coordinator.entries[0].positionSeconds == 0)
+        #expect(entryPublicationCount == 0)
 
         coordinator.recordProgress(for: episode.key, positionSeconds: 5, duration: 100)
         coordinator.recordProgress(for: episode.key, positionSeconds: 9.9, duration: 100)
@@ -28,6 +33,8 @@ struct RadioPlaybackStateTests {
         #expect(repository.progressWrites.map(\.seconds) == [5, 10])
         #expect(store.debouncedSaves.count == 2)
         #expect(coordinator.entries[0].positionSeconds == 10)
+        #expect(entryPublicationCount == 2)
+        withExtendedLifetime(entriesCancellable) {}
     }
 
     @Test func nonFiniteProgressIsSanitizedBeforeBucketConversion() async {

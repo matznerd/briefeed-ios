@@ -488,13 +488,13 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
     func recordProgress(for key: RadioEpisodeKey, positionSeconds: TimeInterval, duration: TimeInterval?) {
         guard key == currentKey else { return }
         let sanitizedPosition = validPosition(positionSeconds)
-        guard updateCurrentPosition(sanitizedPosition) else { return }
         let bucket = Int(sanitizedPosition / 5)
         if lastProgressBucket == nil {
             let initial = entries.first(where: { $0.key == key }).map { Int($0.positionSeconds / 5) } ?? bucket
             lastProgressBucket = (key, initial)
         }
         guard lastProgressBucket?.key != key || lastProgressBucket?.bucket != bucket else { return }
+        guard updateCurrentPosition(sanitizedPosition) else { return }
         lastProgressBucket = (key, bucket)
         store.saveDebounced(currentSession())
         _ = persistProgress(positionSeconds: sanitizedPosition, duration: duration)
