@@ -31,5 +31,5 @@ Plan: `Briefeed/docs/superpowers/plans/2026-07-21-on-device-timed-transcript-spi
 Task 1: complete (`1c3b183..d3ddb80`; review approved; compile green; focused runtime unexecuted because owned simulator clone returned infrastructure-pressure exit 75)
 Task 2: complete (`d3ddb80..fb08093`; review approved; compile green; normalizer tests 2/2; Apple runtime proof deferred to Task 4)
 Task 3: complete (`a21ef7c..94a8f5e`; review repair fixed DEBUG boundary and test expectation; review approved; compile green; focused runtime refused pre-execution at safety exit 75)
-Task 4: pending
+Task 4: complete (`c9ac119..02be260`; cancellation timeout review repair; review approved; 161-word AIFF fixture and compile green; explicit probe refused pre-execution at safety exit 75)
 Task 5: pending
