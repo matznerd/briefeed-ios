@@ -32,6 +32,7 @@ struct PodcastTranscriptionProbe: Sendable {
         self.operatingSystemVersion = operatingSystemVersion
     }
 
+    #if DEBUG
     func run(
         fileURL: URL,
         referenceText: String?,
@@ -61,6 +62,7 @@ struct PodcastTranscriptionProbe: Sendable {
         try encoder.encode(receipt).write(to: receiptURL, options: .atomic)
         return receipt
     }
+    #endif
 
     private static func fingerprint(for fileURL: URL) throws -> String {
         SHA256.hash(data: try Data(contentsOf: fileURL))
