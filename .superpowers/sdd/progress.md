@@ -23,3 +23,13 @@ Task 11 Brief interoperability re-review: complete (restored Brief position, cen
 Task 12: implementation complete pending review (strict RED captured; build-for-testing and Release builds green; deterministic fixture/reset/relaunch/state/smoke proof authored; runtime lanes refused because Simulator.app is open on a foreign Protact2-owned simulator)
 Task 12 review repair: complete (all-source failures route to real source Refresh, DEBUG autoplay/refresh counters prove intent execution, smoke log capture cannot orphan background processes, direct offline/degraded file assertions added; strict RED/GREEN and Release build complete; runtime lane remains refused while Simulator.app owns a foreign device)
 Task 13: focused verification complete, release gate open (at `12ec494`: restore 17/17, lifecycle 11/11, empty state 4/4, RSS refresh 8/8, Unified playback 11/11, playback state 30/30, full Radio UI 15/15 including headless smoke, build-for-testing, Analyze, signed archive/export, and codesign verification green; focused Brief selectors passed on prior baseline `b3950b9`; broad hosted tests are not green and standalone smoke screenshots were not independently captured; CoreSimulator audio output failed with `-66681`, so every physical-device row remains open; exported IPA contains packaged Firecrawl/Gemini values and is local-test-only until #16 is cleared; no pressure override used; follow-ups #7, #9-#16 remain open as applicable)
+
+## On-Device Timed Transcript Spike
+
+Plan: `Briefeed/docs/superpowers/plans/2026-07-21-on-device-timed-transcript-spike.md`
+
+Task 1: complete (`1c3b183..d3ddb80`; review approved; compile green; focused runtime unexecuted because owned simulator clone returned infrastructure-pressure exit 75)
+Task 2: complete (`d3ddb80..fb08093`; review approved; compile green; normalizer tests 2/2; Apple runtime proof deferred to Task 4)
+Task 3: pending
+Task 4: pending
+Task 5: pending
