@@ -119,12 +119,12 @@ struct TimedTranscriptTests {
         #expect(index.activeUnit(at: 2.0) == nil)
     }
 
-    @Test(arguments: [0.5, 1.0, 2.0, 3.0])
-    func playbackRateNeverChangesMediaTimeLookup(rate: Double) throws {
+    @Test func playbackRateNeverEntersMediaTimeLookup() throws {
         let transcript = try TimedTranscript(assetFingerprint: "a", engineIdentifier: "e", engineVersion: "1", localeIdentifier: "en-US", recognizedText: "Good morning California news", audioDurationSeconds: 3, processingDurationSeconds: 1, units: units)
         let index = TimedTranscriptIndex(transcript: transcript)
-        #expect(index.activeUnit(at: 1.25)?.text == "California")
-        #expect(rate >= 0.5)
+        let simulatedPlaybackRates = [0.5, 1.0, 2.0, 3.0]
+        let selections = simulatedPlaybackRates.map { _ in index.activeUnit(at: 1.25)?.text }
+        #expect(selections == Array(repeating: "California", count: simulatedPlaybackRates.count))
     }
 }
 ```
