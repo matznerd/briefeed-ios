@@ -48,7 +48,7 @@ struct PodcastTranscriptionProbeTests {
         let receiptJSON = String(decoding: receiptData, as: UTF8.self)
         #expect(receiptJSON.contains("\"createdAt\" : \"2025-01-01T00:00:00Z\""))
         #expect(receiptJSON.range(of: "\"createdAt\"")!.lowerBound < receiptJSON.range(of: "\"schemaVersion\"")!.lowerBound)
-        #expect(receiptJSON.range(of: "\"audioDurationSeconds\"")!.lowerBound < receiptJSON.range(of: "\"assetFingerprint\"")!.lowerBound)
+        #expect(receiptJSON.range(of: "\"assetFingerprint\"")!.lowerBound < receiptJSON.range(of: "\"audioDurationSeconds\"")!.lowerBound)
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
