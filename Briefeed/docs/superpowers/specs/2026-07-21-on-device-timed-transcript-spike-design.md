@@ -1,7 +1,7 @@
 # On-Device Timed Transcript Spike Design
 
 **Date:** 2026-07-21  
-**Status:** Approved direction; written-spec review pending  
+**Status:** Approved for implementation
 **Related work:** GitHub issue #10 and `docs/research/2026-07-20-podcast-ad-skip-spike.md`
 
 ## Objective
@@ -128,6 +128,7 @@ struct TimedTranscript: Codable, Equatable, Sendable {
     let engineIdentifier: String
     let engineVersion: String
     let localeIdentifier: String
+    let recognizedText: String
     let audioDurationSeconds: TimeInterval
     let processingDurationSeconds: TimeInterval
     let units: [TimedTranscriptUnit]
@@ -150,6 +151,10 @@ Add a DEBUG-only `PodcastTranscriptionProbe` that:
 5. normalizes final results into `TimedTranscriptUnit` values;
 6. writes a JSON receipt to a temporary diagnostics directory;
 7. never mutates RSS episodes, Radio state, Core Data, or production settings.
+
+The receipt retains the complete recognized text, including any untimed runs,
+so timing coverage can be measured honestly. For the known fixture it also
+records word error rate against the checked-in reference script.
 
 The probe must not silently download a speech asset during automated tests.
 Model installation is an explicit interactive diagnostic step.
@@ -240,6 +245,7 @@ The Apple path is suitable for the production transcript slice only when:
 - at least 95 percent of recognized non-whitespace text is covered by timing
   ranges;
 - the median timed unit is no larger than four words;
+- word error rate on the generated known-script fixture is at most 20 percent;
 - visible phrase selection follows seeking without stale intermediate state;
 - human review of the known fixture finds no sustained alignment drift at 2x;
 - analysis does not interrupt or materially degrade audio playback;
