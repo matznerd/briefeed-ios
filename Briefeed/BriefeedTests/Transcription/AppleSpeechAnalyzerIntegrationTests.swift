@@ -53,7 +53,9 @@ final class AppleSpeechAnalyzerIntegrationTests: XCTestCase {
                 .first(where: { $0.pathExtension == "json" }),
             "Transcript probe did not write a diagnostic receipt"
         )
-        let receipt = try JSONDecoder().decode(
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let receipt = try decoder.decode(
             PodcastTranscriptionReceipt.self,
             from: Data(contentsOf: receiptURL)
         )

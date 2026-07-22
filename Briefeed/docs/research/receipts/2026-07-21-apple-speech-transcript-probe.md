@@ -28,13 +28,32 @@ is simulator evidence only, not physical-device evidence.
 
 ## Fixture Provenance
 
-`bash skills/app-testing/scripts/run-transcript-probe.sh` regenerated the
-rights-cleared `apple-news-fixture.aiff` before the runner guard stopped work.
-The fixture measured locally after that invocation:
+The historical `bash skills/app-testing/scripts/run-transcript-probe.sh`
+invocation attempted to generate the rights-cleared `apple-news-fixture.aiff`
+before the runner guard stopped work. It did not prove regeneration: the old
+generator wrote directly to the tracked destination, printed `Opening output
+file failed: fmt?`, and only then measured the destination. The following
+fixture measurements therefore establish that the existing fixture was
+readable, not that the attempt produced it:
 
 - Duration: `68.232834` seconds.
 - SHA-256: `8f4f67bb0b867e1346ba21de9d9c69d5329a3f35b84efa061e2de4ed19c05b5e`.
 - Format: mono AIFF, 22,050 Hz, signed 16-bit PCM.
+
+## Post-Review Generator Validation
+
+After the review fix, `bash skills/app-testing/scripts/make-transcript-fixture.sh`
+ran once, separately from the integration runner. It generated and validated the
+new candidate at
+`.apple-news-fixture.0vI6fu/apple-news-fixture.aiff` before atomically replacing
+the tracked fixture. The primary `say` command exited `0`; fallback was not
+used. The newly validated candidate and replaced fixture both measured
+`68.232834` seconds with SHA-256
+`8f4f67bb0b867e1346ba21de9d9c69d5329a3f35b84efa061e2de4ed19c05b5e`.
+The temporary directory was absent after the script exited.
+
+This is generator evidence only. It did not invoke `run-transcript-probe.sh`,
+XCTest, or Apple SpeechAnalyzer.
 
 ## Single Integration Invocation
 
