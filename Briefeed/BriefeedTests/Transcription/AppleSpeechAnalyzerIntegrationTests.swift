@@ -2,6 +2,18 @@ import Foundation
 import XCTest
 @testable import Briefeed
 
+private actor CancellationProbeCompletion {
+    private var result: Result<Void, Error>?
+
+    func record(_ result: Result<Void, Error>) {
+        self.result = result
+    }
+
+    func value() -> Result<Void, Error>? {
+        result
+    }
+}
+
 final class AppleSpeechAnalyzerIntegrationTests: XCTestCase {
     func testRightsClearedFixtureProducesTimedReceipt() async throws {
         guard #available(iOS 26.0, *) else {
@@ -71,28 +83,53 @@ final class AppleSpeechAnalyzerIntegrationTests: XCTestCase {
             extension: "aiff",
             bundle: Bundle(for: Self.self)
         )
+        let completion = CancellationProbeCompletion()
+        let cancelledTranscription = expectation(description: "Cancelled transcription finishes")
         let task = Task {
-            try await AppleSpeechAnalyzerEngine().transcribe(
-                fileURL: fixture,
-                assetFingerprint: "cancellation-probe",
-                locale: Locale(identifier: "en-US"),
-                assetPolicy: .allowDownload
-            )
+            do {
+                _ = try await AppleSpeechAnalyzerEngine().transcribe(
+                    fileURL: fixture,
+                    assetFingerprint: "cancellation-probe",
+                    locale: Locale(identifier: "en-US"),
+                    assetPolicy: .allowDownload
+                )
+                await completion.record(.success(()))
+            } catch {
+                await completion.record(.failure(error))
+            }
+            cancelledTranscription.fulfill()
         }
         try await Task.sleep(for: .milliseconds(50))
         task.cancel()
 
-        do {
-            _ = try await task.value
-            XCTFail("Cancelled transcription unexpectedly completed")
-        } catch is CancellationError {
+        // Do not await `task.value`: an uncooperative engine must not keep this
+        // test alive after the XCTest timeout has reported the failure.
+        await fulfillment(of: [cancelledTranscription], timeout: 2.0)
+
+        guard let result = await completion.value() else {
             return
-        } catch TimedTranscriptEngineError.engineUnavailable {
-            throw XCTSkip("SpeechAnalyzer is unavailable on this simulator")
-        } catch TimedTranscriptEngineError.unsupportedLocale(let locale) {
-            throw XCTSkip("SpeechAnalyzer does not support \(locale) on this simulator")
-        } catch TimedTranscriptEngineError.assetRequired(let locale) {
-            throw XCTSkip("SpeechAnalyzer model asset is unavailable for \(locale)")
+        }
+
+        switch result {
+        case .success:
+            XCTFail("Cancelled transcription unexpectedly completed")
+        case .failure(let error):
+            if error is CancellationError {
+                return
+            }
+            if let error = error as? TimedTranscriptEngineError {
+                switch error {
+                case .engineUnavailable:
+                    throw XCTSkip("SpeechAnalyzer is unavailable on this simulator")
+                case .unsupportedLocale(let locale):
+                    throw XCTSkip("SpeechAnalyzer does not support \(locale) on this simulator")
+                case .assetRequired(let locale):
+                    throw XCTSkip("SpeechAnalyzer model asset is unavailable for \(locale)")
+                default:
+                    break
+                }
+            }
+            XCTFail("Cancelled transcription failed with \(error) instead of CancellationError")
         }
     }
 
