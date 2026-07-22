@@ -58,6 +58,10 @@ FluidAudio references: [API](https://github.com/FluidInference/FluidAudio/blob/m
 
 ## Phase A: Local Transcription Probe
 
+Task 5 receipt: [Apple Speech transcript probe](receipts/2026-07-21-apple-speech-transcript-probe.md)
+(`INCONCLUSIVE`: the single allowed integration invocation exited through the
+simulator host-pressure guard before XCTest began).
+
 Build a DEBUG or integration-test-only `PodcastTranscriptionProbe`:
 
 - Input is an explicitly supplied, rights-cleared local audio fixture of 60 to
