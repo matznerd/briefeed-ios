@@ -23,6 +23,9 @@ All focused runs used `Briefeed-Codex-radio-unit-20260722-143738`
 (`8E698E75-47DC-4826-8219-A32D748A120E`), an arm64 iOS 18.6 simulator. This
 is simulator evidence only, not physical-device evidence.
 
+- Device model: not captured. The owned runner evidence exposed only the clone
+  name, UDID, architecture, and runtime, so no iPhone model is inferred.
+
 ## Fixture Provenance
 
 `bash skills/app-testing/scripts/run-transcript-probe.sh` regenerated the
