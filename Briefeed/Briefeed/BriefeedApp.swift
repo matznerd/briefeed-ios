@@ -116,12 +116,16 @@ struct BriefeedApp: App {
                 }
                 .onChange(of: scenePhase) {
                     let newPhase = scenePhase
+                    let transcriptCoordinator =
+                        RadioServiceContainer.shared.transcriptCoordinator
                     #if DEBUG
                     if AppRuntime.radioFixtureScenario != nil {
                         if newPhase == .background {
                             UnifiedAudioPlayer.shared.handleAppBackground()
+                            transcriptCoordinator?.handleBackground()
                         } else if newPhase == .active {
                             UnifiedAudioPlayer.shared.handleAppForeground()
+                            transcriptCoordinator?.handleActive()
                         }
                         return
                     }
@@ -130,8 +134,19 @@ struct BriefeedApp: App {
                     handleScenePhase(newPhase)
                     if newPhase == .active {
                         UnifiedAudioPlayer.shared.handleAppForeground()
+                        transcriptCoordinator?.handleActive()
                         Task { await startRadioServices() }
+                    } else if newPhase == .background {
+                        transcriptCoordinator?.handleBackground()
                     }
+                }
+                .onReceive(
+                    NotificationCenter.default.publisher(
+                        for: UIApplication.didReceiveMemoryWarningNotification
+                    )
+                ) { _ in
+                    RadioServiceContainer.shared.transcriptCoordinator?
+                        .handleMemoryWarning()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
                     #if DEBUG
@@ -165,6 +180,28 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         configureAppearance()
         
         return true
+    }
+
+    func application(
+        _ application: UIApplication,
+        handleEventsForBackgroundURLSession identifier: String,
+        completionHandler: @escaping () -> Void
+    ) {
+        guard identifier ==
+                RadioTranscriptBackgroundDownloader.sessionIdentifier else {
+            completionHandler()
+            return
+        }
+        Task { @MainActor in
+            guard let service =
+                    RadioServiceContainer.shared.transcriptAssetService else {
+                completionHandler()
+                return
+            }
+            await service.handleEventsForBackgroundURLSession(
+                completionHandler: completionHandler
+            )
+        }
     }
     
     private func configureAudioSession() {

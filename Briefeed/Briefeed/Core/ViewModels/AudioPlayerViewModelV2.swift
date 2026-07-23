@@ -43,6 +43,10 @@ final class AudioPlayerViewModelV2: ObservableObject {
     @Published private(set) var currentRadioEpisode: RadioEpisodeCandidate?
     @Published private(set) var sleepTimer: RadioSleepTimer = .off
     @Published private(set) var sourceFailures: [String: String] = [:]
+    @Published private(set) var radioTranscriptPresentation =
+        RadioTranscriptPresentation.idle
+    @Published private(set) var radioTranscriptBatchPresentation =
+        RadioTranscriptBatchPresentation.idle
     
     @Published private(set) var lastError: Error?
     @Published private(set) var generationPhase: GenerationPhase = .idle
@@ -64,6 +68,8 @@ final class AudioPlayerViewModelV2: ObservableObject {
 
     private let unifiedPlayer: UnifiedAudioPlayer
     private let radioCoordinator: RadioSessionCoordinating
+    private let radioTranscriptCoordinator:
+        (any RadioTranscriptCoordinating)?
     private let queueCoordinator = QueueCoordinator.shared
     private let rssService: RSSAudioService
     private var cancellables = Set<AnyCancellable>()
@@ -72,13 +78,21 @@ final class AudioPlayerViewModelV2: ObservableObject {
     // MARK: - Initialization
     
     convenience init() {
-        self.init(unifiedPlayer: .shared, radioCoordinator: nil, rssService: .shared)
+        let services = RadioServiceContainer.shared
+        self.init(
+            unifiedPlayer: .shared,
+            radioCoordinator: nil,
+            rssService: .shared,
+            radioTranscriptCoordinator: services.transcriptCoordinator
+        )
     }
 
     init(
         unifiedPlayer: UnifiedAudioPlayer,
         radioCoordinator: RadioSessionCoordinating? = nil,
         rssService: RSSAudioService,
+        radioTranscriptCoordinator:
+            (any RadioTranscriptCoordinating)? = nil,
         playbackSpeedLoad: @escaping @MainActor () -> Float = {
             UserDefaultsManager.shared.playbackSpeed
         }
@@ -86,6 +100,7 @@ final class AudioPlayerViewModelV2: ObservableObject {
         self.unifiedPlayer = unifiedPlayer
         self.radioCoordinator = radioCoordinator ?? unifiedPlayer.radioSessionCoordinator
         self.rssService = rssService
+        self.radioTranscriptCoordinator = radioTranscriptCoordinator
         let restoredSpeed = PlaybackSpeedPolicy.normalize(playbackSpeedLoad())
         self.playbackSpeed = restoredSpeed
         unifiedPlayer.setRate(restoredSpeed)
@@ -131,15 +146,25 @@ final class AudioPlayerViewModelV2: ObservableObject {
             .store(in: &cancellables)
 
         radioCoordinator.statePublisher.assign(to: &$radioState)
-        radioCoordinator.entriesPublisher.assign(to: &$radioEntries)
+        radioCoordinator.entriesPublisher
+            .sink { [weak self] entries in
+                self?.radioEntries = entries
+                self?.updateTranscriptWorkingSet()
+            }
+            .store(in: &cancellables)
         radioCoordinator.currentEpisodePublisher
             .sink { [weak self] episode in
                 self?.currentRadioEpisode = episode
                 self?.refreshNowPlaying()
+                self?.updateTranscriptWorkingSet()
             }
             .store(in: &cancellables)
         radioCoordinator.sleepTimerPublisher.assign(to: &$sleepTimer)
         radioCoordinator.sourceFailuresPublisher.assign(to: &$sourceFailures)
+        radioTranscriptCoordinator?.presentationPublisher
+            .assign(to: &$radioTranscriptPresentation)
+        radioTranscriptCoordinator?.batchPresentationPublisher
+            .assign(to: &$radioTranscriptBatchPresentation)
         
         unifiedPlayer.$isGenerating
             .assign(to: &$isGenerating)
@@ -169,6 +194,27 @@ final class AudioPlayerViewModelV2: ObservableObject {
         } else {
             updateCurrentItemInfo(unifiedPlayer.currentItem)
         }
+    }
+
+    private func updateTranscriptWorkingSet() {
+        guard let radioTranscriptCoordinator else { return }
+        guard let currentRadioEpisode else {
+            radioTranscriptCoordinator.updateCurrent(nil, next: [])
+            return
+        }
+        let remaining = radioEntries.filter {
+            $0.key != currentRadioEpisode.key
+        }
+        let orderedKeys =
+            remaining.filter { $0.disposition == .pending }.map(\.key) +
+            remaining.filter { $0.disposition == .deferred }.map(\.key)
+        let next = orderedKeys.prefix(2).compactMap {
+            radioCoordinator.candidate(for: $0)
+        }
+        radioTranscriptCoordinator.updateCurrent(
+            currentRadioEpisode,
+            next: next
+        )
     }
     
     private func applyPlaybackSpeed() {
@@ -655,6 +701,24 @@ extension AudioPlayerViewModelV2 {
 
     func cancelSleepTimer() {
         unifiedPlayer.cancelRadioSleepTimer()
+    }
+
+    func updateVisibleRadioTranscriptCandidates(
+        _ candidates: [RadioEpisodeCandidate]
+    ) {
+        radioTranscriptCoordinator?.updateVisibleSnapshot(candidates)
+    }
+
+    func prepareAllRadioTranscripts() {
+        radioTranscriptCoordinator?.prepareAll()
+    }
+
+    func retryCurrentRadioTranscript() {
+        radioTranscriptCoordinator?.retryCurrent()
+    }
+
+    func stopPreparingRadioTranscripts() {
+        radioTranscriptCoordinator?.stopPrepareAll()
     }
 }
 

@@ -221,6 +221,8 @@ final class UnifiedAudioPlayer: ObservableObject {
     private let cacheManager = AudioCacheManager.shared
     private let queueCoordinator: BriefQueueCoordinating
     private let radioCoordinator: RadioSessionCoordinating
+    private let radioTranscriptAssetProvider:
+        (any RadioTranscriptAssetProviding)?
     private let pipelineTimer = PipelineTimer.shared
     private let context: NSManagedObjectContext
     private let persistPlaybackRate: @MainActor (Float) -> Void
@@ -295,6 +297,7 @@ final class UnifiedAudioPlayer: ObservableObject {
     private var pendingSeekTime: TimeInterval?
     private var activePlaybackID: TransportPlaybackID?
     private var activeRadioKey: RadioEpisodeKey?
+    private var activeTranscriptAssetKey: RadioEpisodeKey?
     private var consumedPlaybackIDs = Set<TransportPlaybackID>()
     private var briefInterruptionResumeEligible = false
 
@@ -321,7 +324,9 @@ final class UnifiedAudioPlayer: ObservableObject {
             audioPlayer: transport,
             queueCoordinator: QueueCoordinator.shared,
             radioCoordinator: RadioServiceContainer.shared.coordinator,
-            context: PersistenceController.shared.container.viewContext
+            context: PersistenceController.shared.container.viewContext,
+            radioTranscriptAssetProvider:
+                RadioServiceContainer.shared.transcriptAssetProvider
         )
     }
 
@@ -335,7 +340,9 @@ final class UnifiedAudioPlayer: ObservableObject {
         },
         briefCompletionDelay: @escaping @MainActor () async -> Void = {
             try? await Task.sleep(for: .milliseconds(500))
-        }
+        },
+        radioTranscriptAssetProvider:
+            (any RadioTranscriptAssetProviding)? = nil
     ) {
         self.audioPlayer = audioPlayer
         self.queueCoordinator = queueCoordinator
@@ -343,6 +350,7 @@ final class UnifiedAudioPlayer: ObservableObject {
         self.context = context
         self.persistPlaybackRate = persistPlaybackRate
         self.briefCompletionDelay = briefCompletionDelay
+        self.radioTranscriptAssetProvider = radioTranscriptAssetProvider
         setupAudioPlayer()
         rebuildQueueFromCoordinator(queueCoordinator.queue)
         reconcileBriefIndex()
@@ -625,6 +633,7 @@ final class UnifiedAudioPlayer: ObservableObject {
                 _ = radioCoordinator.pauseByUser(positionSeconds: currentTime, duration: duration > 0 ? duration : nil)
             }
             audioPlayer.stop()
+            await setActiveTranscriptAssetKey(nil)
         } else if activePlaybackID != nil {
             queueCoordinator.updateCurrentPosition(currentTime)
             queueCoordinator.saveStateNow()
@@ -836,6 +845,7 @@ final class UnifiedAudioPlayer: ObservableObject {
         currentTime = 0
         duration = 0
         pendingSeekTime = nil
+        releaseActiveTranscriptAsset()
     }
     
     /// Set playback rate
@@ -963,7 +973,14 @@ final class UnifiedAudioPlayer: ObservableObject {
             updateRemoteAvailability()
 
             do {
-                let url = preferredRadioURL(for: request.key) ?? request.url
+                let preparedURL = await radioTranscriptAssetProvider?
+                    .preparedPlaybackURL(for: request.key)
+                await setActiveTranscriptAssetKey(
+                    preparedURL == nil ? nil : request.key
+                )
+                let url = preparedURL ??
+                    preferredRadioURL(for: request.key) ??
+                    request.url
                 try await audioPlayer.play(
                     id: playbackID,
                     url: url,
@@ -979,6 +996,7 @@ final class UnifiedAudioPlayer: ObservableObject {
                 pendingSeekTime = nil
                 isPlaying = false
                 consumedPlaybackIDs.remove(playbackID)
+                await setActiveTranscriptAssetKey(nil)
                 let next = radioCoordinator.playbackFailed(
                     for: request.key,
                     message: error.localizedDescription,
@@ -996,6 +1014,36 @@ final class UnifiedAudioPlayer: ObservableObject {
               !path.isEmpty,
               FileManager.default.isReadableFile(atPath: path) else { return nil }
         return URL(fileURLWithPath: path)
+    }
+
+    private func setActiveTranscriptAssetKey(
+        _ episodeKey: RadioEpisodeKey?
+    ) async {
+        guard episodeKey != activeTranscriptAssetKey else { return }
+        if let activeTranscriptAssetKey {
+            await radioTranscriptAssetProvider?.unpin(
+                activeTranscriptAssetKey,
+                reason: .activePlayback
+            )
+        }
+        activeTranscriptAssetKey = episodeKey
+        if let episodeKey {
+            await radioTranscriptAssetProvider?.pin(
+                episodeKey,
+                reason: .activePlayback
+            )
+        }
+    }
+
+    private func releaseActiveTranscriptAsset() {
+        guard let episodeKey = activeTranscriptAssetKey else { return }
+        activeTranscriptAssetKey = nil
+        Task { [radioTranscriptAssetProvider] in
+            await radioTranscriptAssetProvider?.unpin(
+                episodeKey,
+                reason: .activePlayback
+            )
+        }
     }
 
     private func cancelDeferredAutoplay() {
@@ -1718,6 +1766,7 @@ extension UnifiedAudioPlayer: SwiftAudioExServiceDelegate {
         guard id == activePlaybackID, consumedPlaybackIDs.insert(id).inserted else { return }
         isPlaying = false
         if let context = radioEventContext(callbackID: id) {
+            releaseActiveTranscriptAsset()
             let completedAt = Date()
             let position = currentTime
             let knownDuration = duration > 0 ? duration : nil

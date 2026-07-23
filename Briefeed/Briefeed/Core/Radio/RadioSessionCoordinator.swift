@@ -68,6 +68,7 @@ protocol RadioSessionCoordinating: AnyObject {
     func playbackFailed(for key: RadioEpisodeKey, message: String, positionSeconds: TimeInterval, duration: TimeInterval?, connectivity: ConnectivityStatus) -> RadioPlaybackIntent?
     func transportDidStart(for key: RadioEpisodeKey)
     func cancelPendingColdLaunchAutoplay()
+    func candidate(for key: RadioEpisodeKey) -> RadioEpisodeCandidate?
 }
 
 extension RadioSessionCoordinating {
@@ -795,6 +796,11 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         hasPendingColdLaunchAutoplay = false
         coldLaunchAutoplayDeadline = nil
         if pendingRequest?.purpose == .coldLaunchAutoplay { cancelPendingRequest() }
+    }
+
+    func candidate(for key: RadioEpisodeKey) -> RadioEpisodeCandidate? {
+        if let cached = candidatesByKey[key] { return cached }
+        return try? repository.candidate(for: key)
     }
 
     private func connectivityChanged(_ status: ConnectivityStatus) {

@@ -11,16 +11,25 @@ final class RadioServiceContainer {
     let connectivity: ConnectivityMonitoring
     let coordinator: RadioSessionCoordinator
     let feedSpeechMetadataStore: any RadioFeedSpeechMetadataStoring
+    let transcriptCoordinator: (any RadioTranscriptCoordinating)?
+    let transcriptAssetProvider:
+        (any RadioTranscriptAssetProviding)?
+    let transcriptAssetService: RadioTranscriptAssetService?
 
     init(
         connectivity: ConnectivityMonitoring,
         coordinator: RadioSessionCoordinator,
-        feedSpeechMetadataStore: (any RadioFeedSpeechMetadataStoring)? = nil
+        feedSpeechMetadataStore: (any RadioFeedSpeechMetadataStoring)? = nil,
+        transcriptCoordinator: (any RadioTranscriptCoordinating)? = nil,
+        transcriptAssetService: RadioTranscriptAssetService? = nil
     ) {
         self.connectivity = connectivity
         self.coordinator = coordinator
         self.feedSpeechMetadataStore =
             feedSpeechMetadataStore ?? InMemoryRadioFeedSpeechMetadataStore()
+        self.transcriptCoordinator = transcriptCoordinator
+        self.transcriptAssetService = transcriptAssetService
+        transcriptAssetProvider = transcriptAssetService
     }
 
     static var shared: RadioServiceContainer {
@@ -83,10 +92,34 @@ final class RadioServiceContainer {
             print("Could not open Radio speech metadata store: \(error)")
             speechMetadataStore = InMemoryRadioFeedSpeechMetadataStore()
         }
+        let transcriptAssetService: RadioTranscriptAssetService?
+        let transcriptCoordinator: RadioTranscriptCoordinator?
+        do {
+            let store = try RadioTranscriptStore()
+            let assets = try RadioTranscriptAssetService.makeProduction()
+            let pipeline = RadioTranscriptPreparationPipeline(
+                assetProvider: assets,
+                store: store
+            )
+            transcriptAssetService = assets
+            transcriptCoordinator = RadioTranscriptCoordinator(
+                pipeline: pipeline,
+                store: store,
+                assetProvider: assets,
+                metadataStore: speechMetadataStore,
+                backgroundDriver: RadioTranscriptBackgroundTaskDriver()
+            )
+        } catch {
+            print("Could not open Radio transcript services: \(error)")
+            transcriptAssetService = nil
+            transcriptCoordinator = nil
+        }
         return RadioServiceContainer(
             connectivity: connectivity,
             coordinator: coordinator,
-            feedSpeechMetadataStore: speechMetadataStore
+            feedSpeechMetadataStore: speechMetadataStore,
+            transcriptCoordinator: transcriptCoordinator,
+            transcriptAssetService: transcriptAssetService
         )
     }
 }
