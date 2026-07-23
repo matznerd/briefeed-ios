@@ -57,6 +57,12 @@ actor RadioTranscriptStore {
         try loadIndex().records.first { $0.key == key }
     }
 
+    func records(
+        for episodeKey: RadioEpisodeKey
+    ) throws -> [RadioTranscriptRecord] {
+        try loadIndex().records.filter { $0.key.episodeKey == episodeKey }
+    }
+
     func save(
         transcript: TimedTranscript,
         record: RadioTranscriptRecord
@@ -105,6 +111,14 @@ actor RadioTranscriptStore {
         }
     }
 
+    func removeTranscript(for key: RadioTranscriptCacheKey) throws {
+        guard let record = try record(for: key) else { return }
+        try removeRecord(
+            key: key,
+            relativePath: record.transcriptRelativePath
+        )
+    }
+
     func saveBatch(_ manifest: RadioTranscriptBatchManifest) throws {
         guard manifest.schemaVersion == RadioTranscriptBatchManifest.currentSchemaVersion else {
             throw StoreError.unsupportedBatchSchema(manifest.schemaVersion)
@@ -134,6 +148,24 @@ actor RadioTranscriptStore {
             try? fileManager.removeItem(at: batchURL)
             return nil
         }
+    }
+
+    @discardableResult
+    func updateBatchEntry(
+        for episodeKey: RadioEpisodeKey,
+        state: RadioTranscriptBatchEntryState,
+        updatedAt: Date = Date()
+    ) throws -> RadioTranscriptBatchManifest? {
+        guard var manifest = try loadBatch(),
+              let index = manifest.entries.firstIndex(where: {
+                  $0.episodeKey == episodeKey
+              }) else {
+            return nil
+        }
+        manifest.entries[index].state = state
+        manifest.updatedAt = updatedAt
+        try saveBatch(manifest)
+        return manifest
     }
 
     func removeBatch() throws {
