@@ -22,19 +22,26 @@ Playback always wins:
    player's current episode media time.
 5. While Briefeed remains active, it prepares the next two eligible Radio
    episodes in order.
+6. An explicit **Prepare All** command snapshots the remaining eligible Radio
+   brief and starts a user-visible iOS 26 continued-processing task that may
+   finish after Briefeed enters the background.
 
-The lookahead depth is two, not an unbounded feed crawl. On-device inference has
-no per-request API charge, but it still consumes network data, storage, battery,
-memory, and thermal budget.
+The automatic lookahead depth is two, not an unbounded feed crawl. On-device
+inference has no per-request API charge, but it still consumes network data,
+storage, battery, memory, and thermal budget. Prepare All widens that set only
+after an explicit user action.
 
 Background behavior is deliberately bounded:
 
 - A background `URLSession` may finish audio downloads while Briefeed is
   suspended or system-terminated.
-- Transcript analysis is guaranteed only while the app is active.
+- Automatic transcript analysis is guaranteed only while the app is active.
+- An explicit Prepare All operation may continue analysis in the background
+  through `BGContinuedProcessingTask`; the system displays progress and lets the
+  user cancel it.
 - Returning to Briefeed resumes the highest-priority unfinished transcript.
-- V1 does not promise silent, immediate speech analysis after the app is
-  suspended.
+- V1 does not promise silent automatic speech analysis after the app is
+  suspended. Continued analysis requires the user's Prepare All action.
 
 This is the smallest reliable contract that keeps playback smooth, avoids
 misrepresenting iOS background guarantees, and makes the next one or two
@@ -84,6 +91,10 @@ The viewer must:
 - fail quietly when the device, locale, model asset, network, storage, or
   thermal state cannot support preparation.
 
+The preparation controls must also let a user deliberately trade battery,
+storage, and network use for a fully prepared current Radio brief without
+making that work automatic or hidden.
+
 ## Proposed V1 Experience
 
 ### Radio Home Placement
@@ -107,6 +118,61 @@ The compact mini-player remains dedicated to:
 Tapping the transcript band opens the expanded transcript experience. Tapping
 the source row or episode disclosure continues to open episode history; these
 interactions stay independent.
+
+### Prepare All Command
+
+A **Prepare All** command appears after the final item in "Your radio brief,"
+inside the scroll content and above the safe-area inset reserved for the
+floating navigation and mini-player. It is not added to the already dense
+mini-player transport row.
+
+The row shows:
+
+- a familiar download/preparation icon;
+- `Prepare all` as the command;
+- the number of remaining eligible episodes;
+- a short local-processing label;
+- completed and total counts while work is active.
+
+Examples:
+
+- `Prepare all · 6 episodes`
+- `Preparing 3 of 6`
+- `All transcripts ready`
+
+"All" is bounded to a snapshot of the deterministic Radio session at the time
+of the tap:
+
+- the current episode;
+- pending latest-per-source Radio entries;
+- manually queued Radio archive episodes;
+- no duplicate `RadioEpisodeKey` values.
+
+It does not include every historical episode in each source, retired hourly
+bulletins, completed items no longer in the Radio session, Brief articles, or
+episodes that arrive after the task begins. A later refresh may offer Prepare
+All again for newly eligible work.
+
+On iOS 26, tapping Prepare All:
+
+1. Captures the immutable episode-key snapshot.
+2. Registers and submits a `BGContinuedProcessingTaskRequest` using a unique
+   identifier beneath a permitted wildcard prefix.
+3. Shows Apple's system progress presentation with the title "Preparing Radio"
+   and a useful completed/total subtitle.
+4. Reuses the same serial transcript pipeline and persistent per-episode
+   checkpoints.
+5. Continues if the user backgrounds Briefeed, subject to system expiration,
+   resource pressure, or user cancellation.
+
+The user can stop the operation in Briefeed while it is foregrounded or through
+the system's progress interface while it is backgrounded. Completed episode
+artifacts remain valid; cancellation never rolls them back. Pending episodes
+return to `queued` and can be resumed by a later Prepare All action.
+
+Prepare All is hidden or replaced by a clear unavailable message on iOS 18
+through 25. It is disabled when there is no eligible work or when required
+speech support is unavailable.
 
 ### Default Flow View
 
@@ -165,6 +231,7 @@ The transcript band has explicit states:
 | `queued` | "Transcript queued" | None |
 | `downloading` | "Preparing transcript" with determinate progress when known | None |
 | `transcribing` | "Transcribing on this iPhone" | None |
+| `preparingAll` | "Preparing X of Y" with a Stop action | None |
 | `ready` | Synchronized three-line text | None |
 | `deferred` | "Transcript will continue when Briefeed is active" | None |
 | `failed` | Short failure message and Retry action | None |
@@ -233,7 +300,9 @@ Download and transcribe only after an episode starts.
 
 Prioritize the current episode, then prepare the next two eligible Radio queue
 entries. Run one speech analyzer at a time and a small number of background
-downloads. Reconcile priorities whenever Radio order changes.
+downloads. Reconcile priorities whenever Radio order changes. Allow an explicit
+Prepare All command to widen the desired set to a user-approved session
+snapshot and continue it through an iOS 26 continued-processing task.
 
 **Advantages**
 
@@ -242,6 +311,8 @@ downloads. Reconcile priorities whenever Radio order changes.
 - Bounded storage, CPU, and network use.
 - Fits the existing deterministic Radio queue.
 - Recovers cleanly after pause, Next, refresh, relaunch, or memory pressure.
+- Lets a user explicitly prepare the full current brief in the background
+  without turning autoplay into hidden background processing.
 
 **Costs**
 
@@ -293,6 +364,8 @@ Responsibilities:
   `AudioPlayerViewModelV2`.
 - Respond to foreground, background, memory-warning, low-power, thermal, and
   storage-pressure events.
+- Coordinate explicit Prepare All snapshots and publish completed/total
+  progress.
 
 It does not own playback order, mutate `RadioSessionCoordinator`, parse RSS,
 classify ads, or render SwiftUI.
@@ -308,6 +381,7 @@ Scheduling rules:
 2. Current episode missing or stale transcript.
 3. First next eligible episode.
 4. Second next eligible episode.
+5. Remaining Prepare All snapshot entries in Radio order.
 
 Limits:
 
@@ -315,6 +389,8 @@ Limits:
 - maximum two active audio download tasks;
 - maximum three desired episode assets;
 - current episode preempts lookahead analysis;
+- Prepare All expands the desired set but never outranks the current episode or
+  the next-two interactive path;
 - cancellation must reach the analyzer and downloader;
 - a canceled result may never publish after a newer job generation wins.
 
@@ -329,6 +405,11 @@ remote playback.
 It uses one background `URLSession` with a stable application identifier.
 Downloads may continue if the app is suspended. Delegate events move completed
 temporary files into `Library/Caches/Briefeed/RadioTranscriptAudio`.
+
+An automatic current-plus-two session submits only its bounded transfers. A
+Prepare All operation may submit the full user-approved snapshot together so
+the system can schedule transfers efficiently instead of repeatedly waking the
+app for one new download.
 
 For every completed download it records:
 
@@ -430,6 +511,28 @@ lifecycle handling.
 No new global singleton is introduced. DEBUG fixtures can replace the engine,
 asset service, store, and clock before container resolution.
 
+### RadioTranscriptBackgroundTaskDriver
+
+An iOS 26 availability-gated driver owns the explicit continued-processing
+integration.
+
+Responsibilities:
+
+- add the permitted wildcard identifier to `Info.plist`;
+- register each submitted task identifier exactly once;
+- submit only from the foreground Prepare All action;
+- use the default CPU/network resource class, not GPU entitlement;
+- report monotonic progress to `BGContinuedProcessingTask.progress`;
+- update the localized title/subtitle as episodes complete;
+- install an expiration handler that cancels active analysis and persists
+  completed work;
+- call `setTaskCompleted(success:)` promptly on completion, cancellation, or
+  failure;
+- restore the in-app preparation state when the app returns foreground.
+
+The driver does not submit a continued-processing task for autoplay, automatic
+lookahead, refresh, launch, or a timer.
+
 ## Exact-Asset and Dynamic-Ad Safety
 
 Some podcast publishers dynamically insert different sponsor audio for
@@ -471,38 +574,43 @@ The future ad classifier must use the same fingerprinted asset identity. The
 - Radio playback continues through the existing audio background mode.
 - Background `URLSession` downloads may continue in the system process.
 - Already-ready transcript state remains persisted.
-- V1 does not rely on background audio entitlement as permission for unrelated
-  sustained speech-analysis CPU work.
-- In-flight analysis gets a short lifecycle handoff to save/cancel cleanly and
-  is resumable from the beginning when Briefeed returns active.
+- Automatic current-plus-two analysis does not rely on the background audio
+  entitlement as permission for unrelated sustained CPU work. It gets a short
+  lifecycle handoff to save/cancel cleanly and is resumable when Briefeed
+  returns active.
+- A user-started Prepare All operation may continue through its
+  `BGContinuedProcessingTask`, with system-visible progress and cancellation.
 
 ### Background Without Audio
 
 - Existing background downloads may finish.
-- No new automatic analysis begins.
+- No new automatic analysis begins. A previously user-started Prepare All task
+  may continue.
 - No periodic polling or timer keeps the app alive.
 
 ### System-Terminated
 
 - A background download session may be re-associated on system relaunch and
   move a completed file into cache.
-- Transcript analysis does not begin during a download-only relaunch.
+- Transcript analysis does not begin during a download-only relaunch unless the
+  system is delivering an active user-started continued-processing task.
 - On the next foreground launch, the coordinator restores the cache index,
   reconciles the current Radio queue, and resumes preparation.
 
-### Why V1 Does Not Use Continued Processing
+### Continued-Processing Boundary
 
 iOS 26 `BGContinuedProcessingTask` can continue CPU-intensive work after an app
 is backgrounded, but Apple requires a clear explicit action such as a tap or
 gesture. The system displays a cancelable Live Activity and expects measurable
 progress.
 
-Briefeed's desired preparation begins automatically from autoplay and queue
-lookahead. Silently submitting a continued-processing task would violate that
-interaction contract. V1 therefore does not use this API.
+Briefeed uses it only for Prepare All. The button is an explicit command with a
+bounded episode count and a clear completion condition. The system interface
+reports progress and preserves user cancellation.
 
-A future explicit "Download and transcribe" command could use
-`BGContinuedProcessingTask`, but that is a different user promise.
+Autoplay and current-plus-two lookahead remain automatic foreground work.
+Silently submitting a continued-processing task for either would violate
+Apple's interaction contract.
 
 `BGProcessingTask` is also not an immediate-Next guarantee: the system chooses
 when it runs. It may later be used for opportunistic maintenance, not the V1
@@ -521,11 +629,16 @@ To protect playback:
 - A memory warning cancels lookahead, releases speech-model retention, and
   evicts least-recently-used prepared audio.
 - The working audio cache retains current plus two desired episodes and uses a
-  500 MB LRU ceiling. Either limit may trigger eviction.
+  500 MB LRU ceiling during automatic preparation. Prepare All may temporarily
+  exceed the three-episode working-set count but not the disk ceiling; when the
+  ceiling is reached, completed transcripts are retained and least-recently-used
+  audio is evicted.
 - The coordinator never downloads on a loop after a persistent HTTP, storage,
   unsupported-format, or engine error.
 - Retry uses bounded exponential backoff and resets only after episode identity,
   connectivity, asset availability, or explicit user Retry changes.
+- Continued-processing expiration or user cancellation is resumable work, not a
+  playback failure.
 
 Network policy in V1 follows the user's existing system cellular permission.
 A separate Wi-Fi-only transcript setting is deferred unless device testing
@@ -542,6 +655,8 @@ shows material data use.
 - Fingerprint mismatch invalidates only that prepared artifact.
 - Relaunch clears transient `downloading` and `transcribing` states back to
   `queued`; it does not show stale indefinite progress.
+- Prepare All expiration preserves completed results and returns unfinished
+  entries to `queued`.
 
 ## Privacy and Permissions
 
@@ -583,6 +698,12 @@ shows material data use.
 - Seek target maps to the line's first word.
 - Current job preempts lookahead.
 - Queue reorder recalculates next two without duplicates.
+- Prepare All snapshots only eligible session entries and de-duplicates keys.
+- Continued-processing progress is monotonic and reaches completion exactly
+  once.
+- Expiration and user cancellation preserve completed records and requeue
+  unfinished jobs.
+- Automatic launch/lookahead never submits a continued-processing task.
 - Stale canceled generation cannot publish.
 - Relaunch normalizes transient preparation states.
 - Low-power, thermal, memory-warning, and background transitions apply the
@@ -600,6 +721,12 @@ shows material data use.
 - 0.5x, 1x, 2x, and 3x use media time without drift.
 - Background download completion survives app suspension.
 - Returning active resumes analysis from cached audio.
+- Prepare All continues download and analysis after foreground-to-background on
+  iOS 26 when the system grants runtime.
+- Cancel Prepare All from the system interface and confirm audio continues,
+  completed transcripts remain, and unfinished work is resumable.
+- Expire the continued-processing task and confirm the same partial-success
+  behavior.
 - Offline playback from cached audio restores its cached transcript.
 - Dynamic-ad duration mismatch fails closed.
 
@@ -625,6 +752,9 @@ On the approved iPhone:
 - foreground-to-background preserves audio;
 - background download completes;
 - analysis resumes after foregrounding;
+- explicit Prepare All exposes system progress, continues in background, and
+  reports monotonic completion;
+- system/user cancellation stops promptly without corrupting completed cache;
 - seeking and 2x/3x remain visually synchronized;
 - memory and thermal state remain acceptable over a 60-minute Radio session;
 - killing and reopening restores the prepared transcript;
@@ -641,14 +771,15 @@ background transfer, audio continuity, memory, and thermal behavior.
 2. Add the versioned transcript store and fingerprinted audio cache.
 3. Add the background download asset service with injectable test transport.
 4. Add the serial preparation pipeline and coordinator.
-5. Integrate coordinator lifecycle and Radio current/next-two observation.
-6. Add compact and expanded transcript views.
-7. Add exact-asset validation and cached-local playback preference.
-8. Run focused unit/integration/UI tests.
-9. Run simulator layout and lifecycle tests using the app-testing runbook.
-10. Run physical-device SpeechAnalyzer, background, audio, memory, and thermal
-    gates.
-11. Produce a verified build suitable for the next iOS distribution step.
+5. Add the iOS 26 continued-processing driver and Prepare All command.
+6. Integrate coordinator lifecycle and Radio current/next-two observation.
+7. Add compact and expanded transcript views.
+8. Add exact-asset validation and cached-local playback preference.
+9. Run focused unit/integration/UI tests.
+10. Run simulator layout and lifecycle tests using the app-testing runbook.
+11. Run physical-device SpeechAnalyzer, continued-processing, background audio,
+    cancellation, memory, and thermal gates.
+12. Produce a verified build suitable for the next iOS distribution step.
 
 The detailed TDD implementation plan will be written only after this design is
 reviewed and approved.
@@ -660,7 +791,8 @@ reviewed and approved.
 - Cloud speech-to-text.
 - FluidAudio/Parakeet or WhisperKit fallback.
 - Raising the global iOS 18.2 deployment target.
-- Guaranteed transcript preparation while Briefeed is suspended.
+- Automatic transcript preparation while Briefeed is suspended without an
+  explicit Prepare All action.
 - Full-feed or archive pretranscription.
 - Transcript search, export, editing, translation, or speaker diarization.
 - Phoneme-level forced alignment.
