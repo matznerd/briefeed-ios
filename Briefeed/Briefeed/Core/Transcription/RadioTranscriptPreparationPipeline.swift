@@ -89,7 +89,17 @@ enum RadioTranscriptPipelineEvent: Equatable, Sendable {
     case batchUpdated(RadioTranscriptBatchManifest)
 }
 
-actor RadioTranscriptPreparationPipeline {
+protocol RadioTranscriptPipelineScheduling: Sendable {
+    func events() async -> AsyncStream<RadioTranscriptPipelineEvent>
+    func reconcile(
+        interactive: [RadioTranscriptJob],
+        batch: [RadioTranscriptJob],
+        generation: Int
+    ) async
+    func cancelAll() async
+}
+
+actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
     private let assetProvider: any RadioTranscriptAssetProviding
     private let store: RadioTranscriptStore
     private let engineResolver: any RadioTranscriptEngineResolving

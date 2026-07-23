@@ -77,6 +77,14 @@ protocol RadioTranscriptAssetProviding: Sendable {
     func cachedAsset(for episodeKey: RadioEpisodeKey) async throws -> RadioTranscriptAudioAsset?
     func preparedPlaybackURL(for episodeKey: RadioEpisodeKey) async -> URL?
     func markTranscriptReady(_ asset: RadioTranscriptAudioAsset) async throws
+    func pin(
+        _ episodeKey: RadioEpisodeKey,
+        reason: RadioTranscriptAssetPinReason
+    ) async
+    func unpin(
+        _ episodeKey: RadioEpisodeKey,
+        reason: RadioTranscriptAssetPinReason
+    ) async
 }
 
 actor RadioTranscriptAssetService: RadioTranscriptAssetProviding {

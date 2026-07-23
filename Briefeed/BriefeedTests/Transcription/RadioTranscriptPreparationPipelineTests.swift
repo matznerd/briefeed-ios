@@ -203,6 +203,16 @@ private actor PipelineAssetProvider: RadioTranscriptAssetProviding {
     }
 
     func markTranscriptReady(_ asset: RadioTranscriptAudioAsset) async throws {}
+
+    func pin(
+        _ episodeKey: RadioEpisodeKey,
+        reason: RadioTranscriptAssetPinReason
+    ) {}
+
+    func unpin(
+        _ episodeKey: RadioEpisodeKey,
+        reason: RadioTranscriptAssetPinReason
+    ) {}
 }
 
 private struct PipelineEngineResolver: RadioTranscriptEngineResolving {
