@@ -1,93 +1,121 @@
 # Apple Speech Transcript Probe Receipt
 
 **Date:** July 22, 2026  
-**Status:** `INCONCLUSIVE` - the one permitted integration invocation did not
-start XCTest because the shared simulator runner rejected critical host pressure.
+**Status:** `APPLE_PROCEED` - Apple SpeechAnalyzer produced complete word-level
+timing on both the rights-cleared fixture and a current podcast excerpt on the
+approved physical iPhone.
 
-## Evidence Tree and Deterministic Gates
+## Verified Configuration
 
-- Verified code commit: `8e731f72d89e18907a35b22de9842d31cb88c1d6`
-  (`test: correct deterministic receipt key ordering`). This was the current
-  `HEAD` when every command below ran.
-- `make radio-compile`: passed, `** TEST BUILD SUCCEEDED **`.
-  Xcode build: `17F113`; iPhone Simulator SDK: `26.5` (`23F81a`).
-- `RADIO_TEST_SELECTOR=BriefeedTests/TimedTranscriptTests make radio-unit`:
-  passed, 4 Swift Testing cases in 1 suite.
-- `RADIO_TEST_SELECTOR=BriefeedTests/TimedTranscriptNormalizerTests make radio-unit`:
-  passed, 2 Swift Testing cases in 1 suite.
-- `RADIO_TEST_SELECTOR=BriefeedTests/PodcastTranscriptionProbeTests make radio-unit`:
-  passed, 4 Swift Testing cases in 1 suite. The prescribed selector executed
-  the intended suite; no narrow fallback selector was needed.
+- Source commit: `927080ab2c01f10ae63a45f8e81c9be87458aa4f`.
+- Device: iPhone 13 Pro, iOS 26.5.2 (`23F84`).
+- Engine: `SpeechAnalyzer` with `SpeechTranscriber`, locale `en-US`.
+- Attributes requested: `audioTimeRange` and `transcriptionConfidence`.
+- The test process explicitly allowed `AssetInventory` to install the required
+  system-managed speech asset. The asset was available by transcription time;
+  the probe does not infer whether it was already installed.
+- Result bundle:
+  `/tmp/briefeed-transcript-device-authorized-2-20260722.xcresult`.
+- Retrieved JSON:
+  `/tmp/briefeed-transcript-receipt-device-20260722/transcript.json`.
 
-All focused runs used `Briefeed-Codex-radio-unit-20260722-143738`
-(`8E698E75-47DC-4826-8219-A32D748A120E`), an arm64 iOS 18.6 simulator. This
-is simulator evidence only, not physical-device evidence.
+Apple documents `SpeechTranscriber` as an on-device general-purpose
+transcription module and requires applications to check device and locale
+support. `AssetInventory` owns the model download and lifecycle; the model does
+not need to be bundled in Briefeed.
 
-- Device model: not captured. The owned runner evidence exposed only the clone
-  name, UDID, architecture, and runtime, so no iPhone model is inferred.
+## Rights-Cleared Fixture Result
 
-## Fixture Provenance
+The 68.232834-second mono AIFF fixture passed every acceptance gate:
 
-The historical `bash skills/app-testing/scripts/run-transcript-probe.sh`
-invocation attempted to generate the rights-cleared `apple-news-fixture.aiff`
-before the runner guard stopped work. It did not prove regeneration: the old
-generator wrote directly to the tracked destination, printed `Opening output
-file failed: fmt?`, and only then measured the destination. The following
-fixture measurements therefore establish that the existing fixture was
-readable, not that the attempt produced it:
+| Metric | Result |
+| --- | ---: |
+| Processing duration | 1.524 seconds |
+| Throughput | 44.76x real time |
+| Timing coverage | 100% |
+| Reference word error rate | 6.55% |
+| Word units | 161 |
+| Phrase units | 0 |
+| Median words per unit | 1 |
 
-- Duration: `68.232834` seconds.
-- SHA-256: `8f4f67bb0b867e1346ba21de9d9c69d5329a3f35b84efa061e2de4ed19c05b5e`.
-- Format: mono AIFF, 22,050 Hz, signed 16-bit PCM.
+Every timed unit was monotonic, within the audio duration, and emitted at true
+word granularity. This empirically supports either a one-word RSVP projection
+or a two/three-line teleprompter projection without inventing timestamps.
 
-## Post-Review Generator Validation
+The cancellation case also passed on the phone. Cancellation completed in
+0.501 seconds and did not exceed the test's two-second bound.
 
-After the review fix, `bash skills/app-testing/scripts/make-transcript-fixture.sh`
-ran once, separately from the integration runner. It generated and validated the
-new candidate at
-`.apple-news-fixture.0vI6fu/apple-news-fixture.aiff` before atomically replacing
-the tracked fixture. The primary `say` command exited `0`; fallback was not
-used. The newly validated candidate and replaced fixture both measured
-`68.232834` seconds with SHA-256
-`8f4f67bb0b867e1346ba21de9d9c69d5329a3f35b84efa061e2de4ed19c05b5e`.
-The temporary directory was absent after the script exited.
+## Current Podcast Result
 
-This is generator evidence only. It did not invoke `run-transcript-probe.sh`,
-XCTest, or Apple SpeechAnalyzer.
+A second local-only probe used the opening 90 seconds of the July 22, 2026
+Marketplace Morning Report episode, "Tallying the costs of Europe's heatwaves."
+The excerpt was generated temporarily from the current public enclosure, added
+only to the signed test bundle, and removed from the worktree after the run. No
+publisher audio or transcript is committed.
 
-## Single Integration Invocation
+| Metric | Result |
+| --- | ---: |
+| Processing duration | 2.233 seconds |
+| Throughput | 40.30x real time |
+| Timing coverage | 100% |
+| Word units | 217 |
+| Phrase units | 0 |
+| Median words per unit | 1 |
 
-The command `bash skills/app-testing/scripts/run-transcript-probe.sh` was run
-exactly once for this task. Its runner reported `PRESSURE=critical`, with
-`swap_free=947MB`, and printed `Radio lane transcript-probe will not start new
-work while host pressure is critical`. The runner's documented critical-pressure
-path exits `75`; no simulator work or XCTest began, and no JSON receipt was
-written. The fixture-generation command also printed `Opening output file
-failed: fmt?`, though the tracked AIFF above existed and `afinfo` read it.
+Result bundle:
+`/tmp/briefeed-transcript-marketplace-device-20260722.xcresult`.
 
-The configured integration locale was `en-US` and its asset policy allowed a
-system asset request, but no Apple SpeechAnalyzer asset request or availability
-check ran. Asset status is therefore unavailable.
+Retrieved JSON:
+`/tmp/briefeed-transcript-receipt-marketplace-20260722/transcript.json`.
 
-## Unavailable Product Metrics
+The transcript captured two dynamically inserted sponsor reads followed by the
+program introduction. The final sponsor word ended at 58.62 seconds and the
+first program word began at 59.40 seconds. This is useful boundary evidence,
+but it is not an ad-classification or auto-skip implementation.
 
-No integration JSON exists, so the following are unavailable rather than zero:
+## Third-Party Comparison Boundary
 
-- Processing duration and real-time factor.
-- Recognized and timed character counts; timing coverage; fixture WER.
-- Word and phrase unit counts; median words per unit.
-- Empirical support for one-word RSVP.
+Briefeed already pins
+[FluidAudio 0.14.5](https://github.com/FluidInference/FluidAudio). That package
+contains Parakeet ASR APIs and exposes token start/end timing, but Briefeed
+currently initializes only its PocketTTS path. FluidAudio is therefore a
+credible future iOS 18-25 fallback, not a dependency that needs to be added for
+the first viewer.
 
-The simulator did not run the engine. It consequently provides no evidence for
-audible synchronization, phone performance, memory, thermal behavior, audio
-routes, interruptions, or visual drift. Those physical-device checks remain
-unrun.
+[Argmax's Swift SDK](https://github.com/argmaxinc/argmax-oss-swift) also exposes
+WhisperKit word timestamps. It would add another model/runtime surface and is
+not justified while the native path already provides complete word timing at
+about 40x real time on the target phone.
+
+Do not upgrade or initialize either fallback in the production viewer slice.
+First isolate the existing PocketTTS launch exception tracked in GitHub #22;
+then evaluate one fallback only if supporting iOS 18-25 becomes a launch
+requirement.
 
 ## Verdict
 
-`INCONCLUSIVE`. The exit-75 capacity guard is infrastructure evidence, not an
-Apple transcription result. It cannot support either `APPLE_PROCEED` or
-`PARAKEET_COMPARISON_REQUIRED`; no second integration attempt was made.
+`APPLE_PROCEED` for the iOS 26 production transcript and synchronized-reader
+slice.
 
-Ad classification, automatic skipping, production UI, and transcript
-persistence remain out of scope.
+- Use Apple SpeechAnalyzer first. A Parakeet or WhisperKit comparison is no
+  longer required to establish word timing on the approved iPhone.
+- Keep Briefeed's iOS 18.2 deployment floor. On iOS 18 through 25, the
+  transcript viewer should report that on-device transcription is unavailable
+  until a separately tested fallback is approved.
+- Drive word selection from episode media time, not wall-clock timers or
+  playback-rate multiplication. The existing `TimedTranscriptIndex` already
+  provides that contract.
+- Write the production coordinator and UI plan before adding episode downloads,
+  persistence, or Radio playback integration.
+- Treat ad classification and manual/automatic skipping as a separate staged
+  feature with false-positive controls.
+
+The prior `INCONCLUSIVE` result was caused only by the safe simulator runner's
+critical-pressure refusal. It is superseded by these physical-device results.
+
+## Primary References
+
+- [SpeechAnalyzer](https://developer.apple.com/documentation/speech/speechanalyzer)
+- [SpeechTranscriber](https://developer.apple.com/documentation/speech/speechtranscriber)
+- [AssetInventory](https://developer.apple.com/documentation/speech/assetinventory)
+- [WWDC25: Bring advanced speech-to-text to your app with SpeechAnalyzer](https://developer.apple.com/videos/play/wwdc2025/277/)
