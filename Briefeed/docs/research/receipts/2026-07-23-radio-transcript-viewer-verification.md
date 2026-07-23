@@ -12,6 +12,10 @@
   scheduling and explicit visible-latest Prepare All scheduling.
 - Durable per-episode checkpoints, startup reconciliation, terminal failure
   accounting, cancellation generation guards, and background-task restoration.
+- Shared Radio freshness filtering for automatic and Prepare All work, with
+  immutable batch restoration serialized ahead of user-started preparation.
+- Deferred refresh reconciliation that preserves newly visible episodes across
+  batch start, stop, resume, expiration, and terminal completion.
 - Compact synchronized transcript band plus expanded reader with audio-clock
   following, manual-scroll suspension, Resume Live, line seeking, and existing
   transport controls.
@@ -24,15 +28,22 @@
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| Generic simulator compile | PASS | `make radio-compile` ended with `** TEST BUILD SUCCEEDED **` |
+| Earlier generic simulator compile | PASS | `make radio-compile` ended with `** TEST BUILD SUCCEEDED **` before the final freshness and restore-race hardening |
+| Current-head Swift parse and diff checks | PASS | `swiftc -frontend -parse` passed for every changed Swift file; `git diff --check` is clean at `6a3e6f6` |
+| Current-head generic simulator compile | PENDING | Must be rerun because `8c4664d` and `6a3e6f6` changed production coordinator code after the earlier compile |
 | Focused Radio unit tests | PENDING | Managed simulator lane refused work while host pressure was critical |
 | Full Radio unit suite | PENDING | Run after focused suite |
 | Transcript UI tests | PENDING | Run after unit suite |
 | Radio smoke and lifecycle | PENDING | Run after UI suite |
 
-The compile gate includes the Briefeed app, unit-test target, and UI-test target.
-Existing Swift concurrency warnings in legacy audio/Core Data paths remain; the
-new transcript files compile without a blocking diagnostic.
+The earlier compile gate included the Briefeed app, unit-test target, and
+UI-test target. Existing Swift concurrency warnings in legacy audio/Core Data
+paths remain. Current-head compile and runtime claims intentionally remain open
+until the managed lane accepts work.
+
+The latest managed-fleet check reported `PRESSURE=critical`, approximately
+`load=421`, and a flat trend. The pressure gate was not bypassed, no unowned
+simulator was targeted, and no physical-device build was attempted.
 
 ## Exact-Asset Boundary
 
