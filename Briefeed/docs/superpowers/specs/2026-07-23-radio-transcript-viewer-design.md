@@ -198,6 +198,32 @@ No neighboring archive episodes are prepared. Leaving the episode does not
 discard a completed transcript, and returning to it reuses the fingerprinted
 cache.
 
+### Episode Language
+
+Every transcript job carries an immutable BCP 47 language tag.
+
+Locale selection is deterministic:
+
+1. Use the RSS channel-level `<language>` value when present.
+2. For Atom feeds, use the feed-level `xml:lang` value when present.
+3. Normalize common underscore/hyphen variants to a BCP 47 identifier.
+4. If feed language metadata is absent or invalid, use the V1 default `en-US`.
+5. Pass that locale to `SpeechTranscriber.supportedLocale(equivalentTo:)`.
+6. Use the equivalent supported locale returned by Apple in the transcript
+   cache key.
+7. If Apple returns no equivalent supported locale, enter
+   `unsupportedLocale`; do not silently retry as English.
+
+The current RSS parser and `RSSFeed` Core Data entity do not retain feed
+language. V1 extends parsing to surface channel/feed language and persists the
+normalized tag in a lightweight, versioned speech-metadata store keyed by feed
+ID. This avoids a Core Data model migration for one optional transcription
+field.
+
+Default Briefeed sources may seed `en-US` metadata, but parsed publisher
+metadata replaces the seed after a successful refresh. A later product version
+may add a per-source language override; that is not required for V1.
+
 ### Default Flow View
 
 V1 ships a compact three-line teleprompter:
@@ -378,6 +404,7 @@ Responsibilities:
 - Observe current Radio episode identity and the next eligible episode keys.
 - Accept the exact visible, uncompleted latest-per-source keys for Prepare All
   rather than independently querying archive data.
+- Resolve and snapshot the episode language before a job leaves the main actor.
 - Restore cached transcript records at launch.
 - Maintain an ordered desired working set of current plus two.
 - Promote the current episode above any lookahead work.
@@ -386,6 +413,7 @@ Responsibilities:
 - Ask the asset service to acquire exact episode audio.
 - Invoke one `TimedTranscriptEngine` at a time.
 - Validate and persist successful transcripts.
+- Expose an exact prepared local playback URL before a Radio episode load.
 - Expose read-only current-episode presentation state to
   `AudioPlayerViewModelV2`.
 - Respond to foreground, background, memory-warning, low-power, thermal, and
@@ -413,7 +441,9 @@ Limits:
 
 - maximum one `SpeechAnalyzer` operation;
 - maximum two active audio download tasks;
-- maximum three desired episode assets;
+- maximum three episodes in the automatic current-plus-two working set;
+- a Prepare All manifest may contain more entries, but only the bounded
+  download/analyzer window becomes active at once;
 - current episode preempts lookahead analysis;
 - Prepare All expands the desired set but never outranks the current episode or
   the next-two interactive path;
@@ -434,6 +464,10 @@ remote playback.
 It uses one background `URLSession` with a stable application identifier.
 Downloads may continue if the app is suspended. Delegate events move completed
 temporary files into `Library/Caches/Briefeed/RadioTranscriptAudio`.
+
+The configuration sets `isDiscretionary = false`. Automatic lookahead begins
+only while the user is actively using Radio, and Prepare All is explicitly
+requested; neither transfer class should be deferred as overnight maintenance.
 
 An automatic current-plus-two session submits only its bounded transfers. A
 Prepare All operation may submit the full user-approved snapshot together so
@@ -458,6 +492,35 @@ Publisher audio is:
 - purgeable;
 - never committed to the repository;
 - never uploaded to Briefeed, Apple, Gemini, or another service by this feature.
+
+Pending current/lookahead/batch audio is pinned against LRU eviction until its
+transcript reaches `transcriptReady`, fails terminally, or the user discards the
+batch. A prepared current/next-two asset remains playback-pinned while its
+episode stays in that automatic working set, ensuring the player can start from
+the exact local file. Eviction order is:
+
+1. transcript-ready batch audio outside current plus next two;
+2. transcript-ready audio outside the current desired working set;
+3. never a current/next-two playback-pinned asset or an input still needed by a
+   pending transcript job.
+
+If pinned assets would breach the 500 MB ceiling, the service throttles or
+pauses new downloads rather than evicting an input and redownloading it. An
+individual asset larger than the ceiling is not automatically prepared ahead;
+it remains eligible for current-episode on-demand handling with a clear storage
+failure if it cannot be cached.
+
+### RadioFeedSpeechMetadataStore
+
+A small versioned file in Application Support maps `feedID` to a normalized
+language tag and its source (`publisher`, `seed`, or `fallback`).
+
+The RSS parser returns feed language alongside parsed episodes. A successful
+refresh writes publisher language metadata before transcript preparation
+reconciles the queue. Corrupt metadata falls back to the deterministic `en-US`
+rule without deleting RSS episodes or Radio state.
+
+The store is injectable for tests and is owned by `RadioServiceContainer`.
 
 ### RadioTranscriptStore
 
@@ -587,6 +650,7 @@ Responsibilities:
 - add the permitted wildcard identifier to `Info.plist`;
 - register each submitted task identifier exactly once;
 - submit only from the foreground Prepare All action;
+- set `BGContinuedProcessingTaskRequest.strategy = .fail`;
 - use the default CPU/network resource class, not GPU entitlement;
 - report monotonic progress to `BGContinuedProcessingTask.progress`;
 - update the localized title/subtitle as episodes complete;
@@ -599,6 +663,12 @@ Responsibilities:
 
 The driver does not submit a continued-processing task for autoplay, automatic
 lookahead, refresh, launch, or a timer.
+
+If `.fail` submission reports that immediate continued execution is
+unavailable, the in-app preparation pipeline still runs while Briefeed remains
+active. The row explains that background continuation is unavailable right now
+and offers another explicit retry; it does not pretend the system accepted the
+request.
 
 Checkpoint behavior:
 
@@ -623,7 +693,9 @@ wrong even if the RSS episode GUID is unchanged.
 V1 uses these safeguards:
 
 1. Every transcript is keyed by a SHA-256 fingerprint of downloaded bytes.
-2. Cached episodes play from that exact local asset on subsequent playback.
+2. When an episode has been prepared ahead and then becomes current, playback
+   starts from that exact fingerprinted local file. This applies even when it is
+   the first time the user plays that episode.
 3. For the currently streaming first play, the coordinator compares final URL,
    response validators, content length, and media duration before exposing the
    new transcript.
@@ -633,9 +705,12 @@ V1 uses these safeguards:
 5. The player never silently hot-swaps a remote stream to a local file unless a
    dedicated continuity test proves the transition is inaudible and time-safe.
 
-This means the common first-play case can show text as soon as preparation
-finishes, while the app fails closed if a dynamically inserted version appears
-inconsistent.
+For a currently streaming uncached episode, text may appear as soon as
+preparation finishes and validation passes. DAI-heavy publishers may routinely
+produce a different asset for the preparation request; in that case the viewer
+fails closed for the current stream. A prepared-ahead next episode avoids that
+ambiguity because playback begins from the exact local asset used for
+transcription.
 
 The future ad classifier must use the same fingerprinted asset identity. The
 58.62/59.40 Marketplace boundary is research evidence, not a reusable rule.
@@ -718,8 +793,11 @@ To protect playback:
 - The working audio cache retains current plus two desired episodes and uses a
   500 MB LRU ceiling during automatic preparation. Prepare All may temporarily
   exceed the three-episode working-set count but not the disk ceiling; when the
-  ceiling is reached, completed transcripts are retained and least-recently-used
-  audio is evicted.
+  ceiling is reached, completed transcripts are retained, already-transcribed
+  audio is evicted first, and pending inputs remain pinned.
+- Automatic lookahead skips episodes longer than 45 minutes. Long episodes
+  still prepare when they become current or when the user explicitly includes
+  their visible row through Prepare All.
 - The coordinator never downloads on a loop after a persistent HTTP, storage,
   unsupported-format, or engine error.
 - Retry uses bounded exponential backoff and resets only after episode identity,
@@ -758,9 +836,13 @@ shows material data use.
   servers.
 - Briefeed does not record the microphone.
 - No transcript, word timing, or publisher audio leaves the app container.
-- `NSSpeechRecognitionUsageDescription` is added before production use with
-  accurate local-processing language, even though this path does not use
-  `SFSpeechRecognizer` server recognition.
+- Do not add `NSSpeechRecognitionUsageDescription` defensively. The production
+  app path must be exercised on a physical iOS 26 device without the key and the
+  result recorded in the verification receipt. Add the key only if that test or
+  Apple's applicable `SpeechAnalyzer` contract requires authorization.
+- If a usage key is required, its text must accurately state that Briefeed
+  transcribes publisher audio on device and does not record the microphone or
+  send audio to a speech server.
 - Settings gains a clear-cache action that reports the combined prepared-audio
   and transcript size.
 
@@ -773,6 +855,9 @@ shows material data use.
 - The transcript coordinator observes Radio state; it never writes queue order.
 - `UnifiedAudioPlayer` remains the playback facade and exposes current media
   time.
+- Before starting a Radio episode, `UnifiedAudioPlayer` asks the transcript
+  coordinator for an exact prepared local asset and prefers it over the remote
+  enclosure URL. It never hot-swaps an episode already streaming.
 - The legacy `TranscriptReaderView` remains article-summary UI and is not
   modified into the Radio viewer.
 - Article summarization, Gemini TTS, PocketTTS, Reddit discovery, Supabase, and
@@ -783,9 +868,18 @@ shows material data use.
 ### Unit Tests
 
 - Cache key changes with episode, fingerprint, engine version, and locale.
+- Feed `<language>` and Atom `xml:lang` normalize to the expected locale.
+- Missing language uses `en-US`; unsupported publisher language fails
+  explicitly instead of retrying as English.
 - Cache hit restores a valid transcript.
 - Fingerprint change invalidates a transcript.
 - Corrupt index or transcript deletes only the bad record.
+- Pending current/lookahead/batch assets and prepared current/next-two playback
+  assets are pinned against LRU eviction.
+- Pinned assets at the disk ceiling throttle downloads instead of cycling
+  download, eviction, and redownload.
+- Automatic lookahead excludes episodes over the configured 45-minute cap;
+  current and Prepare All work remain eligible.
 - Projection chooses the correct word at boundaries and gaps.
 - Stable line grouping does not shift before a boundary.
 - Seek target maps to the line's first word.
@@ -823,6 +917,8 @@ shows material data use.
 - Returning active resumes analysis from cached audio.
 - Prepare All continues download and analysis after foreground-to-background on
   iOS 26 when the system grants runtime.
+- Continued-processing submission uses `.fail`; rejection keeps foreground
+  preparation alive and reports background continuation as unavailable.
 - Cancel Prepare All from the system interface and confirm audio continues,
   completed transcripts remain, and unfinished work is resumable.
 - Expire the continued-processing task and confirm the same partial-success
@@ -830,6 +926,8 @@ shows material data use.
 - Expire during episode N, relaunch, and verify episodes 1 through N-1 are cache
   hits while only episode N resumes from its last durable stage.
 - Offline playback from cached audio restores its cached transcript.
+- A prepared-ahead episode starts playback from its exact local asset on its
+  first play.
 - Dynamic-ad duration mismatch fails closed.
 
 ### Visual and Accessibility Tests
@@ -856,12 +954,29 @@ On the approved iPhone:
 - analysis resumes after foregrounding;
 - explicit Prepare All exposes system progress, continues in background, and
   reports monotonic completion;
+- a rejected `.fail` submission leaves foreground preparation working and
+  reports the limitation;
 - system/user cancellation stops promptly without corrupting completed cache;
 - seeking and 2x/3x remain visually synchronized;
 - memory and thermal state remain acceptable over a 60-minute Radio session;
 - killing and reopening restores the prepared transcript;
+- the signed production app invokes `SpeechAnalyzer` without
+  `NSSpeechRecognitionUsageDescription`; the receipt records whether iOS
+  prompts, rejects, or permits the on-device file-transcription path before the
+  key decision is finalized;
 - no publisher audio or transcript appears in logs, test attachments, or the
   repository.
+
+`BGTaskScheduler` continued-processing behavior is not considered verified by a
+normal simulator run. Simulator integration uses Apple's LLDB task launch and
+expiration simulation hooks where supported; real submission, system progress,
+background continuation, cancellation, and expiration require a physical
+iPhone.
+
+During implementation, inspect the current `RadioHomeView` on supported phone
+shapes before treating the transcript band's proposed placement as final. The
+band must fit the actual list, floating navigation, mini-player, and safe-area
+layout rather than assuming an obsolete artwork region exists.
 
 The feature is not ready for phone distribution until these gates pass on the
 simulator where applicable and on a physical device for SpeechAnalyzer,
@@ -871,17 +986,19 @@ background transfer, audio continuity, memory, and thermal behavior.
 
 1. Add pure cache/state/projection models and tests.
 2. Add the versioned transcript store and fingerprinted audio cache.
-3. Add the background download asset service with injectable test transport.
-4. Add the serial preparation pipeline and coordinator.
-5. Add the iOS 26 continued-processing driver and Prepare All command.
-6. Integrate coordinator lifecycle and Radio current/next-two observation.
-7. Add compact and expanded transcript views.
-8. Add exact-asset validation and cached-local playback preference.
-9. Run focused unit/integration/UI tests.
-10. Run simulator layout and lifecycle tests using the app-testing runbook.
-11. Run physical-device SpeechAnalyzer, continued-processing, background audio,
+3. Add RSS/Atom language parsing and the feed speech-metadata store.
+4. Add the non-discretionary background download asset service with pinned
+   pending inputs and injectable test transport.
+5. Add the serial preparation pipeline and coordinator.
+6. Add the iOS 26 continued-processing driver and Prepare All command.
+7. Integrate coordinator lifecycle and Radio current/next-two observation.
+8. Add compact and expanded transcript views.
+9. Add exact-asset validation and prepared-local playback preference.
+10. Run focused unit/integration/UI tests.
+11. Run simulator layout and lifecycle tests using the app-testing runbook.
+12. Run physical-device SpeechAnalyzer, continued-processing, background audio,
     cancellation, memory, and thermal gates.
-12. Produce a verified build suitable for the next iOS distribution step.
+13. Produce a verified build suitable for the next iOS distribution step.
 
 The detailed TDD implementation plan will be written only after this design is
 reviewed and approved.
