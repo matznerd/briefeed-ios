@@ -8,6 +8,11 @@ struct TimedTranscriptIndex: Sendable {
     }
 
     func activeUnit(at mediaTime: TimeInterval) -> TimedTranscriptUnit? {
+        guard let index = activeUnitIndex(at: mediaTime) else { return nil }
+        return units[index]
+    }
+
+    func activeUnitIndex(at mediaTime: TimeInterval) -> Int? {
         guard mediaTime.isFinite, mediaTime >= 0, !units.isEmpty else { return nil }
 
         var lower = 0
@@ -27,6 +32,6 @@ struct TimedTranscriptIndex: Sendable {
         if candidateIndex == units.count - 1, mediaTime >= candidate.endSeconds {
             return nil
         }
-        return candidate
+        return candidateIndex
     }
 }
