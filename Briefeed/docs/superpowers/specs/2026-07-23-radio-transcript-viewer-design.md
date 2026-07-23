@@ -22,9 +22,10 @@ Playback always wins:
    player's current episode media time.
 5. While Briefeed remains active, it prepares the next two eligible Radio
    episodes in order.
-6. An explicit **Prepare All** command snapshots the remaining eligible Radio
-   brief and starts a user-visible iOS 26 continued-processing task that may
-   finish after Briefeed enters the background.
+6. An explicit **Prepare All** command snapshots the visible, fresh,
+   uncompleted latest-per-source rows and starts a user-visible iOS 26
+   continued-processing task that may finish after Briefeed enters the
+   background.
 
 The automatic lookahead depth is two, not an unbounded feed crawl. On-device
 inference has no per-request API charge, but it still consumes network data,
@@ -143,15 +144,20 @@ Examples:
 "All" is bounded to a snapshot of the deterministic Radio session at the time
 of the tap:
 
-- the current episode;
-- pending latest-per-source Radio entries;
-- manually queued Radio archive episodes;
+- the fresh episodes currently presented in "Your radio brief";
+- at most one latest eligible episode per enabled source;
+- only entries that are not completed/listened;
 - no duplicate `RadioEpisodeKey` values.
 
-It does not include every historical episode in each source, retired hourly
-bulletins, completed items no longer in the Radio session, Brief articles, or
-episodes that arrive after the task begins. A later refresh may offer Prepare
-All again for newly eligible work.
+The snapshot comes from the same `RadioHomePresentation.playlistItems` value
+used to render the visible rows. The transcript coordinator does not rebuild a
+different "all" list from Core Data.
+
+It does not include manually selected archive episodes, earlier episodes behind
+a source disclosure, every historical episode in each source, retired hourly
+bulletins, completed/listened rows, Brief articles, or episodes that arrive
+after the task begins. A later refresh may offer Prepare All again for newly
+visible eligible work.
 
 On iOS 26, tapping Prepare All:
 
@@ -168,11 +174,29 @@ On iOS 26, tapping Prepare All:
 The user can stop the operation in Briefeed while it is foregrounded or through
 the system's progress interface while it is backgrounded. Completed episode
 artifacts remain valid; cancellation never rolls them back. Pending episodes
-return to `queued` and can be resumed by a later Prepare All action.
+return to `queued`. The row becomes `Resume preparation · N remaining`; tapping
+it is a new explicit action that may submit another continued-processing task.
 
 Prepare All is hidden or replaced by a clear unavailable message on iOS 18
 through 25. It is disabled when there is no eligible work or when required
 speech support is unavailable.
+
+### Playing an Earlier Episode
+
+An episode selected from source history is prepared on demand, not as part of
+Prepare All:
+
+1. The user selects the earlier episode.
+2. Audio starts immediately through the normal Radio playback path.
+3. The transcript coordinator observes the new current `RadioEpisodeKey` and
+   promotes it above every lookahead or batch job.
+4. A valid cache hit displays immediately. Otherwise, audio acquisition and
+   on-device transcription begin without pausing playback.
+5. Synchronized text appears as soon as the exact-asset validation succeeds.
+
+No neighboring archive episodes are prepared. Leaving the episode does not
+discard a completed transcript, and returning to it reuses the fingerprinted
+cache.
 
 ### Default Flow View
 
@@ -352,6 +376,8 @@ single writer of production transcript preparation state.
 Responsibilities:
 
 - Observe current Radio episode identity and the next eligible episode keys.
+- Accept the exact visible, uncompleted latest-per-source keys for Prepare All
+  rather than independently querying archive data.
 - Restore cached transcript records at launch.
 - Maintain an ordered desired working set of current plus two.
 - Promote the current episode above any lookahead work.
@@ -381,7 +407,7 @@ Scheduling rules:
 2. Current episode missing or stale transcript.
 3. First next eligible episode.
 4. Second next eligible episode.
-5. Remaining Prepare All snapshot entries in Radio order.
+5. Remaining visible Prepare All snapshot entries in Radio order.
 
 Limits:
 
@@ -396,6 +422,9 @@ Limits:
 
 Each job captures a generation and an immutable `RadioEpisodeKey`. Completion
 must verify both before changing visible state.
+
+An out-of-order archive episode that becomes current follows rule 1 or 2. It is
+never followed by automatic preparation of the rest of that source's history.
 
 ### RadioTranscriptAssetService
 
@@ -463,6 +492,31 @@ struct RadioTranscriptRecord: Codable, Equatable, Sendable {
 }
 ```
 
+Prepare All also persists a resumable manifest:
+
+```swift
+enum RadioTranscriptBatchEntryState: Codable, Equatable, Sendable {
+    case pending
+    case audioReady(assetFingerprint: String)
+    case transcriptReady(cacheKey: RadioTranscriptCacheKey)
+    case failed(message: String)
+}
+
+struct RadioTranscriptBatchEntry: Codable, Equatable, Sendable {
+    let episodeKey: RadioEpisodeKey
+    let order: Int
+    var state: RadioTranscriptBatchEntryState
+}
+
+struct RadioTranscriptBatchManifest: Codable, Equatable, Sendable {
+    let schemaVersion: Int
+    let id: UUID
+    let createdAt: Date
+    var updatedAt: Date
+    var entries: [RadioTranscriptBatchEntry]
+}
+```
+
 Rules:
 
 - A changed audio fingerprint invalidates the old transcript even if the RSS
@@ -474,6 +528,18 @@ Rules:
 - Transcript records may outlive their audio files because they are small; if
   the exact asset is reacquired with the same fingerprint, the transcript is
   immediately reusable.
+- Download completion, transcript completion, and batch-manifest changes use
+  immediate atomic writes. They are never held behind the normal progress
+  debounce.
+- A transcript artifact is atomically written and validated before its cache
+  index and batch entry change to `transcriptReady`.
+- Continued-processing progress advances only after the corresponding
+  transcript is durably committed.
+- At launch, the store reconciles the manifest against valid transcript files
+  and asset records, so an interruption between file and index writes cannot
+  discard completed work.
+- A manifest remains until all entries are ready or the user explicitly
+  discards it.
 
 ### TimedTranscriptProjection
 
@@ -525,13 +591,28 @@ Responsibilities:
 - report monotonic progress to `BGContinuedProcessingTask.progress`;
 - update the localized title/subtitle as episodes complete;
 - install an expiration handler that cancels active analysis and persists
-  completed work;
+  the active operation and flushes its current durable stage;
 - call `setTaskCompleted(success:)` promptly on completion, cancellation, or
   failure;
+- restore an unfinished manifest as `Resume preparation · N remaining`;
 - restore the in-app preparation state when the app returns foreground.
 
 The driver does not submit a continued-processing task for autoplay, automatic
 lookahead, refresh, launch, or a timer.
+
+Checkpoint behavior:
+
+- Each successfully downloaded asset is moved and indexed immediately.
+- Each successfully validated transcript is saved immediately.
+- The batch manifest is saved after each durable stage and each completed
+  episode.
+- If expiration occurs during speech analysis, that episode returns to
+  `audioReady`. Apple SpeechAnalyzer analysis restarts from the already cached
+  audio next time; previously completed episodes are not repeated.
+- If expiration occurs during a download, resumable URLSession state is used
+  when available. Otherwise only that incomplete download restarts.
+- The SpeechAnalyzer result is all-or-nothing in V1. Briefeed does not persist
+  or display a partial transcript as if it were complete.
 
 ## Exact-Asset and Dynamic-Ad Safety
 
@@ -608,6 +689,12 @@ Briefeed uses it only for Prepare All. The button is an explicit command with a
 bounded episode count and a clear completion condition. The system interface
 reports progress and preserves user cancellation.
 
+If Apple expires the task, Briefeed does not silently resubmit another
+continued-processing request. Completed episodes and downloaded assets remain
+checkpointed. When the app next becomes active, normal current-plus-two work may
+resume automatically; resuming the entire remaining snapshot requires the
+user's `Resume preparation` tap.
+
 Autoplay and current-plus-two lookahead remain automatic foreground work.
 Silently submitting a continued-processing task for either would violate
 Apple's interaction contract.
@@ -656,7 +743,13 @@ shows material data use.
 - Relaunch clears transient `downloading` and `transcribing` states back to
   `queued`; it does not show stale indefinite progress.
 - Prepare All expiration preserves completed results and returns unfinished
-  entries to `queued`.
+  entries to their last durable state.
+- An interrupted `audioReady` episode resumes transcription without
+  redownloading.
+- An interrupted transcript operation restarts only that transcript; it does
+  not repeat completed batch entries.
+- Selecting an earlier source episode starts audio immediately and prepares
+  only that selected episode on demand.
 
 ## Privacy and Permissions
 
@@ -699,10 +792,15 @@ shows material data use.
 - Current job preempts lookahead.
 - Queue reorder recalculates next two without duplicates.
 - Prepare All snapshots only eligible session entries and de-duplicates keys.
+- Prepare All selection exactly matches visible uncompleted
+  latest-per-source rows and excludes source-history episodes.
 - Continued-processing progress is monotonic and reaches completion exactly
   once.
-- Expiration and user cancellation preserve completed records and requeue
-  unfinished jobs.
+- Each completed episode is atomically durable before batch progress advances.
+- Expiration and user cancellation preserve completed records, downloaded
+  assets, and the resumable manifest.
+- An expired mid-transcription entry returns to `audioReady` and resumes without
+  redownload.
 - Automatic launch/lookahead never submits a continued-processing task.
 - Stale canceled generation cannot publish.
 - Relaunch normalizes transient preparation states.
@@ -712,6 +810,8 @@ shows material data use.
 ### Integration Tests
 
 - Start uncached episode: audio play request occurs before transcript readiness.
+- Select an earlier source-history episode: audio starts first, its transcript
+  appears when ready, and adjacent history is not prepared.
 - Current transcript becomes visible without restarting playback when asset
   validation passes.
 - Next two prepare in deterministic Radio order.
@@ -727,6 +827,8 @@ shows material data use.
   completed transcripts remain, and unfinished work is resumable.
 - Expire the continued-processing task and confirm the same partial-success
   behavior.
+- Expire during episode N, relaunch, and verify episodes 1 through N-1 are cache
+  hits while only episode N resumes from its last durable stage.
 - Offline playback from cached audio restores its cached transcript.
 - Dynamic-ad duration mismatch fails closed.
 
@@ -794,6 +896,7 @@ reviewed and approved.
 - Automatic transcript preparation while Briefeed is suspended without an
   explicit Prepare All action.
 - Full-feed or archive pretranscription.
+- Inclusion of manually selected source-history episodes in Prepare All.
 - Transcript search, export, editing, translation, or speaker diarization.
 - Phoneme-level forced alignment.
 - CarPlay transcript display.
