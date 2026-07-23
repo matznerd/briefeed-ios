@@ -285,6 +285,46 @@ struct RadioAppLifecycleTests {
         #expect(restoreAutoplayValues == [true])
     }
 
+    @Test func transientInactiveAfterFirstActiveDefersColdLaunchAndPreservesAutoplay() async {
+        let monitor = LifecycleConnectivityMonitor(.online)
+        var restoreAutoplayValues: [Bool] = []
+        var initialRefreshCount = 0
+        let driver = makeDriver(monitor: monitor)
+
+        driver.handleScenePhase(.active)
+        driver.handleScenePhase(.inactive)
+
+        await driver.startColdLaunch(
+            restore: { autoplayAllowed in
+                restoreAutoplayValues.append(autoplayAllowed)
+                return nil
+            },
+            initialRefresh: refreshWork(
+                begin: { initialRefreshCount += 1 },
+                load: { self.emptyRefresh }
+            ),
+            foregroundRefresh: refreshWork(load: { self.emptyRefresh })
+        )
+        #expect(restoreAutoplayValues.isEmpty)
+
+        driver.handleScenePhase(.active)
+        await driver.startColdLaunch(
+            restore: { autoplayAllowed in
+                restoreAutoplayValues.append(autoplayAllowed)
+                return nil
+            },
+            initialRefresh: refreshWork(
+                begin: { initialRefreshCount += 1 },
+                load: { self.emptyRefresh }
+            ),
+            foregroundRefresh: refreshWork(load: { self.emptyRefresh })
+        )
+        await settle()
+
+        #expect(restoreAutoplayValues == [true])
+        #expect(initialRefreshCount == 1)
+    }
+
     @Test func coldLaunchServicesStartOnlyForAnActiveScene() {
         #expect(!RadioStartupPolicy.shouldStartServices(for: .inactive))
         #expect(!RadioStartupPolicy.shouldStartServices(for: .background))

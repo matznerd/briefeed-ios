@@ -169,8 +169,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     private func configureAudioSession() {
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.allowBluetooth, .allowAirPlay])
-            try AVAudioSession.sharedInstance().setActive(true)
+            try AudioSessionConfiguration.activatePlayback()
         } catch {
             print("Failed to configure audio session: \(error)")
         }

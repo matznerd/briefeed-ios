@@ -329,9 +329,7 @@ final class SwiftAudioExService: NSObject, AudioPlaybackTransporting {
 
     private func setupAudioSession() {
         do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .spokenAudio, options: [.allowBluetoothHFP, .allowAirPlay])
-            try session.setActive(true)
+            try AudioSessionConfiguration.activatePlayback()
         } catch {
             print("[SwiftAudioEx] Audio session setup failed: \(error)")
         }

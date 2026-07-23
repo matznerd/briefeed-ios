@@ -110,6 +110,12 @@ final class RadioAppLifecycleDriver {
         foregroundRefresh: RefreshWork,
         pollRefresh: RefreshWork? = nil
     ) async {
+        // The first active callback can enqueue startup immediately before a
+        // transient inactive transition. Wait for the next active callback
+        // instead of consuming the one cold-launch autoplay evaluation while
+        // the app cannot safely start audio. A true background has already
+        // disabled autoplay and may restore its paused projection here.
+        guard isActive || !coldLaunchAutoplayAllowed else { return }
         guard !didStartColdLaunch, !didTerminate else { return }
         didStartColdLaunch = true
 
@@ -171,7 +177,9 @@ final class RadioAppLifecycleDriver {
             // active frame. Treat only a later inactive transition as leaving
             // an established foreground session.
             guard hasObservedActiveScene else { return }
-            coldLaunchAutoplayAllowed = false
+            if didStartColdLaunch {
+                coldLaunchAutoplayAllowed = false
+            }
             guard !isInInactiveSequence, !didTerminate else { return }
             isInInactiveSequence = true
             isActive = false

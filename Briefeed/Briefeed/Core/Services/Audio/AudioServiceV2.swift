@@ -73,15 +73,7 @@ final class AudioServiceV2: NSObject {
     
     // MARK: - Audio Session Configuration
     private func configureAudioSession() async throws {
-        let session = AVAudioSession.sharedInstance()
-        
-        try session.setCategory(
-            .playback,
-            mode: .spokenAudio,
-            options: [.allowBluetooth, .allowAirPlay]
-        )
-        
-        try session.setActive(true)
+        try AudioSessionConfiguration.activatePlayback()
     }
     
     // MARK: - Public Methods (Async, no blocking)
