@@ -20,6 +20,8 @@ class RSSParser: NSObject {
     private var currentGuid = ""
     private var currentDuration = ""
     private var currentEnclosureUrl = ""
+    private var currentFeedLanguage = ""
+    private var feedLanguageAttribute: String?
     
     private var items: [ParsedRSSEpisode] = []
     private var feedId: String = ""
@@ -30,15 +32,26 @@ class RSSParser: NSObject {
     
     /// Parse RSS feed data
     func parse(data: Data, feedId: String) async throws -> [ParsedRSSEpisode] {
+        try await parseFeed(data: data, feedId: feedId).episodes
+    }
+
+    func parseFeed(data: Data, feedId: String) async throws -> ParsedRSSFeed {
         self.feedId = feedId
         self.items = []
         self.rejectedItemCount = 0
+        self.currentFeedLanguage = ""
+        self.feedLanguageAttribute = nil
+        self.isInsideItem = false
         
         let parser = XMLParser(data: data)
         parser.delegate = self
         
         if parser.parse() {
-            return items
+            let rawLanguage = feedLanguageAttribute ?? currentFeedLanguage
+            return ParsedRSSFeed(
+                episodes: items,
+                languageTag: RadioFeedSpeechMetadata.normalizedLanguageTag(rawLanguage)
+            )
         } else if let error = parser.parserError {
             throw error
         } else {
@@ -52,6 +65,13 @@ extension RSSParser: XMLParserDelegate {
     
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String : String] = [:]) {
         currentElement = elementName.lowercased()
+
+        if currentElement == "feed" || currentElement == "rss" {
+            feedLanguageAttribute =
+                attributeDict["xml:lang"] ??
+                attributeDict["lang"] ??
+                feedLanguageAttribute
+        }
         
         if currentElement == "item" || currentElement == "entry" {
             isInsideItem = true
@@ -85,6 +105,10 @@ extension RSSParser: XMLParserDelegate {
     }
     
     func parser(_ parser: XMLParser, foundCharacters string: String) {
+        if !isInsideItem, currentElement == "language" {
+            currentFeedLanguage += string
+            return
+        }
         guard isInsideItem else { return }
         
         let trimmedString = string.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -262,4 +286,9 @@ enum RSSParserError: LocalizedError {
             return "Invalid RSS data"
         }
     }
+}
+
+struct ParsedRSSFeed {
+    let episodes: [ParsedRSSEpisode]
+    let languageTag: String?
 }

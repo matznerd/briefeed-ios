@@ -27,6 +27,7 @@ class RSSAudioService: NSObject, ObservableObject {
     private let viewContext: NSManagedObjectContext
     private let dataLoader: (String) async throws -> Data
     private let saveContext: () throws -> Void
+    private let speechMetadataStore: any RadioFeedSpeechMetadataStoring
     
     // MARK: - Default Feeds Configuration
     private static let defaultFeedsConfig: [(id: String, url: String, name: String, frequency: String, priority: Int)] = [
@@ -49,6 +50,7 @@ class RSSAudioService: NSObject, ObservableObject {
             try await NetworkService.shared.requestData(endpoint, method: .get, parameters: nil, headers: nil, timeout: nil)
         }
         self.saveContext = { try context.save() }
+        self.speechMetadataStore = RadioServiceContainer.shared.feedSpeechMetadataStore
         super.init()
         loadFeeds()
     }
@@ -56,11 +58,13 @@ class RSSAudioService: NSObject, ObservableObject {
     init(
         viewContext: NSManagedObjectContext,
         dataLoader: @escaping (String) async throws -> Data,
-        saveContext: (() throws -> Void)? = nil
+        saveContext: (() throws -> Void)? = nil,
+        speechMetadataStore: (any RadioFeedSpeechMetadataStoring)? = nil
     ) {
         self.viewContext = viewContext
         self.dataLoader = dataLoader
         self.saveContext = saveContext ?? { try viewContext.save() }
+        self.speechMetadataStore = speechMetadataStore ?? InMemoryRadioFeedSpeechMetadataStore()
         super.init()
         loadFeeds()
     }
@@ -167,7 +171,8 @@ class RSSAudioService: NSObject, ObservableObject {
             
             // Parse RSS
             let parser = RSSParser()
-            let episodes = try await parser.parse(data: data, feedId: feed.id)
+            let parsedFeed = try await parser.parseFeed(data: data, feedId: feed.id)
+            let episodes = parsedFeed.episodes
             
             let insertedIDs = try performRecoverableContextChanges {
                 var insertedIDs: [String] = []
@@ -184,6 +189,15 @@ class RSSAudioService: NSObject, ObservableObject {
                 feed.lastFetchDate = now
                 try saveContext()
                 return insertedIDs
+            }
+            do {
+                try await speechMetadataStore.setLanguageTag(
+                    parsedFeed.languageTag,
+                    source: parsedFeed.languageTag == nil ? .fallback : .publisher,
+                    for: feed.id
+                )
+            } catch {
+                print("Could not save speech language for \(feed.id): \(error)")
             }
             return RSSFeedRefreshResult(feedID: feed.id, outcome: .success(insertedEpisodeIDs: insertedIDs))
         } catch {
@@ -304,7 +318,8 @@ class RSSAudioService: NSObject, ObservableObject {
         // Fetch and parse feed to get title
         let data = try await URLSession.shared.data(from: url).0
         let parser = RSSParser()
-        let episodes = try await parser.parse(data: data, feedId: UUID().uuidString)
+        let parsedFeed = try await parser.parseFeed(data: data, feedId: UUID().uuidString)
+        let episodes = parsedFeed.episodes
         
         // Extract feed title from first episode or use URL
         let feedTitle = episodes.first?.title.components(separatedBy: " - ").first ?? url.host ?? "Unknown Feed"

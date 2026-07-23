@@ -10,10 +10,17 @@ final class RadioServiceContainer {
 
     let connectivity: ConnectivityMonitoring
     let coordinator: RadioSessionCoordinator
+    let feedSpeechMetadataStore: any RadioFeedSpeechMetadataStoring
 
-    init(connectivity: ConnectivityMonitoring, coordinator: RadioSessionCoordinator) {
+    init(
+        connectivity: ConnectivityMonitoring,
+        coordinator: RadioSessionCoordinator,
+        feedSpeechMetadataStore: (any RadioFeedSpeechMetadataStoring)? = nil
+    ) {
         self.connectivity = connectivity
         self.coordinator = coordinator
+        self.feedSpeechMetadataStore =
+            feedSpeechMetadataStore ?? InMemoryRadioFeedSpeechMetadataStore()
     }
 
     static var shared: RadioServiceContainer {
@@ -53,7 +60,11 @@ final class RadioServiceContainer {
             now: { definition.now },
             connectivity: connectivity
         )
-        return RadioServiceContainer(connectivity: connectivity, coordinator: coordinator)
+        return RadioServiceContainer(
+            connectivity: connectivity,
+            coordinator: coordinator,
+            feedSpeechMetadataStore: InMemoryRadioFeedSpeechMetadataStore()
+        )
     }
     #endif
 
@@ -65,6 +76,17 @@ final class RadioServiceContainer {
             repository: CoreDataRadioEpisodeRepository(context: context),
             connectivity: connectivity
         )
-        return RadioServiceContainer(connectivity: connectivity, coordinator: coordinator)
+        let speechMetadataStore: any RadioFeedSpeechMetadataStoring
+        do {
+            speechMetadataStore = try RadioFeedSpeechMetadataStore()
+        } catch {
+            print("Could not open Radio speech metadata store: \(error)")
+            speechMetadataStore = InMemoryRadioFeedSpeechMetadataStore()
+        }
+        return RadioServiceContainer(
+            connectivity: connectivity,
+            coordinator: coordinator,
+            feedSpeechMetadataStore: speechMetadataStore
+        )
     }
 }
