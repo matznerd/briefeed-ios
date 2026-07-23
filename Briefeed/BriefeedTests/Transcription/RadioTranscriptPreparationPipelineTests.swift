@@ -49,6 +49,32 @@ struct RadioTranscriptPreparationPipelineTests {
         ])
     }
 
+    @Test func explicitBatchPreservesTheVisibleRadioOrder() async throws {
+        let harness = try PipelineHarness()
+        defer { harness.cleanup() }
+        let visibleFirst = harness.job(
+            "visible-first",
+            feedID: "z-source",
+            priority: .batch
+        )
+        let visibleSecond = harness.job(
+            "visible-second",
+            feedID: "a-source",
+            priority: .batch
+        )
+
+        await harness.pipeline.reconcile(
+            interactive: [],
+            batch: [visibleFirst, visibleSecond],
+            generation: 1
+        )
+        try await harness.waitForCallCount(2)
+
+        #expect(await harness.recorder.calls == [
+            "visible-first.audio", "visible-second.audio"
+        ])
+    }
+
     @Test func aNewGenerationPreventsCanceledResultsFromCommitting() async throws {
         let harness = try PipelineHarness(delay: .milliseconds(200))
         defer { harness.cleanup() }
@@ -103,6 +129,49 @@ struct RadioTranscriptPreparationPipelineTests {
         #expect(try await harness.store.loadTranscript(for: key) != nil)
         #expect(saved.completedCount == 1)
     }
+
+    @Test func anInteractiveJobAlsoAdvancesItsOverlappingBatchEntry() async throws {
+        let harness = try PipelineHarness()
+        defer { harness.cleanup() }
+        let current = harness.job("shared", priority: .current)
+        let batch = harness.job("shared", priority: .batch)
+        try await harness.store.saveBatch(
+            RadioTranscriptBatchManifest(
+                schemaVersion:
+                    RadioTranscriptBatchManifest.currentSchemaVersion,
+                id: UUID(),
+                createdAt: .now,
+                updatedAt: .now,
+                entries: [
+                    .init(
+                        episodeKey: current.episodeKey,
+                        order: 0,
+                        remoteURL: current.remoteURL,
+                        expectedDurationSeconds:
+                            current.expectedDurationSeconds,
+                        languageTag: current.languageTag,
+                        state: .pending
+                    )
+                ]
+            )
+        )
+
+        await harness.pipeline.reconcile(
+            interactive: [current],
+            batch: [batch],
+            generation: 1
+        )
+        try await harness.waitForSuccessfulEpisode("shared")
+
+        let saved = try #require(try await harness.store.loadBatch())
+        #expect(await harness.recorder.calls == ["shared.audio"])
+        #expect(saved.completedCount == 1)
+        guard case .transcriptReady(let key) = saved.entries[0].state else {
+            Issue.record("Expected the overlapping batch entry to finish")
+            return
+        }
+        #expect(try await harness.store.loadTranscript(for: key) != nil)
+    }
 }
 
 private final class PipelineHarness: @unchecked Sendable {
@@ -128,10 +197,11 @@ private final class PipelineHarness: @unchecked Sendable {
 
     func job(
         _ episodeID: String,
+        feedID: String = "feed",
         priority: RadioTranscriptJobPriority
     ) -> RadioTranscriptJob {
         RadioTranscriptJob(
-            episodeKey: .init(feedID: "feed", episodeID: episodeID),
+            episodeKey: .init(feedID: feedID, episodeID: episodeID),
             remoteURL: URL(string: "https://example.com/\(episodeID).mp3")!,
             expectedDurationSeconds: 30,
             languageTag: "en-US",

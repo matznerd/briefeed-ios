@@ -410,6 +410,7 @@ final class SpyAudioTransport: AudioPlaybackTransporting {
     weak var delegate: SwiftAudioExServiceDelegate?
     var currentTime: TimeInterval = 0
     var duration: TimeInterval = 0
+    var activeRemotePlaybackIdentity: RemotePlaybackAssetIdentity?
     private(set) var lastPlaybackID: TransportPlaybackID?
     private(set) var seeks: [TimeInterval] = []
     private(set) var loads: [(TransportPlaybackID, URL)] = []
@@ -423,6 +424,7 @@ final class SpyAudioTransport: AudioPlaybackTransporting {
     }
     func play(id: TransportPlaybackID, url: URL, title: String?, artist: String?) async throws {
         lastPlaybackID = id
+        activeRemotePlaybackIdentity = nil
         loads.append((id, url))
         event("play")
         if playFailuresRemaining > 0 {

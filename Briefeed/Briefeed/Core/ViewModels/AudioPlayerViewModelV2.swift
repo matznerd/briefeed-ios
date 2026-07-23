@@ -47,6 +47,7 @@ final class AudioPlayerViewModelV2: ObservableObject {
         RadioTranscriptPresentation.idle
     @Published private(set) var radioTranscriptBatchPresentation =
         RadioTranscriptBatchPresentation.idle
+    @Published private(set) var radioTranscriptPlaybackIsValidated = false
     
     @Published private(set) var lastError: Error?
     @Published private(set) var generationPhase: GenerationPhase = .idle
@@ -74,6 +75,7 @@ final class AudioPlayerViewModelV2: ObservableObject {
     private let rssService: RSSAudioService
     private var cancellables = Set<AnyCancellable>()
     private var isApplyingPlaybackSpeed = false
+    private var transcriptValidationTask: Task<Void, Never>?
     
     // MARK: - Initialization
     
@@ -115,11 +117,16 @@ final class AudioPlayerViewModelV2: ObservableObject {
             .assign(to: &$isPlaying)
         
         unifiedPlayer.$currentTime
-            .removeDuplicates(by: Self.isSameDisplayedSecond)
+            .removeDuplicates(by: Self.isSameTranscriptFrame)
             .assign(to: &$currentTime)
         
         unifiedPlayer.$duration
-            .assign(to: &$duration)
+            .removeDuplicates()
+            .sink { [weak self] duration in
+                self?.duration = duration
+                self?.validateTranscriptPlayback()
+            }
+            .store(in: &cancellables)
         
         unifiedPlayer.$playbackRate
             .assign(to: &$playbackSpeed)
@@ -162,9 +169,21 @@ final class AudioPlayerViewModelV2: ObservableObject {
         radioCoordinator.sleepTimerPublisher.assign(to: &$sleepTimer)
         radioCoordinator.sourceFailuresPublisher.assign(to: &$sourceFailures)
         radioTranscriptCoordinator?.presentationPublisher
-            .assign(to: &$radioTranscriptPresentation)
+            .sink { [weak self] presentation in
+                self?.radioTranscriptPresentation = presentation
+                self?.validateTranscriptPlayback()
+            }
+            .store(in: &cancellables)
         radioTranscriptCoordinator?.batchPresentationPublisher
             .assign(to: &$radioTranscriptBatchPresentation)
+        unifiedPlayer.$radioTranscriptPlaybackIsValidated
+            .assign(to: &$radioTranscriptPlaybackIsValidated)
+        unifiedPlayer.$radioTranscriptValidationRevision
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.validateTranscriptPlayback()
+            }
+            .store(in: &cancellables)
         
         unifiedPlayer.$isGenerating
             .assign(to: &$isGenerating)
@@ -181,9 +200,24 @@ final class AudioPlayerViewModelV2: ObservableObject {
             .assign(to: &$progress)
     }
 
-    private static func isSameDisplayedSecond(_ previous: TimeInterval, _ next: TimeInterval) -> Bool {
+    private static func isSameTranscriptFrame(
+        _ previous: TimeInterval,
+        _ next: TimeInterval
+    ) -> Bool {
         guard previous.isFinite, next.isFinite else { return previous == next }
-        return Int(previous.rounded(.down)) == Int(next.rounded(.down))
+        return Int((previous * 10).rounded(.down)) ==
+            Int((next * 10).rounded(.down))
+    }
+
+    private func validateTranscriptPlayback() {
+        let presentation = radioTranscriptPresentation
+        transcriptValidationTask?.cancel()
+        transcriptValidationTask = Task { [weak self] in
+            guard let self else { return }
+            await unifiedPlayer.validateActiveRadioTranscript(
+                presentation
+            )
+        }
     }
 
     private func refreshNowPlaying() {
@@ -707,6 +741,10 @@ extension AudioPlayerViewModelV2 {
         _ candidates: [RadioEpisodeCandidate]
     ) {
         radioTranscriptCoordinator?.updateVisibleSnapshot(candidates)
+    }
+
+    var radioTranscriptPreparationIsAvailable: Bool {
+        radioTranscriptCoordinator?.isPreparationAvailable ?? false
     }
 
     func prepareAllRadioTranscripts() {

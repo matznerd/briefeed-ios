@@ -1,7 +1,7 @@
 # Briefeed Radio Transcript Viewer Design
 
 **Date:** 2026-07-23  
-**Status:** Proposed for product and engineering review  
+**Status:** Implemented on `codex/live-radio-mvp`; simulator and physical-device verification pending
 **Tracking:** GitHub issue #23  
 **Depends on:** Live Radio MVP and the completed on-device timed-transcript spike  
 **Does not include:** Ad classification or automatic ad skipping (GitHub issue #10)
@@ -696,9 +696,9 @@ V1 uses these safeguards:
 2. When an episode has been prepared ahead and then becomes current, playback
    starts from that exact fingerprinted local file. This applies even when it is
    the first time the user plays that episode.
-3. For the currently streaming first play, the coordinator compares final URL,
-   response validators, content length, and media duration before exposing the
-   new transcript.
+3. For the currently streaming first play, the coordinator compares the
+   transport's observed final URL, response validators, positive content
+   length, and media duration before exposing the new transcript.
 4. If duration differs beyond a small tested tolerance, synchronized text stays
    unavailable for that stream. The prepared transcript becomes eligible only
    when playback uses its exact cached asset.
@@ -706,11 +706,15 @@ V1 uses these safeguards:
    dedicated continuity test proves the transition is inaudible and time-safe.
 
 For a currently streaming uncached episode, text may appear as soon as
-preparation finishes and validation passes. DAI-heavy publishers may routinely
-produce a different asset for the preparation request; in that case the viewer
-fails closed for the current stream. A prepared-ahead next episode avoids that
-ambiguity because playback begins from the exact local asset used for
-transcription.
+preparation finishes and validation passes. This requires the playback
+transport to expose identity from the response it is actually playing. The
+current SwiftAudioEx adapter does not expose that response identity, so V1
+fails closed for an uncached remote first play and offers the prepared
+transcript on exact local replay instead. Prepared-ahead next episodes avoid
+that ambiguity because playback begins from the exact local asset used for
+transcription. A follow-up transport task owns first-play response observation;
+the viewer must not substitute preparation-download metadata as proof of the
+active stream.
 
 The future ad classifier must use the same fingerprinted asset identity. The
 58.62/59.40 Marketplace boundary is research evidence, not a reusable rule.

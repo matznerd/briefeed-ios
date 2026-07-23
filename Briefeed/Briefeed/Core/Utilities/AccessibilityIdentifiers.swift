@@ -37,6 +37,16 @@ enum AccessibilityID {
         }
         static let playlist = "radio.playlist"
         static let sourceArchive = "radio.sourceArchive"
+        static let transcriptBand = "radio.transcript.band"
+        static let transcriptState = "radio.transcript.state"
+        static let transcriptActiveLine = "radio.transcript.activeLine"
+        static let transcriptExpanded = "radio.transcript.expanded"
+        static let transcriptResumeLive = "radio.transcript.resumeLive"
+        static let transcriptRetry = "radio.transcript.retry"
+        static let transcriptPrepareAll = "radio.transcript.prepareAll"
+        static let transcriptPrepareProgress =
+            "radio.transcript.prepareProgress"
+        static let transcriptStop = "radio.transcript.stop"
         static func episode(_ key: RadioEpisodeKey) -> String {
             "radio.episode.\(key.feedID).\(key.episodeID)"
         }

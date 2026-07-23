@@ -149,9 +149,9 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
             .filter { seen.insert($0.episodeKey).inserted }
             .prefix(3)
         let remainingBatch = batch
-            .sorted(by: Self.jobPrecedes)
             .filter { seen.insert($0.episodeKey).inserted }
         let jobs = Array(automatic) + remainingBatch
+        let batchKeys = Set(batch.map(\.episodeKey))
 
         worker = Task {
             await previousWorker?.value
@@ -160,7 +160,11 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
                       generation == self.activeGeneration else {
                     return
                 }
-                await self.process(job, generation: generation)
+                await self.process(
+                    job,
+                    generation: generation,
+                    tracksBatchEntry: batchKeys.contains(job.episodeKey)
+                )
             }
         }
     }
@@ -172,7 +176,8 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
 
     private func process(
         _ job: RadioTranscriptJob,
-        generation: Int
+        generation: Int,
+        tracksBatchEntry: Bool
     ) async {
         emit(.preparation(
             episodeKey: job.episodeKey,
@@ -191,7 +196,7 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
             )
             try ensureCurrent(generation)
 
-            if job.priority == .batch {
+            if tracksBatchEntry {
                 try await updateBatch(
                     job.episodeKey,
                     state: .audioReady(
@@ -214,7 +219,7 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
             )
             if let cached = try await store.loadTranscript(for: expectedKey) {
                 try await assetProvider.markTranscriptReady(asset)
-                if job.priority == .batch {
+                if tracksBatchEntry {
                     try await updateBatch(
                         job.episodeKey,
                         state: .transcriptReady(cacheKey: expectedKey)
@@ -271,7 +276,7 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
                 throw error
             }
             try await assetProvider.markTranscriptReady(asset)
-            if job.priority == .batch {
+            if tracksBatchEntry {
                 try await updateBatch(
                     job.episodeKey,
                     state: .transcriptReady(cacheKey: actualKey)
@@ -286,7 +291,7 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
             return
         } catch {
             guard generation == activeGeneration else { return }
-            if job.priority == .batch {
+            if tracksBatchEntry {
                 try? await updateBatch(
                     job.episodeKey,
                     state: .failed(message: Self.errorMessage(error))

@@ -1,4 +1,5 @@
 import Combine
+import CryptoKit
 import Foundation
 import Testing
 @testable import Briefeed
@@ -34,6 +35,24 @@ struct RadioTranscriptCoordinatorTests {
         #expect(reconciliation.interactive.map(\.languageTag) == [
             "en-US", "en-GB", "en-GB"
         ])
+    }
+
+    @Test func playbackProgressUpdatesDoNotRestartTheSameWorkingSet() async throws {
+        let harness = try CoordinatorHarness()
+        defer { harness.cleanup() }
+        let current = harness.candidate("current", progress: 0)
+        let next = harness.candidate("next")
+
+        harness.coordinator.updateCurrent(current, next: [next])
+        _ = try await harness.pipeline.waitForReconciliation()
+
+        harness.coordinator.updateCurrent(
+            harness.candidate("current", progress: 0.25),
+            next: [next]
+        )
+        await Task.yield()
+
+        #expect(await harness.pipeline.queuedReconciliationCount() == 0)
     }
 
     @Test func prepareAllUsesOnlyTheVisibleUncompletedDeduplicatedSnapshot() async throws {
@@ -106,6 +125,310 @@ struct RadioTranscriptCoordinatorTests {
         #expect(harness.coordinator.presentation.episodeKey == replacement.key)
         #expect(harness.coordinator.presentation.isReady)
     }
+
+    @Test func persistedBatchReturnsAsStoppedAfterVisibleSnapshotRestores() async throws {
+        let harness = try CoordinatorHarness()
+        defer { harness.cleanup() }
+        let first = harness.candidate("first")
+        let second = harness.candidate("second")
+        let transcript = try harness.transcript("first")
+        let cacheKey = RadioTranscriptCacheKey(
+            episodeKey: first.key,
+            assetFingerprint: transcript.assetFingerprint,
+            engineIdentifier: transcript.engineIdentifier,
+            engineVersion: transcript.engineVersion,
+            localeIdentifier: transcript.localeIdentifier
+        )
+        try await harness.store.save(
+            transcript: transcript,
+            record: RadioTranscriptRecord(
+                schemaVersion: RadioTranscriptRecord.currentSchemaVersion,
+                key: cacheKey,
+                sourceURLHash: "source",
+                audioDurationSeconds: transcript.audioDurationSeconds,
+                transcriptRelativePath: "artifacts/first.json",
+                preparedAt: .now,
+                lastAccessedAt: .now
+            )
+        )
+        try await harness.store.saveBatch(
+            harness.manifest(
+                entries: [
+                    .init(
+                        episodeKey: first.key,
+                        order: 0,
+                        state: .transcriptReady(cacheKey: cacheKey)
+                    ),
+                    .init(
+                        episodeKey: second.key,
+                        order: 1,
+                        state: .pending
+                    )
+                ]
+            )
+        )
+
+        harness.coordinator.updateVisibleSnapshot([first, second])
+        try await harness.waitUntilBatchState(.stopped)
+
+        #expect(harness.coordinator.batchPresentation.completedCount == 1)
+        #expect(harness.coordinator.batchPresentation.totalCount == 2)
+    }
+
+    @Test func missingTranscriptArtifactDoesNotRestoreAsCompleted() async throws {
+        let harness = try CoordinatorHarness()
+        defer { harness.cleanup() }
+        let candidate = harness.candidate("missing")
+        let missingKey = RadioTranscriptCacheKey(
+            episodeKey: candidate.key,
+            assetFingerprint: "missing-fingerprint",
+            engineIdentifier: "test",
+            engineVersion: "1",
+            localeIdentifier: "en-US"
+        )
+        try await harness.store.saveBatch(
+            harness.manifest(
+                entries: [
+                    .init(
+                        episodeKey: candidate.key,
+                        order: 0,
+                        state: .transcriptReady(cacheKey: missingKey)
+                    )
+                ]
+            )
+        )
+
+        harness.coordinator.updateVisibleSnapshot([candidate])
+        try await harness.waitUntilBatchState(.stopped)
+
+        #expect(harness.coordinator.batchPresentation.completedCount == 0)
+        #expect(harness.coordinator.batchPresentation.totalCount == 1)
+    }
+
+    @Test func resumeBatchCarriesCompletedCheckpointAndSchedulesOnlyPending() async throws {
+        let harness = try CoordinatorHarness()
+        defer { harness.cleanup() }
+        let first = harness.candidate("first")
+        let second = harness.candidate("second")
+        let transcript = try harness.transcript("first")
+        let cacheKey = RadioTranscriptCacheKey(
+            episodeKey: first.key,
+            assetFingerprint: transcript.assetFingerprint,
+            engineIdentifier: transcript.engineIdentifier,
+            engineVersion: transcript.engineVersion,
+            localeIdentifier: transcript.localeIdentifier
+        )
+        try await harness.store.save(
+            transcript: transcript,
+            record: RadioTranscriptRecord(
+                schemaVersion: RadioTranscriptRecord.currentSchemaVersion,
+                key: cacheKey,
+                sourceURLHash: "source",
+                audioDurationSeconds: transcript.audioDurationSeconds,
+                transcriptRelativePath: "artifacts/first.json",
+                preparedAt: .now,
+                lastAccessedAt: .now
+            )
+        )
+        let oldManifest = harness.manifest(
+            entries: [
+                .init(
+                    episodeKey: first.key,
+                    order: 0,
+                    state: .transcriptReady(cacheKey: cacheKey)
+                ),
+                .init(
+                    episodeKey: second.key,
+                    order: 1,
+                    state: .audioReady(assetFingerprint: "second-audio")
+                )
+            ]
+        )
+        try await harness.store.saveBatch(oldManifest)
+        harness.coordinator.updateVisibleSnapshot([first, second])
+        try await harness.waitUntilBatchState(.stopped)
+
+        harness.coordinator.prepareAll()
+        let reconciliation =
+            try await harness.pipeline.waitForReconciliation()
+        let resumed = try #require(try await harness.store.loadBatch())
+
+        #expect(resumed.id != oldManifest.id)
+        #expect(resumed.entries[0].state ==
+                .transcriptReady(cacheKey: cacheKey))
+        #expect(resumed.entries[1].state ==
+                .audioReady(assetFingerprint: "second-audio"))
+        #expect(reconciliation.batch.map(\.episodeKey) == [second.key])
+        #expect(harness.background.submittedTotals == [2])
+        #expect(harness.coordinator.batchPresentation.completedCount == 1)
+    }
+
+    @Test func completedSnapshotWithNewVisibleWorkRestoresAsOneOfTwo() async throws {
+        let harness = try CoordinatorHarness()
+        defer { harness.cleanup() }
+        let first = harness.candidate("first")
+        let second = harness.candidate("second")
+        let cacheKey = try await harness.saveTranscript(for: first)
+        try await harness.store.saveBatch(
+            harness.manifest(entries: [
+                .init(
+                    episodeKey: first.key,
+                    order: 0,
+                    remoteURL: first.originalPlaybackURL,
+                    expectedDurationSeconds: first.durationSeconds,
+                    languageTag: "en-US",
+                    state: .transcriptReady(cacheKey: cacheKey)
+                )
+            ])
+        )
+
+        harness.coordinator.updateVisibleSnapshot([first, second])
+        try await harness.waitUntilBatchState(.stopped)
+
+        #expect(harness.coordinator.batchPresentation.completedCount == 1)
+        #expect(harness.coordinator.batchPresentation.totalCount == 2)
+        #expect(harness.coordinator.batchPresentation.episodeKeys == [
+            first.key, second.key
+        ])
+    }
+
+    @Test func stoppingBeforeBatchRestoreFinishesCannotRestartPreparation() async throws {
+        let harness = try CoordinatorHarness()
+        defer { harness.cleanup() }
+        harness.coordinator.updateVisibleSnapshot([
+            harness.candidate("first")
+        ])
+
+        harness.coordinator.prepareAll()
+        harness.coordinator.stopPrepareAll()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(harness.coordinator.batchPresentation.state == .stopped)
+        #expect(harness.background.submittedTotals.isEmpty)
+    }
+
+    @Test func aTerminalFailedManifestStopsAndCompletesBackgroundAsFailure() async throws {
+        let harness = try CoordinatorHarness()
+        defer { harness.cleanup() }
+        let candidate = harness.candidate("failed")
+        harness.coordinator.updateVisibleSnapshot([candidate])
+        harness.coordinator.prepareAll()
+        _ = try await harness.pipeline.waitForReconciliation()
+        var manifest = try #require(try await harness.store.loadBatch())
+        manifest.entries[0].state = .failed(message: "No speech")
+        try await harness.store.saveBatch(manifest)
+
+        await harness.pipeline.emit(.batchUpdated(manifest))
+        try await harness.waitUntilBatchState(.stopped)
+
+        #expect(harness.background.completions == [false])
+        #expect(harness.coordinator.batchPresentation.completedCount == 0)
+        #expect(harness.coordinator.batchPresentation.totalCount == 1)
+    }
+
+    @Test func resumePreservesUnfinishedManifestEntriesNoLongerVisible() async throws {
+        let harness = try CoordinatorHarness()
+        defer { harness.cleanup() }
+        let first = harness.candidate("first")
+        let second = harness.candidate("second")
+        let manifest = harness.manifest(entries: [
+            .init(
+                episodeKey: first.key,
+                order: 0,
+                remoteURL: first.originalPlaybackURL,
+                expectedDurationSeconds: first.durationSeconds,
+                languageTag: "en-US",
+                state: .pending
+            ),
+            .init(
+                episodeKey: second.key,
+                order: 1,
+                remoteURL: second.originalPlaybackURL,
+                expectedDurationSeconds: second.durationSeconds,
+                languageTag: "en-US",
+                state: .pending
+            )
+        ])
+        try await harness.store.saveBatch(manifest)
+        harness.coordinator.updateVisibleSnapshot([first])
+        try await harness.waitUntilBatchState(.stopped)
+
+        harness.coordinator.prepareAll()
+        let reconciliation =
+            try await harness.pipeline.waitForReconciliation()
+        let resumed = try #require(try await harness.store.loadBatch())
+
+        #expect(resumed.entries.map(\.episodeKey) == [
+            first.key, second.key
+        ])
+        #expect(reconciliation.batch.map(\.episodeKey) == [
+            first.key, second.key
+        ])
+    }
+
+    @Test func readyCheckpointForAnotherEpisodeIsRescheduled() async throws {
+        let harness = try CoordinatorHarness()
+        defer { harness.cleanup() }
+        let expected = harness.candidate("expected")
+        let other = harness.candidate("other")
+        let wrongKey = try await harness.saveTranscript(for: other)
+        try await harness.store.saveBatch(
+            harness.manifest(entries: [
+                .init(
+                    episodeKey: expected.key,
+                    order: 0,
+                    remoteURL: expected.originalPlaybackURL,
+                    expectedDurationSeconds: expected.durationSeconds,
+                    languageTag: "en-US",
+                    state: .transcriptReady(cacheKey: wrongKey)
+                )
+            ])
+        )
+        harness.coordinator.updateVisibleSnapshot([expected])
+        try await harness.waitUntilBatchState(.stopped)
+
+        harness.coordinator.prepareAll()
+        let reconciliation =
+            try await harness.pipeline.waitForReconciliation()
+
+        #expect(reconciliation.batch.map(\.episodeKey) == [expected.key])
+    }
+
+    @Test func readyCheckpointForAChangedSourceURLIsRescheduled() async throws {
+        let harness = try CoordinatorHarness()
+        defer { harness.cleanup() }
+        let old = harness.candidate(
+            "same",
+            playbackURL: URL(string: "https://example.com/old.mp3")!
+        )
+        let changed = harness.candidate(
+            "same",
+            playbackURL: URL(string: "https://example.com/new.mp3")!
+        )
+        let cacheKey = try await harness.saveTranscript(for: old)
+        try await harness.store.saveBatch(
+            harness.manifest(entries: [
+                .init(
+                    episodeKey: old.key,
+                    order: 0,
+                    remoteURL: old.originalPlaybackURL,
+                    expectedDurationSeconds: old.durationSeconds,
+                    languageTag: "en-US",
+                    state: .transcriptReady(cacheKey: cacheKey)
+                )
+            ])
+        )
+        harness.coordinator.updateVisibleSnapshot([changed])
+        try await harness.waitUntilBatchState(.stopped)
+
+        harness.coordinator.prepareAll()
+        let reconciliation =
+            try await harness.pipeline.waitForReconciliation()
+
+        #expect(reconciliation.batch.map(\.remoteURL) == [
+            changed.originalPlaybackURL
+        ])
+    }
 }
 
 private final class CoordinatorHarness: @unchecked Sendable {
@@ -141,21 +464,52 @@ private final class CoordinatorHarness: @unchecked Sendable {
     func candidate(
         _ id: String,
         feedID: String = "feed",
-        isCompleted: Bool = false
+        isCompleted: Bool = false,
+        progress: Double = 0,
+        playbackURL: URL? = nil
     ) -> RadioEpisodeCandidate {
-        RadioEpisodeCandidate(
+        let resolvedURL = playbackURL ??
+            URL(string: "https://example.com/\(id).mp3")!
+        return RadioEpisodeCandidate(
             key: .init(feedID: feedID, episodeID: id),
-            originalPlaybackURL: URL(string: "https://example.com/\(id).mp3")!,
-            canonicalEnclosureURL: "https://example.com/\(id).mp3",
+            originalPlaybackURL: resolvedURL,
+            canonicalEnclosureURL: resolvedURL.absoluteString,
             title: id,
             sourceName: feedID,
             publicationDate: .now,
             durationSeconds: 60,
-            normalizedCoreDataProgress: isCompleted ? 1 : 0,
+            normalizedCoreDataProgress: isCompleted ? 1 : progress,
             isCompleted: isCompleted,
             sourcePriority: 0,
             sourceFrequency: .daily
         )
+    }
+
+    func saveTranscript(
+        for candidate: RadioEpisodeCandidate
+    ) async throws -> RadioTranscriptCacheKey {
+        let transcript = try transcript(candidate.key.episodeID)
+        let cacheKey = RadioTranscriptCacheKey(
+            episodeKey: candidate.key,
+            assetFingerprint: transcript.assetFingerprint,
+            engineIdentifier: transcript.engineIdentifier,
+            engineVersion: transcript.engineVersion,
+            localeIdentifier: transcript.localeIdentifier
+        )
+        try await store.save(
+            transcript: transcript,
+            record: RadioTranscriptRecord(
+                schemaVersion: RadioTranscriptRecord.currentSchemaVersion,
+                key: cacheKey,
+                sourceURLHash: Self.hash(candidate.originalPlaybackURL),
+                audioDurationSeconds: transcript.audioDurationSeconds,
+                transcriptRelativePath:
+                    "artifacts/\(UUID().uuidString).json",
+                preparedAt: .now,
+                lastAccessedAt: .now
+            )
+        )
+        return cacheKey
     }
 
     func transcript(_ id: String) throws -> TimedTranscript {
@@ -179,6 +533,18 @@ private final class CoordinatorHarness: @unchecked Sendable {
         )
     }
 
+    func manifest(
+        entries: [RadioTranscriptBatchEntry]
+    ) -> RadioTranscriptBatchManifest {
+        RadioTranscriptBatchManifest(
+            schemaVersion: RadioTranscriptBatchManifest.currentSchemaVersion,
+            id: UUID(),
+            createdAt: .now,
+            updatedAt: .now,
+            entries: entries
+        )
+    }
+
     @MainActor
     func waitUntilPresentationReady() async throws {
         for _ in 0..<100 {
@@ -188,8 +554,25 @@ private final class CoordinatorHarness: @unchecked Sendable {
         Issue.record("Timed out waiting for ready presentation")
     }
 
+    @MainActor
+    func waitUntilBatchState(
+        _ state: RadioTranscriptBatchState
+    ) async throws {
+        for _ in 0..<100 {
+            if coordinator.batchPresentation.state == state { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("Timed out waiting for batch state \(state)")
+    }
+
     func cleanup() {
         try? FileManager.default.removeItem(at: root)
+    }
+
+    private static func hash(_ url: URL) -> String {
+        SHA256.hash(data: Data(url.absoluteString.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 }
 
@@ -244,6 +627,10 @@ private actor RecordingTranscriptPipeline:
         }
         throw CoordinatorTestError.timeout
     }
+
+    func queuedReconciliationCount() -> Int {
+        reconciliations.count
+    }
 }
 
 private enum CoordinatorTestError: Error {
@@ -284,6 +671,7 @@ private final class CoordinatorBackgroundDriver:
 {
     private(set) var submittedTotals: [Int] = []
     private(set) var updates: [(Int, Int)] = []
+    private(set) var completions: [Bool] = []
     private var expiration: (@MainActor @Sendable () -> Void)?
 
     func submit(
@@ -300,6 +688,8 @@ private final class CoordinatorBackgroundDriver:
         updates.append((completed, total))
     }
 
-    func complete(success: Bool) {}
+    func complete(success: Bool) {
+        completions.append(success)
+    }
     func cancel() {}
 }

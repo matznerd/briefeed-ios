@@ -9,8 +9,18 @@ struct RadioTranscriptPlaybackTests {
     @Test func aPreparedEpisodeLoadsItsExactFingerprintLocalURL() async throws {
         let candidate = makeCandidate("prepared")
         let localURL = URL(fileURLWithPath: "/tmp/prepared-fingerprint.mp3")
+        let transcript = try makeTranscript(
+            fingerprint: "prepared-fingerprint",
+            duration: 60
+        )
+        let asset = makeAsset(
+            candidate: candidate,
+            fingerprint: transcript.assetFingerprint,
+            duration: transcript.audioDurationSeconds,
+            localURL: localURL
+        )
         let assets = PlaybackTranscriptAssetProvider(
-            prepared: [candidate.key: localURL]
+            cached: [candidate.key: asset]
         )
         let (player, transport) = await makePlayer(
             candidates: [candidate],
@@ -19,8 +29,31 @@ struct RadioTranscriptPlaybackTests {
         )
 
         await player.playRadio()
+        await player.validateActiveRadioTranscript(
+            RadioTranscriptPresentation(
+                episodeKey: candidate.key,
+                state: .ready(transcript)
+            )
+        )
 
         #expect(transport.loads.map(\.1) == [localURL])
+        #expect(player.radioTranscriptPlaybackIsValidated)
+    }
+
+    @Test func aCompletedLoadRequestsFreshTranscriptValidation() async {
+        let candidate = makeCandidate("validation-revision")
+        let (player, _) = await makePlayer(
+            candidates: [candidate],
+            current: candidate.key,
+            assets: PlaybackTranscriptAssetProvider()
+        )
+        let initialRevision = player.radioTranscriptValidationRevision
+
+        await player.playRadio()
+
+        #expect(
+            player.radioTranscriptValidationRevision > initialRevision
+        )
     }
 
     @Test func anUnpreparedEpisodeStartsItsRemoteAudioImmediately() async {
@@ -36,6 +69,7 @@ struct RadioTranscriptPlaybackTests {
         #expect(transport.loads.map(\.1) == [
             candidate.originalPlaybackURL
         ])
+        #expect(!player.radioTranscriptPlaybackIsValidated)
     }
 
     @Test func finishingPreparationNeverHotSwapsTheActiveRemotePlayer() async {
@@ -63,8 +97,14 @@ struct RadioTranscriptPlaybackTests {
         let first = makeCandidate("first")
         let second = makeCandidate("second")
         let localURL = URL(fileURLWithPath: "/tmp/second-prepared.mp3")
+        let asset = makeAsset(
+            candidate: second,
+            fingerprint: "second-fingerprint",
+            duration: 60,
+            localURL: localURL
+        )
         let assets = PlaybackTranscriptAssetProvider(
-            prepared: [second.key: localURL]
+            cached: [second.key: asset]
         )
         let (player, transport) = await makePlayer(
             candidates: [first, second],
@@ -79,6 +119,248 @@ struct RadioTranscriptPlaybackTests {
             first.originalPlaybackURL,
             localURL
         ])
+    }
+
+    @Test func observedMatchingRemoteIdentityCanPublishSynchronizedText() async throws {
+        let candidate = makeCandidate("validated")
+        let transcript = try makeTranscript(
+            fingerprint: "validated-fingerprint",
+            duration: 60
+        )
+        let asset = makeAsset(
+            candidate: candidate,
+            fingerprint: transcript.assetFingerprint,
+            duration: transcript.audioDurationSeconds
+        )
+        let assets = PlaybackTranscriptAssetProvider(
+            cached: [:]
+        )
+        let (player, transport) = await makePlayer(
+            candidates: [candidate],
+            current: candidate.key,
+            assets: assets
+        )
+        await player.playRadio()
+        await assets.setCached(asset, for: candidate.key)
+        let playbackID = try #require(transport.lastPlaybackID)
+        player.audioItemReady(id: playbackID, duration: 60)
+        transport.activeRemotePlaybackIdentity = RemotePlaybackAssetIdentity(
+            playbackID: playbackID,
+            requestedURL: candidate.originalPlaybackURL,
+            finalURL: asset.finalURL,
+            etag: asset.etag,
+            lastModified: asset.lastModified,
+            responseContentLength: asset.responseContentLength,
+            duration: 60
+        )
+
+        await player.validateActiveRadioTranscript(
+            RadioTranscriptPresentation(
+                episodeKey: candidate.key,
+                state: .ready(transcript)
+            )
+        )
+
+        #expect(player.radioTranscriptPlaybackIsValidated)
+    }
+
+    @Test func preparationDownloadAloneCannotValidateTheActiveRemoteStream() async throws {
+        let candidate = makeCandidate("unobserved")
+        let transcript = try makeTranscript(
+            fingerprint: "unobserved-fingerprint",
+            duration: 60
+        )
+        let asset = makeAsset(
+            candidate: candidate,
+            fingerprint: transcript.assetFingerprint,
+            duration: transcript.audioDurationSeconds
+        )
+        let assets = PlaybackTranscriptAssetProvider()
+        let (player, transport) = await makePlayer(
+            candidates: [candidate],
+            current: candidate.key,
+            assets: assets
+        )
+        await player.playRadio()
+        await assets.setCached(asset, for: candidate.key)
+        let playbackID = try #require(transport.lastPlaybackID)
+        player.audioItemReady(id: playbackID, duration: 60)
+
+        await player.validateActiveRadioTranscript(
+            RadioTranscriptPresentation(
+                episodeKey: candidate.key,
+                state: .ready(transcript)
+            )
+        )
+
+        #expect(!player.radioTranscriptPlaybackIsValidated)
+    }
+
+    @Test func observedRemoteIdentityWithoutValidatorsFailsClosed() async throws {
+        let candidate = makeCandidate("no-validators")
+        let transcript = try makeTranscript(
+            fingerprint: "no-validators-fingerprint",
+            duration: 60
+        )
+        let asset = makeAsset(
+            candidate: candidate,
+            fingerprint: transcript.assetFingerprint,
+            duration: transcript.audioDurationSeconds
+        )
+        let assets = PlaybackTranscriptAssetProvider()
+        let (player, transport) = await makePlayer(
+            candidates: [candidate],
+            current: candidate.key,
+            assets: assets
+        )
+        await player.playRadio()
+        await assets.setCached(asset, for: candidate.key)
+        let playbackID = try #require(transport.lastPlaybackID)
+        transport.activeRemotePlaybackIdentity = RemotePlaybackAssetIdentity(
+            playbackID: playbackID,
+            requestedURL: candidate.originalPlaybackURL,
+            finalURL: asset.finalURL,
+            etag: nil,
+            lastModified: nil,
+            responseContentLength: asset.responseContentLength,
+            duration: 60
+        )
+
+        await player.validateActiveRadioTranscript(
+            RadioTranscriptPresentation(
+                episodeKey: candidate.key,
+                state: .ready(transcript)
+            )
+        )
+
+        #expect(!player.radioTranscriptPlaybackIsValidated)
+    }
+
+    @Test func mismatchedCurrentRemoteDurationKeepsTranscriptHidden() async throws {
+        let candidate = makeCandidate("mismatch")
+        let transcript = try makeTranscript(
+            fingerprint: "mismatch-fingerprint",
+            duration: 60
+        )
+        let asset = makeAsset(
+            candidate: candidate,
+            fingerprint: transcript.assetFingerprint,
+            duration: transcript.audioDurationSeconds
+        )
+        let assets = PlaybackTranscriptAssetProvider(
+            cached: [:]
+        )
+        let (player, transport) = await makePlayer(
+            candidates: [candidate],
+            current: candidate.key,
+            assets: assets
+        )
+        await player.playRadio()
+        await assets.setCached(asset, for: candidate.key)
+        let playbackID = try #require(transport.lastPlaybackID)
+        player.audioItemReady(id: playbackID, duration: 54)
+        transport.activeRemotePlaybackIdentity = RemotePlaybackAssetIdentity(
+            playbackID: playbackID,
+            requestedURL: candidate.originalPlaybackURL,
+            finalURL: asset.finalURL,
+            etag: asset.etag,
+            lastModified: asset.lastModified,
+            responseContentLength: asset.responseContentLength,
+            duration: 54
+        )
+
+        await player.validateActiveRadioTranscript(
+            RadioTranscriptPresentation(
+                episodeKey: candidate.key,
+                state: .ready(transcript)
+            )
+        )
+
+        #expect(!player.radioTranscriptPlaybackIsValidated)
+    }
+
+    @Test func aPreparedLocalAssetWithAnotherFingerprintStaysHidden() async throws {
+        let candidate = makeCandidate("stale-local")
+        let localURL = URL(fileURLWithPath: "/tmp/stale-local.mp3")
+        let asset = makeAsset(
+            candidate: candidate,
+            fingerprint: "asset-a",
+            duration: 60,
+            localURL: localURL
+        )
+        let transcript = try makeTranscript(
+            fingerprint: "asset-b",
+            duration: 60
+        )
+        let assets = PlaybackTranscriptAssetProvider(
+            cached: [candidate.key: asset]
+        )
+        let (player, _) = await makePlayer(
+            candidates: [candidate],
+            current: candidate.key,
+            assets: assets
+        )
+
+        await player.playRadio()
+        await player.validateActiveRadioTranscript(
+            RadioTranscriptPresentation(
+                episodeKey: candidate.key,
+                state: .ready(transcript)
+            )
+        )
+
+        #expect(!player.radioTranscriptPlaybackIsValidated)
+    }
+
+    @Test func anOldValidationCannotValidateTheNextEpisode() async throws {
+        let first = makeCandidate("first")
+        let second = makeCandidate("second")
+        let transcript = try makeTranscript(
+            fingerprint: "first-fingerprint",
+            duration: 60
+        )
+        let asset = makeAsset(
+            candidate: first,
+            fingerprint: transcript.assetFingerprint,
+            duration: 60
+        )
+        let assets = PlaybackTranscriptAssetProvider()
+        let (player, transport) = await makePlayer(
+            candidates: [first, second],
+            current: first.key,
+            assets: assets
+        )
+        await player.playRadio()
+        let firstPlaybackID = try #require(transport.lastPlaybackID)
+        player.audioItemReady(id: firstPlaybackID, duration: 60)
+        transport.activeRemotePlaybackIdentity = RemotePlaybackAssetIdentity(
+            playbackID: firstPlaybackID,
+            requestedURL: first.originalPlaybackURL,
+            finalURL: asset.finalURL,
+            etag: asset.etag,
+            lastModified: asset.lastModified,
+            responseContentLength: asset.responseContentLength,
+            duration: 60
+        )
+        await assets.setCached(asset, for: first.key)
+        await assets.blockLookup(for: first.key)
+
+        let staleValidation = Task {
+            await player.validateActiveRadioTranscript(
+                RadioTranscriptPresentation(
+                    episodeKey: first.key,
+                    state: .ready(transcript)
+                )
+            )
+        }
+        try await assets.waitUntilLookupStarts(for: first.key)
+
+        await player.playNext()
+        await assets.releaseLookup(for: first.key)
+        await staleValidation.value
+
+        #expect(player.activeMode == .radio)
+        #expect(!player.radioTranscriptPlaybackIsValidated)
     }
 
     private func makePlayer(
@@ -136,19 +418,103 @@ struct RadioTranscriptPlaybackTests {
             sourceFrequency: .daily
         )
     }
+
+    private func makeTranscript(
+        fingerprint: String,
+        duration: TimeInterval
+    ) throws -> TimedTranscript {
+        try TimedTranscript(
+            assetFingerprint: fingerprint,
+            engineIdentifier: "test",
+            engineVersion: "1",
+            localeIdentifier: "en-US",
+            recognizedText: "Latest news",
+            audioDurationSeconds: duration,
+            processingDurationSeconds: 0.1,
+            units: [
+                TimedTranscriptUnit(
+                    text: "Latest news",
+                    startSeconds: 0,
+                    endSeconds: 1,
+                    confidence: 1,
+                    granularity: .phrase
+                )
+            ]
+        )
+    }
+
+    private func makeAsset(
+        candidate: RadioEpisodeCandidate,
+        fingerprint: String,
+        duration: TimeInterval,
+        localURL: URL? = nil
+    ) -> RadioTranscriptAudioAsset {
+        RadioTranscriptAudioAsset(
+            schemaVersion: RadioTranscriptAudioAsset.currentSchemaVersion,
+            episodeKey: candidate.key,
+            originalURL: candidate.originalPlaybackURL,
+            finalURL: candidate.originalPlaybackURL,
+            etag: "\"fixture-etag\"",
+            lastModified: nil,
+            responseContentLength: 1_024,
+            audioDurationSeconds: duration,
+            assetFingerprint: fingerprint,
+            localFileURL: localURL ??
+                URL(fileURLWithPath:
+                    "/tmp/\(candidate.key.episodeID).mp3"),
+            completedAt: .now,
+            lastAccessedAt: .now,
+            isTranscriptReady: true
+        )
+    }
 }
 
 private actor PlaybackTranscriptAssetProvider:
     RadioTranscriptAssetProviding
 {
     private var prepared: [RadioEpisodeKey: URL]
+    private var cached: [RadioEpisodeKey: RadioTranscriptAudioAsset]
+    private var blockedLookups = Set<RadioEpisodeKey>()
+    private var lookupStarts = Set<RadioEpisodeKey>()
+    private var lookupWaiters: [
+        RadioEpisodeKey: [CheckedContinuation<Void, Never>]
+    ] = [:]
 
-    init(prepared: [RadioEpisodeKey: URL] = [:]) {
+    init(
+        prepared: [RadioEpisodeKey: URL] = [:],
+        cached: [RadioEpisodeKey: RadioTranscriptAudioAsset] = [:]
+    ) {
         self.prepared = prepared
+        self.cached = cached
     }
 
     func setPrepared(_ url: URL, for key: RadioEpisodeKey) {
         prepared[key] = url
+    }
+
+    func setCached(
+        _ asset: RadioTranscriptAudioAsset,
+        for key: RadioEpisodeKey
+    ) {
+        cached[key] = asset
+    }
+
+    func blockLookup(for key: RadioEpisodeKey) {
+        blockedLookups.insert(key)
+    }
+
+    func releaseLookup(for key: RadioEpisodeKey) {
+        blockedLookups.remove(key)
+        let continuations = lookupWaiters.removeValue(forKey: key) ?? []
+        continuations.forEach { $0.resume() }
+    }
+
+    func waitUntilLookupStarts(for key: RadioEpisodeKey) async throws {
+        for _ in 0..<200 {
+            if lookupStarts.contains(key) { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw CocoaError(.coderReadCorrupt)
     }
 
     func acquire(
@@ -160,7 +526,13 @@ private actor PlaybackTranscriptAssetProvider:
     func cachedAsset(
         for episodeKey: RadioEpisodeKey
     ) async throws -> RadioTranscriptAudioAsset? {
-        nil
+        lookupStarts.insert(episodeKey)
+        if blockedLookups.contains(episodeKey) {
+            await withCheckedContinuation { continuation in
+                lookupWaiters[episodeKey, default: []].append(continuation)
+            }
+        }
+        return cached[episodeKey]
     }
 
     func preparedPlaybackURL(for episodeKey: RadioEpisodeKey) async -> URL? {

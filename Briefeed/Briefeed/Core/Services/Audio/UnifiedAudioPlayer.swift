@@ -254,6 +254,8 @@ final class UnifiedAudioPlayer: ObservableObject {
     @Published private(set) var activeMode: ActivePlaybackMode = .none
     @Published private(set) var radioQueue: [UnifiedQueueItem] = []
     @Published private(set) var radioIndex: Int = -1
+    @Published private(set) var radioTranscriptPlaybackIsValidated = false
+    @Published private(set) var radioTranscriptValidationRevision = 0
 
     /// A restored Radio episode is usable before the audio transport is loaded,
     /// so `.none` can still present and route as Radio.
@@ -297,13 +299,22 @@ final class UnifiedAudioPlayer: ObservableObject {
     private var pendingSeekTime: TimeInterval?
     private var activePlaybackID: TransportPlaybackID?
     private var activeRadioKey: RadioEpisodeKey?
-    private var activeTranscriptAssetKey: RadioEpisodeKey?
+    private var activeTranscriptAssetIdentity:
+        ActiveTranscriptAssetIdentity?
+    private var activeRadioPlaybackURL: URL?
+    private var transcriptValidationSequence = 0
     private var consumedPlaybackIDs = Set<TransportPlaybackID>()
     private var briefInterruptionResumeEligible = false
 
     private struct RadioEventContext: Equatable {
         let playbackID: TransportPlaybackID
         let key: RadioEpisodeKey
+    }
+
+    private struct ActiveTranscriptAssetIdentity: Equatable {
+        let episodeKey: RadioEpisodeKey
+        let assetFingerprint: String
+        let localFileURL: URL
     }
 
     /// Cache of Article/Episode Core Data objects by ID for queue rebuilding
@@ -633,7 +644,8 @@ final class UnifiedAudioPlayer: ObservableObject {
                 _ = radioCoordinator.pauseByUser(positionSeconds: currentTime, duration: duration > 0 ? duration : nil)
             }
             audioPlayer.stop()
-            await setActiveTranscriptAssetKey(nil)
+            await setActiveTranscriptAsset(nil)
+            resetRadioTranscriptPlaybackIdentity()
         } else if activePlaybackID != nil {
             queueCoordinator.updateCurrentPosition(currentTime)
             queueCoordinator.saveStateNow()
@@ -671,6 +683,7 @@ final class UnifiedAudioPlayer: ObservableObject {
                 let playbackID = TransportPlaybackID()
                 activePlaybackID = playbackID
                 activeRadioKey = nil
+                resetRadioTranscriptPlaybackIdentity()
                 consumedPlaybackIDs.remove(playbackID)
                 updateRemoteAvailability()
                 try await audioPlayer.play(id: playbackID, url: audioURL, title: item.title, artist: artist)
@@ -762,6 +775,7 @@ final class UnifiedAudioPlayer: ObservableObject {
                 activeMode = .none
                 activePlaybackID = nil
                 activeRadioKey = nil
+                resetRadioTranscriptPlaybackIdentity()
                 isPlaying = false
                 currentTime = 0
                 duration = 0
@@ -846,6 +860,7 @@ final class UnifiedAudioPlayer: ObservableObject {
         duration = 0
         pendingSeekTime = nil
         releaseActiveTranscriptAsset()
+        resetRadioTranscriptPlaybackIdentity()
     }
     
     /// Set playback rate
@@ -964,6 +979,8 @@ final class UnifiedAudioPlayer: ObservableObject {
             let playbackID = TransportPlaybackID()
             activePlaybackID = playbackID
             activeRadioKey = request.key
+            activeRadioPlaybackURL = nil
+            radioTranscriptPlaybackIsValidated = false
             consumedPlaybackIDs.remove(playbackID)
             activeMode = .radio
             pendingSeekTime = request.positionSeconds > 0 ? request.positionSeconds : nil
@@ -973,14 +990,25 @@ final class UnifiedAudioPlayer: ObservableObject {
             updateRemoteAvailability()
 
             do {
-                let preparedURL = await radioTranscriptAssetProvider?
-                    .preparedPlaybackURL(for: request.key)
-                await setActiveTranscriptAssetKey(
-                    preparedURL == nil ? nil : request.key
-                )
+                let preparedAsset: RadioTranscriptAudioAsset?
+                if let radioTranscriptAssetProvider {
+                    preparedAsset = try? await
+                        radioTranscriptAssetProvider.cachedAsset(
+                            for: request.key
+                        )
+                } else {
+                    preparedAsset = nil
+                }
+                let exactPreparedAsset = preparedAsset?.isTranscriptReady == true
+                    ? preparedAsset
+                    : nil
+                let preparedURL = exactPreparedAsset?.localFileURL
+                await setActiveTranscriptAsset(exactPreparedAsset)
                 let url = preparedURL ??
                     preferredRadioURL(for: request.key) ??
                     request.url
+                activeRadioPlaybackURL = url
+                radioTranscriptPlaybackIsValidated = false
                 try await audioPlayer.play(
                     id: playbackID,
                     url: url,
@@ -988,15 +1016,17 @@ final class UnifiedAudioPlayer: ObservableObject {
                     artist: request.source
                 )
                 audioPlayer.setRate(playbackRate)
+                radioTranscriptValidationRevision += 1
             } catch {
                 guard playbackID == activePlaybackID else { return }
                 audioPlayer.stop()
                 activePlaybackID = nil
                 activeRadioKey = nil
+                resetRadioTranscriptPlaybackIdentity()
                 pendingSeekTime = nil
                 isPlaying = false
                 consumedPlaybackIDs.remove(playbackID)
-                await setActiveTranscriptAssetKey(nil)
+                await setActiveTranscriptAsset(nil)
                 let next = radioCoordinator.playbackFailed(
                     for: request.key,
                     message: error.localizedDescription,
@@ -1016,34 +1046,163 @@ final class UnifiedAudioPlayer: ObservableObject {
         return URL(fileURLWithPath: path)
     }
 
-    private func setActiveTranscriptAssetKey(
-        _ episodeKey: RadioEpisodeKey?
+    private func setActiveTranscriptAsset(
+        _ asset: RadioTranscriptAudioAsset?
     ) async {
-        guard episodeKey != activeTranscriptAssetKey else { return }
-        if let activeTranscriptAssetKey {
+        let identity = asset.map {
+            ActiveTranscriptAssetIdentity(
+                episodeKey: $0.episodeKey,
+                assetFingerprint: $0.assetFingerprint,
+                localFileURL: $0.localFileURL
+            )
+        }
+        guard identity != activeTranscriptAssetIdentity else { return }
+        if let activeTranscriptAssetIdentity {
             await radioTranscriptAssetProvider?.unpin(
-                activeTranscriptAssetKey,
+                activeTranscriptAssetIdentity.episodeKey,
                 reason: .activePlayback
             )
         }
-        activeTranscriptAssetKey = episodeKey
-        if let episodeKey {
+        activeTranscriptAssetIdentity = identity
+        if let identity {
             await radioTranscriptAssetProvider?.pin(
-                episodeKey,
+                identity.episodeKey,
                 reason: .activePlayback
             )
         }
     }
 
+    func validateActiveRadioTranscript(
+        _ presentation: RadioTranscriptPresentation
+    ) async {
+        transcriptValidationSequence += 1
+        let validationSequence = transcriptValidationSequence
+        let validationPlaybackID = activePlaybackID
+        let validationKey = activeRadioKey
+        let validationURL = activeRadioPlaybackURL
+
+        guard let presentationKey = presentation.episodeKey,
+              case .ready(let transcript) = presentation.state else {
+            radioTranscriptPlaybackIsValidated = false
+            return
+        }
+        #if DEBUG
+        if AppRuntime.radioFixtureScenario != nil {
+            radioTranscriptPlaybackIsValidated = true
+            return
+        }
+        #endif
+        if activeMode != .radio {
+            let asset: RadioTranscriptAudioAsset?
+            if let radioTranscriptAssetProvider {
+                asset = try? await radioTranscriptAssetProvider.cachedAsset(
+                    for: presentationKey
+                )
+            } else {
+                asset = nil
+            }
+            guard validationSequence == transcriptValidationSequence,
+                  activePlaybackID == validationPlaybackID else {
+                return
+            }
+            radioTranscriptPlaybackIsValidated =
+                radioCoordinator.currentKey == presentationKey &&
+                asset?.isTranscriptReady == true &&
+                asset?.assetFingerprint == transcript.assetFingerprint
+            return
+        }
+        guard let key = activeRadioKey,
+              presentationKey == key else {
+            radioTranscriptPlaybackIsValidated = false
+            return
+        }
+        if let identity = activeTranscriptAssetIdentity,
+           identity.episodeKey == key {
+            radioTranscriptPlaybackIsValidated =
+                identity.assetFingerprint == transcript.assetFingerprint &&
+                identity.localFileURL == activeRadioPlaybackURL
+            return
+        }
+        let asset: RadioTranscriptAudioAsset?
+        if let radioTranscriptAssetProvider {
+            asset = try? await radioTranscriptAssetProvider.cachedAsset(
+                for: key
+            )
+        } else {
+            asset = nil
+        }
+        let remoteIdentity = audioPlayer.activeRemotePlaybackIdentity
+        guard let activeRadioPlaybackURL,
+              let activePlaybackID,
+              let remoteIdentity,
+              remoteIdentity.playbackID == activePlaybackID,
+              remoteIdentity.requestedURL == activeRadioPlaybackURL,
+              let asset,
+              asset.isTranscriptReady,
+              asset.episodeKey == key,
+              asset.assetFingerprint == transcript.assetFingerprint,
+              asset.originalURL == remoteIdentity.requestedURL,
+              asset.finalURL == remoteIdentity.finalURL,
+              remoteIdentity.responseContentLength.map({ $0 > 0 }) == true,
+              asset.responseContentLength ==
+                  remoteIdentity.responseContentLength,
+              remoteIdentity.etag != nil ||
+                  remoteIdentity.lastModified != nil,
+              asset.etag == remoteIdentity.etag,
+              asset.lastModified == remoteIdentity.lastModified,
+              Self.durationsMatch(
+                remoteIdentity.duration,
+                asset.audioDurationSeconds
+              ),
+              Self.durationsMatch(
+                remoteIdentity.duration,
+                transcript.audioDurationSeconds
+              ) else {
+            guard validationSequence == transcriptValidationSequence,
+                  activePlaybackID == validationPlaybackID,
+                  activeRadioKey == validationKey,
+                  self.activeRadioPlaybackURL == validationURL else {
+                return
+            }
+            radioTranscriptPlaybackIsValidated = false
+            return
+        }
+        guard validationSequence == transcriptValidationSequence,
+              activePlaybackID == validationPlaybackID,
+              activeRadioKey == validationKey,
+              self.activeRadioPlaybackURL == validationURL else {
+            return
+        }
+        radioTranscriptPlaybackIsValidated = true
+    }
+
     private func releaseActiveTranscriptAsset() {
-        guard let episodeKey = activeTranscriptAssetKey else { return }
-        activeTranscriptAssetKey = nil
+        guard let identity = activeTranscriptAssetIdentity else { return }
+        activeTranscriptAssetIdentity = nil
         Task { [radioTranscriptAssetProvider] in
             await radioTranscriptAssetProvider?.unpin(
-                episodeKey,
+                identity.episodeKey,
                 reason: .activePlayback
             )
         }
+    }
+
+    private func resetRadioTranscriptPlaybackIdentity() {
+        transcriptValidationSequence += 1
+        activeRadioPlaybackURL = nil
+        radioTranscriptPlaybackIsValidated = false
+        radioTranscriptValidationRevision += 1
+    }
+
+    private static func durationsMatch(
+        _ lhs: TimeInterval,
+        _ rhs: TimeInterval
+    ) -> Bool {
+        guard lhs.isFinite, rhs.isFinite, lhs > 0, rhs > 0 else {
+            return false
+        }
+        let tolerance = max(0.75, min(lhs, rhs) * 0.005)
+        return abs(lhs - rhs) <= tolerance
     }
 
     private func cancelDeferredAutoplay() {
@@ -1714,6 +1873,9 @@ extension UnifiedAudioPlayer: SwiftAudioExServiceDelegate {
     func audioItemReady(id: TransportPlaybackID, duration: TimeInterval) {
         guard id == activePlaybackID else { return }
         self.duration = duration
+        if activeMode == .radio {
+            radioTranscriptValidationRevision += 1
+        }
         if let seekTime = pendingSeekTime {
             audioPlayer.seek(to: seekTime)
             currentTime = seekTime
@@ -1767,6 +1929,7 @@ extension UnifiedAudioPlayer: SwiftAudioExServiceDelegate {
         isPlaying = false
         if let context = radioEventContext(callbackID: id) {
             releaseActiveTranscriptAsset()
+            resetRadioTranscriptPlaybackIdentity()
             let completedAt = Date()
             let position = currentTime
             let knownDuration = duration > 0 ? duration : nil

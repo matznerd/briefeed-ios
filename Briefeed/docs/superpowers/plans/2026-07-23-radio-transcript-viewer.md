@@ -8,6 +8,13 @@
 
 **Tech Stack:** Swift 6, SwiftUI, Swift Testing, AVFoundation, CryptoKit, Foundation background `URLSession`, Apple Speech `SpeechAnalyzer` on iOS 26, BackgroundTasks `BGContinuedProcessingTask`, existing Core Data Radio repository, and the isolated Briefeed simulator fleet.
 
+**Implementation status (2026-07-23):** Tasks 1-9 are implemented on
+`codex/live-radio-mvp`. Compile verification is green. Managed simulator unit,
+UI, smoke, and lifecycle verification remain before physical-device testing.
+The current SwiftAudioEx adapter cannot expose observed HTTP response identity,
+so active uncached remote playback deliberately fails transcript validation
+closed; exact prepared local playback remains supported.
+
 ## Global Constraints
 
 - Keep the app deployment target at iOS 18.2; every SpeechAnalyzer and continued-processing reference is availability-gated for iOS 26.
@@ -498,7 +505,13 @@ Before a new Radio load, prefer the coordinator's fingerprinted local URL. Prese
 
 - [ ] **Step 4: Add current-stream validation reporting**
 
-Capture observable final URL, validators, response length, and duration when the transport exposes them. Report that identity to the transcript coordinator; publish ready text only when its validation policy passes.
+Capture observed final URL, validators, positive response length, and duration
+from the response the transport is actually playing when the transport exposes
+them. Report that identity to the transcript coordinator; publish ready text
+only when its validation policy passes. Never use the separate preparation
+download's metadata as a proxy for the active stream. Until SwiftAudioEx exposes
+that response identity, fail closed and publish the transcript only during
+exact prepared local playback.
 
 - [ ] **Step 5: Verify the playback regression suites GREEN**
 

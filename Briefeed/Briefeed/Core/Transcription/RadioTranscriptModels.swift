@@ -30,7 +30,26 @@ enum RadioTranscriptBatchEntryState: Codable, Equatable, Sendable {
 struct RadioTranscriptBatchEntry: Codable, Equatable, Sendable {
     let episodeKey: RadioEpisodeKey
     let order: Int
+    let remoteURL: URL?
+    let expectedDurationSeconds: TimeInterval?
+    let languageTag: String?
     var state: RadioTranscriptBatchEntryState
+
+    init(
+        episodeKey: RadioEpisodeKey,
+        order: Int,
+        remoteURL: URL? = nil,
+        expectedDurationSeconds: TimeInterval? = nil,
+        languageTag: String? = nil,
+        state: RadioTranscriptBatchEntryState
+    ) {
+        self.episodeKey = episodeKey
+        self.order = order
+        self.remoteURL = remoteURL
+        self.expectedDurationSeconds = expectedDurationSeconds
+        self.languageTag = languageTag
+        self.state = state
+    }
 }
 
 struct RadioTranscriptBatchManifest: Codable, Equatable, Sendable {
@@ -51,6 +70,17 @@ struct RadioTranscriptBatchManifest: Codable, Equatable, Sendable {
 
     var remainingCount: Int {
         totalCount - completedCount
+    }
+
+    var failedCount: Int {
+        entries.lazy.filter {
+            if case .failed = $0.state { return true }
+            return false
+        }.count
+    }
+
+    var terminalCount: Int {
+        completedCount + failedCount
     }
 
     var totalCount: Int {

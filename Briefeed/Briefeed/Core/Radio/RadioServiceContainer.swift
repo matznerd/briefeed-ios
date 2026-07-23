@@ -72,7 +72,10 @@ final class RadioServiceContainer {
         return RadioServiceContainer(
             connectivity: connectivity,
             coordinator: coordinator,
-            feedSpeechMetadataStore: InMemoryRadioFeedSpeechMetadataStore()
+            feedSpeechMetadataStore:
+                InMemoryRadioFeedSpeechMetadataStore(),
+            transcriptCoordinator:
+                RadioFixtureTranscriptCoordinator()
         )
     }
     #endif

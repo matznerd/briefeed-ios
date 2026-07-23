@@ -178,6 +178,7 @@ struct RadioHomeView: View {
 
     @EnvironmentObject private var audioPlayerViewModel: AudioPlayerViewModelV2
     @State private var showingAddSource = false
+    @State private var showingExpandedTranscript = false
     @State private var selectedSourceRoute: SourceRoute?
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \RSSEpisode.pubDate, ascending: false)],
@@ -188,11 +189,46 @@ struct RadioHomeView: View {
     var body: some View {
         NavigationStack {
             List {
+                if audioPlayerViewModel.currentRadioEpisode != nil {
+                    Section {
+                        RadioTranscriptViewer(
+                            presentation:
+                                audioPlayerViewModel.radioTranscriptPresentation,
+                            currentTime: audioPlayerViewModel.currentTime,
+                            playbackIsValidated:
+                                audioPlayerViewModel
+                                    .radioTranscriptPlaybackIsValidated,
+                            onOpen: {
+                                showingExpandedTranscript = true
+                            },
+                            onRetry: {
+                                audioPlayerViewModel
+                                    .retryCurrentRadioTranscript()
+                            }
+                        )
+                    }
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                }
+
                 if !playlistItems.isEmpty {
                     Section("Your radio brief") {
                         ForEach(playlistItems) { item in
                             playlistRow(item)
                         }
+
+                        RadioTranscriptPrepareAllRow(
+                            content: prepareAllContent,
+                            onPrepare: {
+                                updateVisibleTranscriptSnapshot()
+                                audioPlayerViewModel
+                                    .prepareAllRadioTranscripts()
+                            },
+                            onStop: {
+                                audioPlayerViewModel
+                                    .stopPreparingRadioTranscripts()
+                            }
+                        )
                     }
                     .accessibilityIdentifier(AccessibilityID.Radio.playlist)
                 }
@@ -223,6 +259,32 @@ struct RadioHomeView: View {
                     )
                 }
             }
+            .sheet(isPresented: $showingExpandedTranscript) {
+                RadioExpandedTranscriptView(
+                    presentation:
+                        audioPlayerViewModel.radioTranscriptPresentation,
+                    currentTime: audioPlayerViewModel.currentTime,
+                    playbackIsValidated:
+                        audioPlayerViewModel
+                            .radioTranscriptPlaybackIsValidated,
+                    isPlaying: audioPlayerViewModel.isPlaying,
+                    canPlayNext: audioPlayerViewModel.canPlayNext,
+                    onSeek: audioPlayerViewModel.seek(to:),
+                    onBackTen: audioPlayerViewModel.seekBackward,
+                    onPlayPause: audioPlayerViewModel.togglePlayPause,
+                    onForwardTen: audioPlayerViewModel.seekForward,
+                    onNext: {
+                        Task { await audioPlayerViewModel.playNext() }
+                    }
+                )
+                .presentationDetents([.large])
+            }
+        }
+        .onAppear {
+            updateVisibleTranscriptSnapshot()
+        }
+        .onChange(of: visibleTranscriptKeys) {
+            updateVisibleTranscriptSnapshot()
         }
         #if DEBUG
         .overlay(alignment: .topLeading) {
@@ -238,6 +300,35 @@ struct RadioHomeView: View {
             candidates: enabledEpisodes.compactMap { RadioEpisodeCandidate(episode: $0) },
             entries: audioPlayerViewModel.radioEntries,
             currentKey: audioPlayerViewModel.currentRadioEpisode?.key
+        )
+    }
+
+    private var visibleTranscriptCandidates: [RadioEpisodeCandidate] {
+        RadioTranscriptUIPresentation.eligibleCandidates(
+            from: playlistItems
+        )
+    }
+
+    private var visibleTranscriptKeys: [RadioEpisodeKey] {
+        visibleTranscriptCandidates.map(\.key)
+    }
+
+    private var prepareAllContent: RadioTranscriptPrepareAllContent {
+        RadioTranscriptUIPresentation.prepareAll(
+            batch:
+                audioPlayerViewModel.radioTranscriptBatchPresentation,
+            eligibleCount: visibleTranscriptCandidates.count,
+            isAvailable: transcriptPreparationIsAvailable
+        )
+    }
+
+    private var transcriptPreparationIsAvailable: Bool {
+        audioPlayerViewModel.radioTranscriptPreparationIsAvailable
+    }
+
+    private func updateVisibleTranscriptSnapshot() {
+        audioPlayerViewModel.updateVisibleRadioTranscriptCandidates(
+            visibleTranscriptCandidates
         )
     }
 

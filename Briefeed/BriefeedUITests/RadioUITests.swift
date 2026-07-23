@@ -183,6 +183,100 @@ final class RadioUITests: XCTestCase {
     }
 
     @MainActor
+    func testLiveTranscriptBandOpensExpandedReaderWithReachableTransport() throws {
+        app.launch()
+
+        let band = app.buttons["radio.transcript.band"]
+        XCTAssertTrue(band.waitForExistence(timeout: 8))
+        XCTAssertGreaterThanOrEqual(band.frame.height, 100)
+        XCTAssertLessThanOrEqual(band.frame.height, 150)
+
+        let rail = app.otherElements["navigation.rail"]
+        XCTAssertTrue(rail.waitForExistence(timeout: 3))
+        XCTAssertLessThan(
+            band.frame.maxY,
+            rail.frame.minY,
+            "The transcript band must stay inside scroll content above bottom chrome"
+        )
+
+        band.tap()
+        XCTAssertTrue(
+            app.otherElements["radio.transcript.expanded"]
+                .waitForExistence(timeout: 3)
+        )
+        for label in ["Back 10 seconds", "Forward 10 seconds", "Next"] {
+            let control = app.buttons[label]
+            XCTAssertTrue(control.waitForExistence(timeout: 3))
+            XCTAssertGreaterThanOrEqual(control.frame.width, 44)
+            XCTAssertGreaterThanOrEqual(control.frame.height, 44)
+        }
+        let playPause = app.buttons["Pause"].exists
+            ? app.buttons["Pause"]
+            : app.buttons["Play"]
+        XCTAssertTrue(playPause.waitForExistence(timeout: 3))
+        XCTAssertGreaterThanOrEqual(playPause.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(playPause.frame.height, 44)
+
+        app.swipeUp()
+        XCTAssertTrue(
+            app.buttons["radio.transcript.resumeLive"]
+                .waitForExistence(timeout: 3)
+        )
+    }
+
+    @MainActor
+    func testLiveTranscriptBandAdaptsAtLargestDynamicType() throws {
+        app.launchArguments += [
+            "-UIPreferredContentSizeCategoryName",
+            "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge"
+        ]
+        app.launch()
+
+        let band = app.buttons["radio.transcript.band"]
+        XCTAssertTrue(band.waitForExistence(timeout: 8))
+        XCTAssertGreaterThanOrEqual(band.frame.height, 148)
+        XCTAssertGreaterThan(
+            band.frame.minY,
+            app.frame.minY,
+            "The transcript must remain in Radio scroll content"
+        )
+
+        band.tap()
+        let playPause = app.buttons["Pause"].exists
+            ? app.buttons["Pause"]
+            : app.buttons["Play"]
+        XCTAssertTrue(playPause.waitForExistence(timeout: 3))
+        XCTAssertGreaterThanOrEqual(playPause.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(playPause.frame.height, 44)
+    }
+
+    @MainActor
+    func testPrepareAllUsesVisibleRowsAndClearsBottomChrome() throws {
+        app.launch()
+
+        let prepare = app.buttons["radio.transcript.prepareAll"]
+        for _ in 0..<5 where !prepare.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(prepare.waitForExistence(timeout: 5))
+        XCTAssertTrue(prepare.isHittable)
+
+        let rail = app.otherElements["navigation.rail"]
+        XCTAssertTrue(rail.waitForExistence(timeout: 3))
+        XCTAssertLessThanOrEqual(
+            prepare.frame.maxY,
+            rail.frame.minY + 1,
+            "Prepare All must scroll fully above navigation and playback controls"
+        )
+
+        prepare.tap()
+        XCTAssertTrue(
+            app.staticTexts["All transcripts ready"]
+                .waitForExistence(timeout: 3)
+        )
+    }
+
+    @MainActor
     func testRadioHomeRowsCanClearTheBottomChrome() throws {
         app.launch()
 

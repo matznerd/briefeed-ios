@@ -31,6 +31,16 @@ struct TransportPlaybackID: Hashable, Sendable {
     }
 }
 
+struct RemotePlaybackAssetIdentity: Equatable, Sendable {
+    let playbackID: TransportPlaybackID
+    let requestedURL: URL
+    let finalURL: URL
+    let etag: String?
+    let lastModified: String?
+    let responseContentLength: Int64?
+    let duration: TimeInterval
+}
+
 struct RemoteCommandAvailability: Equatable, Sendable {
     let previousEnabled: Bool
     let nextEnabled: Bool
@@ -82,6 +92,7 @@ protocol AudioPlaybackTransporting: AnyObject {
     var delegate: SwiftAudioExServiceDelegate? { get set }
     var currentTime: TimeInterval { get }
     var duration: TimeInterval { get }
+    var activeRemotePlaybackIdentity: RemotePlaybackAssetIdentity? { get }
     func play(id: TransportPlaybackID, url: URL, title: String?, artist: String?) async throws
     func pause()
     func resume()
@@ -89,6 +100,10 @@ protocol AudioPlaybackTransporting: AnyObject {
     func seek(to time: TimeInterval)
     func setRate(_ rate: Float)
     func applyRemoteCommandAvailability(_ availability: RemoteCommandAvailability)
+}
+
+extension AudioPlaybackTransporting {
+    var activeRemotePlaybackIdentity: RemotePlaybackAssetIdentity? { nil }
 }
 
 @MainActor

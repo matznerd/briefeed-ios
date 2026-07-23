@@ -1,5 +1,7 @@
 import Combine
+import CryptoKit
 import Foundation
+import Speech
 
 struct RadioTranscriptPresentation: Equatable, Sendable {
     let episodeKey: RadioEpisodeKey?
@@ -40,6 +42,21 @@ struct RadioTranscriptBatchPresentation: Equatable, Sendable {
     let completedCount: Int
     let totalCount: Int
     let backgroundContinuation: RadioTranscriptBackgroundContinuation
+    let episodeKeys: [RadioEpisodeKey]
+
+    init(
+        state: RadioTranscriptBatchState,
+        completedCount: Int,
+        totalCount: Int,
+        backgroundContinuation: RadioTranscriptBackgroundContinuation,
+        episodeKeys: [RadioEpisodeKey] = []
+    ) {
+        self.state = state
+        self.completedCount = completedCount
+        self.totalCount = totalCount
+        self.backgroundContinuation = backgroundContinuation
+        self.episodeKeys = episodeKeys
+    }
 
     static let idle = RadioTranscriptBatchPresentation(
         state: .idle,
@@ -53,6 +70,7 @@ struct RadioTranscriptBatchPresentation: Equatable, Sendable {
 protocol RadioTranscriptCoordinating: AnyObject {
     var presentation: RadioTranscriptPresentation { get }
     var batchPresentation: RadioTranscriptBatchPresentation { get }
+    var isPreparationAvailable: Bool { get }
     var presentationPublisher:
         AnyPublisher<RadioTranscriptPresentation, Never> { get }
     var batchPresentationPublisher:
@@ -94,24 +112,54 @@ final class RadioTranscriptCoordinator:
         $batchPresentation.eraseToAnyPublisher()
     }
 
+    var isPreparationAvailable: Bool {
+        if #available(iOS 26.0, *) {
+            return SpeechTranscriber.isAvailable
+        }
+        return false
+    }
+
     private let pipeline: any RadioTranscriptPipelineScheduling
     private let store: RadioTranscriptStore
     private let assetProvider: any RadioTranscriptAssetProviding
     private let metadataStore: any RadioFeedSpeechMetadataStoring
     private let backgroundDriver: any RadioTranscriptBackgroundDriving
     private var eventTask: Task<Void, Never>?
+    private var startupReconciliationTask: Task<Void, Never>?
     private var reconciliationTask: Task<Void, Never>?
+    private var batchRestoreTask: Task<Void, Never>?
     private var generation = 0
     private var currentCandidate: RadioEpisodeCandidate?
     private var nextCandidates: [RadioEpisodeCandidate] = []
     private var visibleSnapshot: [RadioEpisodeCandidate] = []
     private var activeBatchID: UUID?
-    private var activeBatchCandidates: [RadioEpisodeCandidate] = []
+    private var activeBatchJobs: [RadioTranscriptJob] = []
     private var automaticPins = Set<RadioEpisodeKey>()
     private var batchPins = Set<RadioEpisodeKey>()
     private var pinnedBatchID: UUID?
     private var isActive = true
     private var hasAcceptedBackgroundContinuation = false
+    private var batchOperationGeneration = 0
+    private var shouldReplaceBatchSnapshot = false
+
+    private struct AutomaticWorkIdentity: Equatable {
+        let current: CandidateWorkIdentity?
+        let next: [CandidateWorkIdentity]
+    }
+
+    private struct CandidateWorkIdentity: Equatable {
+        let key: RadioEpisodeKey
+        let remoteURL: URL
+        let expectedDurationSeconds: TimeInterval?
+        let isCompleted: Bool
+
+        init(_ candidate: RadioEpisodeCandidate) {
+            key = candidate.key
+            remoteURL = candidate.originalPlaybackURL
+            expectedDurationSeconds = candidate.durationSeconds
+            isCompleted = candidate.isCompleted
+        }
+    }
 
     init(
         pipeline: any RadioTranscriptPipelineScheduling,
@@ -125,6 +173,9 @@ final class RadioTranscriptCoordinator:
         self.assetProvider = assetProvider
         self.metadataStore = metadataStore
         self.backgroundDriver = backgroundDriver
+        startupReconciliationTask = Task { [store] in
+            try? await store.reconcile()
+        }
         eventTask = Task { [weak self, pipeline] in
             let events = await pipeline.events()
             for await event in events {
@@ -136,25 +187,31 @@ final class RadioTranscriptCoordinator:
 
     deinit {
         eventTask?.cancel()
+        startupReconciliationTask?.cancel()
         reconciliationTask?.cancel()
+        batchRestoreTask?.cancel()
     }
 
     func updateCurrent(
         _ current: RadioEpisodeCandidate?,
         next: [RadioEpisodeCandidate]
     ) {
-        let previousKey = currentCandidate?.key
-        currentCandidate = current
+        let previousIdentity = automaticWorkIdentity
         var seen = Set<RadioEpisodeKey>()
         if let current {
             seen.insert(current.key)
         }
-        nextCandidates = next
+        let filteredNext = next
             .filter { !$0.isCompleted && seen.insert($0.key).inserted }
             .prefix(2)
             .map { $0 }
+        currentCandidate = current
+        nextCandidates = filteredNext
+        let updatedIdentity = automaticWorkIdentity
 
-        if previousKey != current?.key {
+        guard previousIdentity != updatedIdentity else { return }
+
+        if previousIdentity?.current != updatedIdentity?.current {
             presentation = current.map {
                 RadioTranscriptPresentation(
                     episodeKey: $0.key,
@@ -165,11 +222,22 @@ final class RadioTranscriptCoordinator:
         reconcileDesired(automaticAllowed: isActive)
     }
 
+    private var automaticWorkIdentity: AutomaticWorkIdentity? {
+        guard currentCandidate != nil || !nextCandidates.isEmpty else {
+            return nil
+        }
+        return AutomaticWorkIdentity(
+            current: currentCandidate.map(CandidateWorkIdentity.init),
+            next: nextCandidates.map(CandidateWorkIdentity.init)
+        )
+    }
+
     func updateVisibleSnapshot(_ candidates: [RadioEpisodeCandidate]) {
         var seen = Set<RadioEpisodeKey>()
         visibleSnapshot = candidates.filter {
             !$0.isCompleted && seen.insert($0.key).inserted
         }
+        restoreBatchPresentationIfNeeded()
     }
 
     func prepareAll() {
@@ -179,43 +247,21 @@ final class RadioTranscriptCoordinator:
                 state: .completed,
                 completedCount: 0,
                 totalCount: 0,
-                backgroundContinuation: .none
+                backgroundContinuation: .none,
+                episodeKeys: []
             )
             return
         }
-
-        let batchID = UUID()
-        releaseBatchPins(batchID: pinnedBatchID)
-        activeBatchID = batchID
-        activeBatchCandidates = eligible
-        let submission = backgroundDriver.submit(
-            batchID: batchID,
-            total: eligible.count
-        ) { [weak self] in
-            self?.expirePrepareAll()
+        guard activeBatchID == nil else { return }
+        batchOperationGeneration += 1
+        let operationGeneration = batchOperationGeneration
+        batchRestoreTask?.cancel()
+        batchRestoreTask = Task { [weak self] in
+            await self?.beginPrepareAll(
+                eligible,
+                operationGeneration: operationGeneration
+            )
         }
-        let continuation: RadioTranscriptBackgroundContinuation
-        switch submission {
-        case .accepted:
-            continuation = .accepted
-            hasAcceptedBackgroundContinuation = true
-        case .unavailableOS:
-            continuation = .unavailableOS
-            hasAcceptedBackgroundContinuation = false
-        case .rejected(let message):
-            continuation = .rejected(message: message)
-            hasAcceptedBackgroundContinuation = false
-        }
-        batchPresentation = RadioTranscriptBatchPresentation(
-            state: .preparing,
-            completedCount: 0,
-            totalCount: eligible.count,
-            backgroundContinuation: continuation
-        )
-        reconcileDesired(
-            automaticAllowed: isActive,
-            createBatchManifest: true
-        )
     }
 
     func retryCurrent() {
@@ -224,16 +270,20 @@ final class RadioTranscriptCoordinator:
     }
 
     func stopPrepareAll() {
+        batchOperationGeneration += 1
+        batchRestoreTask?.cancel()
+        batchRestoreTask = nil
         backgroundDriver.cancel()
         hasAcceptedBackgroundContinuation = false
         let oldBatchID = activeBatchID
         activeBatchID = nil
-        activeBatchCandidates = []
+        activeBatchJobs = []
         batchPresentation = RadioTranscriptBatchPresentation(
             state: .stopped,
             completedCount: batchPresentation.completedCount,
             totalCount: batchPresentation.totalCount,
-            backgroundContinuation: .none
+            backgroundContinuation: .none,
+            episodeKeys: batchPresentation.episodeKeys
         )
         releaseBatchPins(batchID: oldBatchID)
         reconcileDesired(automaticAllowed: isActive)
@@ -248,7 +298,7 @@ final class RadioTranscriptCoordinator:
         isActive = false
         if hasAcceptedBackgroundContinuation,
            activeBatchID != nil,
-           !activeBatchCandidates.isEmpty {
+           !activeBatchJobs.isEmpty {
             reconcileDesired(automaticAllowed: false)
         } else {
             reconciliationTask?.cancel()
@@ -272,7 +322,7 @@ final class RadioTranscriptCoordinator:
 
     private func reconcileDesired(
         automaticAllowed: Bool,
-        createBatchManifest: Bool = false
+        createBatchManifest: RadioTranscriptBatchManifest? = nil
     ) {
         generation += 1
         let requestedGeneration = generation
@@ -281,44 +331,27 @@ final class RadioTranscriptCoordinator:
             ? [currentCandidate].compactMap { $0 } + nextCandidates
             : []
         let batchID = activeBatchID
-        let batchCandidates = activeBatchCandidates
+        let batchJobs = activeBatchJobs
 
         reconciliationTask = Task { [weak self] in
             guard let self else { return }
+            await self.finishStartupReconciliation()
+            guard !Task.isCancelled,
+                  requestedGeneration == self.generation else {
+                return
+            }
             let automaticJobs = await self.makeJobs(
                 candidates: automaticCandidates,
                 priorities: [.current, .nextOne, .nextTwo]
-            )
-            let batchJobs = await self.makeJobs(
-                candidates: batchCandidates,
-                priorities: Array(
-                    repeating: .batch,
-                    count: batchCandidates.count
-                )
             )
             guard !Task.isCancelled,
                   requestedGeneration == self.generation else {
                 return
             }
 
-            if createBatchManifest, let batchID {
-                let now = Date()
-                let manifest = RadioTranscriptBatchManifest(
-                    schemaVersion:
-                        RadioTranscriptBatchManifest.currentSchemaVersion,
-                    id: batchID,
-                    createdAt: now,
-                    updatedAt: now,
-                    entries: batchCandidates.enumerated().map {
-                        RadioTranscriptBatchEntry(
-                            episodeKey: $0.element.key,
-                            order: $0.offset,
-                            state: .pending
-                        )
-                    }
-                )
+            if let createBatchManifest {
                 do {
-                    try await self.store.saveBatch(manifest)
+                    try await self.store.saveBatch(createBatchManifest)
                 } catch {
                     self.failBatchForPersistence(error)
                     return
@@ -340,6 +373,301 @@ final class RadioTranscriptCoordinator:
                 generation: requestedGeneration
             )
         }
+    }
+
+    private func restoreBatchPresentationIfNeeded() {
+        guard activeBatchID == nil,
+              batchPresentation.state != .preparing,
+              !visibleSnapshot.isEmpty else {
+            return
+        }
+        batchOperationGeneration += 1
+        let operationGeneration = batchOperationGeneration
+        let visible = visibleSnapshot
+        batchRestoreTask?.cancel()
+        batchRestoreTask = Task { [weak self] in
+            guard let self else { return }
+            await self.finishStartupReconciliation()
+            guard
+                  let manifest = try? await self.store.loadBatch(),
+                  !Task.isCancelled,
+                  operationGeneration == self.batchOperationGeneration,
+                  self.activeBatchID == nil,
+                  self.batchPresentation.state != .preparing else {
+                return
+            }
+            var completed = 0
+            for entry in manifest.entries {
+                if await self.isValidReadyCheckpoint(
+                    entry,
+                    visibleCandidate: visible.first {
+                        $0.key == entry.episodeKey
+                    }
+                ) {
+                    completed += 1
+                }
+            }
+            guard !Task.isCancelled,
+                  operationGeneration == self.batchOperationGeneration,
+                  self.activeBatchID == nil,
+                  self.batchPresentation.state != .preparing else {
+                return
+            }
+            let manifestKeys = manifest.entries
+                .sorted { $0.order < $1.order }
+                .map(\.episodeKey)
+            self.shouldReplaceBatchSnapshot = manifest.entries.contains {
+                entry in
+                guard let persistedURL = entry.remoteURL,
+                      let candidate = visible.first(where: {
+                          $0.key == entry.episodeKey
+                      }) else {
+                    return false
+                }
+                return persistedURL != candidate.originalPlaybackURL
+            }
+            let manifestKeySet = Set(manifestKeys)
+            let newVisibleKeys = visible
+                .map(\.key)
+                .filter { !manifestKeySet.contains($0) }
+            let keys = completed == manifest.entries.count
+                ? manifestKeys + newVisibleKeys
+                : manifestKeys
+            self.batchPresentation = RadioTranscriptBatchPresentation(
+                state: completed == manifest.entries.count &&
+                    newVisibleKeys.isEmpty
+                    ? .completed
+                    : .stopped,
+                completedCount: completed,
+                totalCount: keys.count,
+                backgroundContinuation: .none,
+                episodeKeys: keys
+            )
+        }
+    }
+
+    private func beginPrepareAll(
+        _ eligible: [RadioEpisodeCandidate],
+        operationGeneration: Int
+    ) async {
+        await finishStartupReconciliation()
+        guard !Task.isCancelled,
+              operationGeneration == batchOperationGeneration,
+              activeBatchID == nil else {
+            return
+        }
+        let previous = try? await store.loadBatch()
+        guard !Task.isCancelled,
+              operationGeneration == batchOperationGeneration,
+              activeBatchID == nil else {
+            return
+        }
+        let resumesPrevious =
+            batchPresentation.state == .stopped &&
+            previous?.entries.isEmpty == false &&
+            previous?.entries.count == batchPresentation.episodeKeys.count &&
+            !shouldReplaceBatchSnapshot
+        shouldReplaceBatchSnapshot = false
+        let visibleByKey = Dictionary(
+            uniqueKeysWithValues: eligible.map { ($0.key, $0) }
+        )
+        let sourceEntries: [RadioTranscriptBatchEntry]
+        if resumesPrevious, let previous {
+            sourceEntries = previous.entries.sorted { $0.order < $1.order }
+        } else {
+            var created: [RadioTranscriptBatchEntry] = []
+            for (order, candidate) in eligible.enumerated() {
+                let metadata = await metadataStore.metadata(
+                    for: candidate.key.feedID
+                )
+                created.append(RadioTranscriptBatchEntry(
+                    episodeKey: candidate.key,
+                    order: order,
+                    remoteURL: candidate.originalPlaybackURL,
+                    expectedDurationSeconds: candidate.durationSeconds,
+                    languageTag: metadata.languageTag,
+                    state: .pending
+                ))
+            }
+            sourceEntries = created
+        }
+
+        var entries: [RadioTranscriptBatchEntry] = []
+        var remainingJobs: [RadioTranscriptJob] = []
+
+        for sourceEntry in sourceEntries {
+            guard !Task.isCancelled,
+                  operationGeneration == batchOperationGeneration else {
+                return
+            }
+            let candidate = visibleByKey[sourceEntry.episodeKey]
+            let remoteURL = sourceEntry.remoteURL ??
+                candidate?.originalPlaybackURL
+            let expectedDuration = sourceEntry.expectedDurationSeconds ??
+                candidate?.durationSeconds
+            let languageTag: String
+            if let persisted = sourceEntry.languageTag {
+                languageTag = persisted
+            } else {
+                languageTag = await metadataStore.metadata(
+                    for: sourceEntry.episodeKey.feedID
+                ).languageTag
+            }
+            let state: RadioTranscriptBatchEntryState
+            switch sourceEntry.state {
+            case .transcriptReady(let key):
+                let candidateMatchesSource = candidate.map {
+                    remoteURL == $0.originalPlaybackURL
+                } ?? true
+                if candidateMatchesSource,
+                   await isValidReadyCheckpoint(
+                       sourceEntry,
+                       visibleCandidate: candidate
+                   ) {
+                    state = .transcriptReady(cacheKey: key)
+                } else {
+                    state = .pending
+                }
+            case .audioReady(let fingerprint):
+                if let asset = try? await assetProvider.cachedAsset(
+                    for: sourceEntry.episodeKey
+                ),
+                   asset.assetFingerprint == fingerprint,
+                   remoteURL.map({ asset.originalURL == $0 }) ?? true {
+                    state = .audioReady(assetFingerprint: fingerprint)
+                } else {
+                    state = .pending
+                }
+            case .pending, .failed:
+                state = .pending
+            }
+            var entry = RadioTranscriptBatchEntry(
+                episodeKey: sourceEntry.episodeKey,
+                order: sourceEntry.order,
+                remoteURL: remoteURL,
+                expectedDurationSeconds: expectedDuration,
+                languageTag: languageTag,
+                state: state
+            )
+            if case .transcriptReady = state {
+                entries.append(entry)
+                continue
+            }
+            if let remoteURL {
+                remainingJobs.append(RadioTranscriptJob(
+                    episodeKey: sourceEntry.episodeKey,
+                    remoteURL: remoteURL,
+                    expectedDurationSeconds: expectedDuration,
+                    languageTag: languageTag,
+                    priority: .batch
+                ))
+            } else {
+                entry.state = .failed(
+                    message: "Episode audio is no longer available"
+                )
+            }
+            entries.append(entry)
+        }
+
+        guard !Task.isCancelled,
+              operationGeneration == batchOperationGeneration,
+              activeBatchID == nil else {
+            return
+        }
+        let now = Date()
+        let manifest = RadioTranscriptBatchManifest(
+            schemaVersion:
+                RadioTranscriptBatchManifest.currentSchemaVersion,
+            id: UUID(),
+            createdAt: now,
+            updatedAt: now,
+            entries: entries
+        )
+        do {
+            try await store.saveBatch(manifest)
+        } catch {
+            failBatchForPersistence(error)
+            return
+        }
+        guard !Task.isCancelled,
+              operationGeneration == batchOperationGeneration,
+              activeBatchID == nil else {
+            return
+        }
+
+        releaseBatchPins(batchID: pinnedBatchID)
+        let completed = manifest.completedCount
+        let episodeKeys = manifest.entries
+            .sorted { $0.order < $1.order }
+            .map(\.episodeKey)
+        guard !remainingJobs.isEmpty else {
+            batchPresentation = RadioTranscriptBatchPresentation(
+                state: manifest.failedCount == 0 ? .completed : .stopped,
+                completedCount: completed,
+                totalCount: manifest.totalCount,
+                backgroundContinuation: .none,
+                episodeKeys: episodeKeys
+            )
+            return
+        }
+
+        activeBatchID = manifest.id
+        activeBatchJobs = remainingJobs
+        let submission = backgroundDriver.submit(
+            batchID: manifest.id,
+            total: manifest.totalCount
+        ) { [weak self] in
+            self?.expirePrepareAll()
+        }
+        let continuation: RadioTranscriptBackgroundContinuation
+        switch submission {
+        case .accepted:
+            continuation = .accepted
+            hasAcceptedBackgroundContinuation = true
+        case .unavailableOS:
+            continuation = .unavailableOS
+            hasAcceptedBackgroundContinuation = false
+        case .rejected(let message):
+            continuation = .rejected(message: message)
+            hasAcceptedBackgroundContinuation = false
+        }
+        batchPresentation = RadioTranscriptBatchPresentation(
+            state: .preparing,
+            completedCount: completed,
+            totalCount: manifest.totalCount,
+            backgroundContinuation: continuation,
+            episodeKeys: episodeKeys
+        )
+        backgroundDriver.update(
+            completed: completed,
+            total: manifest.totalCount
+        )
+        reconcileDesired(automaticAllowed: isActive)
+    }
+
+    private func isValidReadyCheckpoint(
+        _ entry: RadioTranscriptBatchEntry,
+        visibleCandidate: RadioEpisodeCandidate?
+    ) async -> Bool {
+        guard case .transcriptReady(let key) = entry.state,
+              key.episodeKey == entry.episodeKey,
+              (try? await store.loadTranscript(for: key)) != nil,
+              let record = try? await store.record(for: key) else {
+            return false
+        }
+        guard let expectedURL = entry.remoteURL else { return true }
+        guard visibleCandidate.map({
+            $0.originalPlaybackURL == expectedURL
+        }) ?? true else {
+            return false
+        }
+        return record.sourceURLHash == Self.hash(url: expectedURL)
+    }
+
+    private func finishStartupReconciliation() async {
+        guard let task = startupReconciliationTask else { return }
+        await task.value
+        startupReconciliationTask = nil
     }
 
     private func makeJobs(
@@ -441,25 +769,30 @@ final class RadioTranscriptCoordinator:
         case .batchUpdated(let manifest):
             guard manifest.id == activeBatchID else { return }
             let completed = manifest.completedCount
+            let isTerminal = manifest.terminalCount == manifest.totalCount
+            let succeeded = isTerminal && manifest.failedCount == 0
             batchPresentation = RadioTranscriptBatchPresentation(
-                state: completed == manifest.totalCount
-                    ? .completed
+                state: isTerminal
+                    ? (succeeded ? .completed : .stopped)
                     : .preparing,
                 completedCount: completed,
                 totalCount: manifest.totalCount,
                 backgroundContinuation:
-                    batchPresentation.backgroundContinuation
+                    batchPresentation.backgroundContinuation,
+                episodeKeys: manifest.entries
+                    .sorted { $0.order < $1.order }
+                    .map(\.episodeKey)
             )
             backgroundDriver.update(
                 completed: completed,
                 total: manifest.totalCount
             )
-            if completed == manifest.totalCount {
-                backgroundDriver.complete(success: true)
+            if isTerminal {
+                backgroundDriver.complete(success: succeeded)
                 hasAcceptedBackgroundContinuation = false
                 let finishedBatchID = activeBatchID
                 activeBatchID = nil
-                activeBatchCandidates = []
+                activeBatchJobs = []
                 releaseBatchPins(batchID: finishedBatchID)
             }
         }
@@ -469,12 +802,13 @@ final class RadioTranscriptCoordinator:
         hasAcceptedBackgroundContinuation = false
         let expiredBatchID = activeBatchID
         activeBatchID = nil
-        activeBatchCandidates = []
+        activeBatchJobs = []
         batchPresentation = RadioTranscriptBatchPresentation(
             state: .stopped,
             completedCount: batchPresentation.completedCount,
             totalCount: batchPresentation.totalCount,
-            backgroundContinuation: .none
+            backgroundContinuation: .none,
+            episodeKeys: batchPresentation.episodeKeys
         )
         releaseBatchPins(batchID: expiredBatchID)
         if isActive {
@@ -490,14 +824,21 @@ final class RadioTranscriptCoordinator:
         backgroundDriver.complete(success: false)
         hasAcceptedBackgroundContinuation = false
         activeBatchID = nil
-        activeBatchCandidates = []
+        activeBatchJobs = []
         batchPresentation = RadioTranscriptBatchPresentation(
             state: .stopped,
             completedCount: 0,
             totalCount: batchPresentation.totalCount,
             backgroundContinuation: .rejected(
                 message: error.localizedDescription
-            )
+            ),
+            episodeKeys: batchPresentation.episodeKeys
         )
+    }
+
+    private static func hash(url: URL) -> String {
+        SHA256.hash(data: Data(url.absoluteString.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 }

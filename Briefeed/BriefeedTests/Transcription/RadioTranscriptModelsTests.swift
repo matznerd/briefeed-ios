@@ -56,6 +56,8 @@ struct RadioTranscriptModelsTests {
 
         #expect(manifest.completedCount == 1)
         #expect(manifest.remainingCount == 3)
+        #expect(manifest.failedCount == 1)
+        #expect(manifest.terminalCount == 2)
         #expect(manifest.totalCount == 4)
     }
 
