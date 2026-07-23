@@ -43,7 +43,8 @@ separate preparation download as proof of the active stream:
 - prepared-ahead and replay playback use the exact fingerprinted local asset
   and may display synchronized text;
 - uncached remote first-play audio starts immediately, but synchronized text
-  stays hidden until the player can prove matching response identity;
+  stays hidden until the player can prove matching response identity; the
+  prepared transcript becomes available on the next exact local playback;
 - GitHub issue #24 tracks a transport-owned identity or single-fetch solution.
 
 This is intentional fail-closed behavior for publishers that dynamically insert

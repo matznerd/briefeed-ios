@@ -97,7 +97,7 @@ struct RadioTranscriptPresentationTests {
         )
 
         #expect(!content.isReady)
-        #expect(content.title == "Transcript ready for replay")
+        #expect(content.title == "Transcript prepared")
         #expect(content.visibleLines.isEmpty)
     }
 
