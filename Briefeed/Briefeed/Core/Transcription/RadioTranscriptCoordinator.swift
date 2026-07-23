@@ -128,6 +128,9 @@ final class RadioTranscriptCoordinator:
     private var startupReconciliationTask: Task<Void, Never>?
     private var reconciliationTask: Task<Void, Never>?
     private var batchRestoreTask: Task<Void, Never>?
+    private var batchStartTask: Task<Void, Never>?
+    private var batchStartRequestID: UUID?
+    private var needsBatchPresentationRestore = false
     private var generation = 0
     private var currentCandidate: RadioEpisodeCandidate?
     private var nextCandidates: [RadioEpisodeCandidate] = []
@@ -190,6 +193,7 @@ final class RadioTranscriptCoordinator:
         startupReconciliationTask?.cancel()
         reconciliationTask?.cancel()
         batchRestoreTask?.cancel()
+        batchStartTask?.cancel()
     }
 
     func updateCurrent(
@@ -245,25 +249,29 @@ final class RadioTranscriptCoordinator:
         let eligible = visibleSnapshot.filter {
             RadioEpisodeFreshnessPolicy.isFresh($0, at: now)
         }
-        let canResumePersistedSnapshot =
-            batchPresentation.state == .stopped &&
-            !batchPresentation.episodeKeys.isEmpty
-        guard !eligible.isEmpty || canResumePersistedSnapshot else {
-            batchPresentation = RadioTranscriptBatchPresentation(
-                state: .completed,
-                completedCount: 0,
-                totalCount: 0,
-                backgroundContinuation: .none,
-                episodeKeys: []
-            )
-            return
-        }
         guard activeBatchID == nil else { return }
-        batchOperationGeneration += 1
-        let operationGeneration = batchOperationGeneration
-        batchRestoreTask?.cancel()
-        batchRestoreTask = Task { [weak self] in
-            await self?.beginPrepareAll(
+        let pendingRestore = batchRestoreTask
+        let requestID = UUID()
+        batchStartRequestID = requestID
+        batchStartTask?.cancel()
+        batchStartTask = Task { [weak self] in
+            await pendingRestore?.value
+            guard let self else { return }
+            defer {
+                if self.batchStartRequestID == requestID {
+                    self.batchStartRequestID = nil
+                    self.batchStartTask = nil
+                    self.restoreDeferredBatchPresentationIfNeeded()
+                }
+            }
+            guard !Task.isCancelled,
+                  self.batchStartRequestID == requestID,
+                  self.activeBatchID == nil else {
+                return
+            }
+            self.batchOperationGeneration += 1
+            let operationGeneration = self.batchOperationGeneration
+            await self.beginPrepareAll(
                 eligible,
                 operationGeneration: operationGeneration
             )
@@ -279,6 +287,9 @@ final class RadioTranscriptCoordinator:
         batchOperationGeneration += 1
         batchRestoreTask?.cancel()
         batchRestoreTask = nil
+        batchStartTask?.cancel()
+        batchStartTask = nil
+        batchStartRequestID = nil
         backgroundDriver.cancel()
         hasAcceptedBackgroundContinuation = false
         let oldBatchID = activeBatchID
@@ -293,6 +304,7 @@ final class RadioTranscriptCoordinator:
         )
         releaseBatchPins(batchID: oldBatchID)
         reconcileDesired(automaticAllowed: isActive)
+        restoreDeferredBatchPresentationIfNeeded()
     }
 
     func handleActive() {
@@ -382,11 +394,17 @@ final class RadioTranscriptCoordinator:
     }
 
     private func restoreBatchPresentationIfNeeded() {
-        guard activeBatchID == nil,
-              batchPresentation.state != .preparing,
-              !visibleSnapshot.isEmpty else {
+        guard !visibleSnapshot.isEmpty else {
+            needsBatchPresentationRestore = false
             return
         }
+        guard activeBatchID == nil,
+              batchPresentation.state != .preparing,
+              batchStartRequestID == nil else {
+            needsBatchPresentationRestore = true
+            return
+        }
+        needsBatchPresentationRestore = false
         batchOperationGeneration += 1
         let operationGeneration = batchOperationGeneration
         let now = Date()
@@ -439,6 +457,10 @@ final class RadioTranscriptCoordinator:
             let newVisibleKeys = visible
                 .map(\.key)
                 .filter { !manifestKeySet.contains($0) }
+            if completed < manifest.entries.count &&
+                !newVisibleKeys.isEmpty {
+                self.needsBatchPresentationRestore = true
+            }
             let keys = completed == manifest.entries.count
                 ? manifestKeys + newVisibleKeys
                 : manifestKeys
@@ -477,6 +499,16 @@ final class RadioTranscriptCoordinator:
             previous?.entries.count == batchPresentation.episodeKeys.count &&
             !shouldReplaceBatchSnapshot
         shouldReplaceBatchSnapshot = false
+        guard !eligible.isEmpty || resumesPrevious else {
+            batchPresentation = RadioTranscriptBatchPresentation(
+                state: .completed,
+                completedCount: 0,
+                totalCount: 0,
+                backgroundContinuation: .none,
+                episodeKeys: []
+            )
+            return
+        }
         let visibleByKey = Dictionary(
             uniqueKeysWithValues: eligible.map { ($0.key, $0) }
         )
@@ -803,6 +835,7 @@ final class RadioTranscriptCoordinator:
                 activeBatchID = nil
                 activeBatchJobs = []
                 releaseBatchPins(batchID: finishedBatchID)
+                restoreDeferredBatchPresentationIfNeeded()
             }
         }
     }
@@ -827,6 +860,7 @@ final class RadioTranscriptCoordinator:
                 await pipeline.cancelAll()
             }
         }
+        restoreDeferredBatchPresentationIfNeeded()
     }
 
     private func failBatchForPersistence(_ error: Error) {
@@ -843,6 +877,12 @@ final class RadioTranscriptCoordinator:
             ),
             episodeKeys: batchPresentation.episodeKeys
         )
+        restoreDeferredBatchPresentationIfNeeded()
+    }
+
+    private func restoreDeferredBatchPresentationIfNeeded() {
+        guard needsBatchPresentationRestore else { return }
+        restoreBatchPresentationIfNeeded()
     }
 
     private static func hash(url: URL) -> String {

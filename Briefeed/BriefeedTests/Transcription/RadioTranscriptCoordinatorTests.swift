@@ -370,6 +370,107 @@ struct RadioTranscriptCoordinatorTests {
         ])
     }
 
+    @Test func immediatePrepareAllSurvivesARefreshWhileRestoringThePersistedSnapshot() async throws {
+        let harness = try CoordinatorHarness()
+        defer { harness.cleanup() }
+        let first = harness.candidate("first")
+        let second = harness.candidate("second")
+        try await harness.store.saveBatch(
+            harness.manifest(entries: [
+                .init(
+                    episodeKey: first.key,
+                    order: 0,
+                    remoteURL: first.originalPlaybackURL,
+                    expectedDurationSeconds: first.durationSeconds,
+                    languageTag: "en-US",
+                    state: .pending
+                ),
+                .init(
+                    episodeKey: second.key,
+                    order: 1,
+                    remoteURL: second.originalPlaybackURL,
+                    expectedDurationSeconds: second.durationSeconds,
+                    languageTag: "en-US",
+                    state: .pending
+                )
+            ])
+        )
+
+        harness.coordinator.updateVisibleSnapshot([first])
+        harness.coordinator.prepareAll()
+        harness.coordinator.updateVisibleSnapshot([first])
+        let reconciliation =
+            try await harness.pipeline.waitForReconciliation()
+
+        #expect(reconciliation.batch.map(\.episodeKey) == [
+            first.key, second.key
+        ])
+    }
+
+    @Test func refreshDuringStartIsOfferedAfterTheCapturedBatchCompletes() async throws {
+        let harness = try CoordinatorHarness()
+        defer { harness.cleanup() }
+        let first = harness.candidate("first")
+        let newArrival = harness.candidate(
+            "new",
+            feedID: "new-feed"
+        )
+
+        harness.coordinator.updateVisibleSnapshot([first])
+        harness.coordinator.prepareAll()
+        harness.coordinator.updateVisibleSnapshot([first, newArrival])
+        let reconciliation =
+            try await harness.pipeline.waitForReconciliation()
+        #expect(reconciliation.batch.map(\.episodeKey) == [first.key])
+
+        let cacheKey = try await harness.saveTranscript(for: first)
+        var manifest = try #require(try await harness.store.loadBatch())
+        manifest.entries[0].state = .transcriptReady(cacheKey: cacheKey)
+        try await harness.store.saveBatch(manifest)
+        await harness.pipeline.emit(.batchUpdated(manifest))
+        try await harness.waitUntilBatchState(.stopped)
+
+        #expect(harness.coordinator.batchPresentation.completedCount == 1)
+        #expect(harness.coordinator.batchPresentation.totalCount == 2)
+        #expect(harness.coordinator.batchPresentation.episodeKeys == [
+            first.key, newArrival.key
+        ])
+    }
+
+    @Test func deferredRefreshSurvivesStopResumeAndCompletion() async throws {
+        let harness = try CoordinatorHarness()
+        defer { harness.cleanup() }
+        let first = harness.candidate("first")
+        let newArrival = harness.candidate(
+            "new",
+            feedID: "new-feed"
+        )
+
+        harness.coordinator.updateVisibleSnapshot([first])
+        harness.coordinator.prepareAll()
+        harness.coordinator.updateVisibleSnapshot([first, newArrival])
+        _ = try await harness.pipeline.waitForReconciliation()
+
+        harness.coordinator.stopPrepareAll()
+        _ = try await harness.pipeline.waitForReconciliation()
+        harness.coordinator.prepareAll()
+        let resumed = try await harness.pipeline.waitForReconciliation()
+        #expect(resumed.batch.map(\.episodeKey) == [first.key])
+
+        let cacheKey = try await harness.saveTranscript(for: first)
+        var manifest = try #require(try await harness.store.loadBatch())
+        manifest.entries[0].state = .transcriptReady(cacheKey: cacheKey)
+        try await harness.store.saveBatch(manifest)
+        await harness.pipeline.emit(.batchUpdated(manifest))
+        try await harness.waitUntilBatchState(.stopped)
+
+        #expect(harness.coordinator.batchPresentation.completedCount == 1)
+        #expect(harness.coordinator.batchPresentation.totalCount == 2)
+        #expect(harness.coordinator.batchPresentation.episodeKeys == [
+            first.key, newArrival.key
+        ])
+    }
+
     @Test func resumePreservesAnUnfinishedSnapshotAfterItsVisibleEpisodeBecomesStale() async throws {
         let harness = try CoordinatorHarness()
         defer { harness.cleanup() }
@@ -390,9 +491,8 @@ struct RadioTranscriptCoordinatorTests {
             ])
         )
         harness.coordinator.updateVisibleSnapshot([stale])
-        try await harness.waitUntilBatchState(.stopped)
-
         harness.coordinator.prepareAll()
+        harness.coordinator.updateVisibleSnapshot([stale])
         let reconciliation =
             try await harness.pipeline.waitForReconciliation()
 
