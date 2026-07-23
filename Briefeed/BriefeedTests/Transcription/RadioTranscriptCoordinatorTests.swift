@@ -55,14 +55,18 @@ struct RadioTranscriptCoordinatorTests {
         #expect(await harness.pipeline.queuedReconciliationCount() == 0)
     }
 
-    @Test func prepareAllUsesOnlyTheVisibleUncompletedDeduplicatedSnapshot() async throws {
+    @Test func prepareAllUsesOnlyTheVisibleFreshUncompletedDeduplicatedSnapshot() async throws {
         let harness = try CoordinatorHarness()
         defer { harness.cleanup() }
         let first = harness.candidate("first")
         let second = harness.candidate("second")
         let completed = harness.candidate("done", isCompleted: true)
+        let stale = harness.candidate(
+            "stale",
+            publicationDate: .distantPast
+        )
         harness.coordinator.updateVisibleSnapshot([
-            first, first, completed, second
+            first, first, completed, stale, second
         ])
 
         harness.coordinator.prepareAll()
@@ -366,6 +370,35 @@ struct RadioTranscriptCoordinatorTests {
         ])
     }
 
+    @Test func resumePreservesAnUnfinishedSnapshotAfterItsVisibleEpisodeBecomesStale() async throws {
+        let harness = try CoordinatorHarness()
+        defer { harness.cleanup() }
+        let stale = harness.candidate(
+            "stale",
+            publicationDate: .distantPast
+        )
+        try await harness.store.saveBatch(
+            harness.manifest(entries: [
+                .init(
+                    episodeKey: stale.key,
+                    order: 0,
+                    remoteURL: stale.originalPlaybackURL,
+                    expectedDurationSeconds: stale.durationSeconds,
+                    languageTag: "en-US",
+                    state: .pending
+                )
+            ])
+        )
+        harness.coordinator.updateVisibleSnapshot([stale])
+        try await harness.waitUntilBatchState(.stopped)
+
+        harness.coordinator.prepareAll()
+        let reconciliation =
+            try await harness.pipeline.waitForReconciliation()
+
+        #expect(reconciliation.batch.map(\.episodeKey) == [stale.key])
+    }
+
     @Test func readyCheckpointForAnotherEpisodeIsRescheduled() async throws {
         let harness = try CoordinatorHarness()
         defer { harness.cleanup() }
@@ -466,7 +499,8 @@ private final class CoordinatorHarness: @unchecked Sendable {
         feedID: String = "feed",
         isCompleted: Bool = false,
         progress: Double = 0,
-        playbackURL: URL? = nil
+        playbackURL: URL? = nil,
+        publicationDate: Date = .now
     ) -> RadioEpisodeCandidate {
         let resolvedURL = playbackURL ??
             URL(string: "https://example.com/\(id).mp3")!
@@ -476,7 +510,7 @@ private final class CoordinatorHarness: @unchecked Sendable {
             canonicalEnclosureURL: resolvedURL.absoluteString,
             title: id,
             sourceName: feedID,
-            publicationDate: .now,
+            publicationDate: publicationDate,
             durationSeconds: 60,
             normalizedCoreDataProgress: isCompleted ? 1 : progress,
             isCompleted: isCompleted,

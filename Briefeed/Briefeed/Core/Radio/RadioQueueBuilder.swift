@@ -1,5 +1,37 @@
 import Foundation
 
+struct RadioEpisodeFreshnessPolicy {
+    static func isFresh(
+        _ candidate: RadioEpisodeCandidate,
+        at now: Date
+    ) -> Bool {
+        guard !candidate.isCompleted else { return false }
+        return now.timeIntervalSince(candidate.publicationDate)
+            <= freshness(for: candidate.sourceFrequency)
+    }
+
+    static func isRetained(
+        _ candidate: RadioEpisodeCandidate,
+        at now: Date
+    ) -> Bool {
+        guard !candidate.isCompleted else { return false }
+        return now.timeIntervalSince(candidate.publicationDate)
+            <= retention(for: candidate.sourceFrequency)
+    }
+
+    private static func freshness(
+        for frequency: RSSUpdateFrequencyValue
+    ) -> TimeInterval {
+        frequency == .hourly ? 2 * 60 * 60 : 24 * 60 * 60
+    }
+
+    private static func retention(
+        for frequency: RSSUpdateFrequencyValue
+    ) -> TimeInterval {
+        frequency == .hourly ? 24 * 60 * 60 : 7 * 24 * 60 * 60
+    }
+}
+
 struct RadioQueueBuilder {
     let now: Date
 
@@ -182,21 +214,11 @@ struct RadioQueueBuilder {
     }
 
     private func isFresh(_ candidate: RadioEpisodeCandidate) -> Bool {
-        guard !candidate.isCompleted else { return false }
-        return now.timeIntervalSince(candidate.publicationDate) <= freshness(for: candidate.sourceFrequency)
+        RadioEpisodeFreshnessPolicy.isFresh(candidate, at: now)
     }
 
     private func isRetained(_ candidate: RadioEpisodeCandidate) -> Bool {
-        guard !candidate.isCompleted else { return false }
-        return now.timeIntervalSince(candidate.publicationDate) <= retention(for: candidate.sourceFrequency)
-    }
-
-    private func freshness(for frequency: RSSUpdateFrequencyValue) -> TimeInterval {
-        frequency == .hourly ? 2 * 60 * 60 : 24 * 60 * 60
-    }
-
-    private func retention(for frequency: RSSUpdateFrequencyValue) -> TimeInterval {
-        frequency == .hourly ? 24 * 60 * 60 : 7 * 24 * 60 * 60
+        RadioEpisodeFreshnessPolicy.isRetained(candidate, at: now)
     }
 
     private func repaired(

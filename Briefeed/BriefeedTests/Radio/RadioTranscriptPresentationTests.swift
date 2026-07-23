@@ -177,7 +177,7 @@ struct RadioTranscriptPresentationTests {
         #expect(rejected.action == .stop)
     }
 
-    @Test func prepareAllEligibilityUsesVisibleUncompletedRowsWithoutDuplicates() {
+    @Test func prepareAllEligibilityUsesVisibleFreshUncompletedRowsWithoutDuplicates() {
         let now = Date(timeIntervalSince1970: 1_000)
         let npr = candidate(feedID: "npr", episodeID: "one", date: now)
         let duplicate = candidate(feedID: "npr", episodeID: "one", date: now)
@@ -188,6 +188,11 @@ struct RadioTranscriptPresentationTests {
             completed: true
         )
         let abc = candidate(feedID: "abc", episodeID: "two", date: now)
+        let stale = candidate(
+            feedID: "stale",
+            episodeID: "old",
+            date: now.addingTimeInterval(-86_401)
+        )
         let rows = [
             RadioPlaylistItem(
                 candidate: npr,
@@ -216,11 +221,21 @@ struct RadioTranscriptPresentationTests {
                 isCurrent: false,
                 status: .latest,
                 earlierEpisodeCount: 0
+            ),
+            RadioPlaylistItem(
+                candidate: stale,
+                entry: nil,
+                isCurrent: false,
+                status: .latest,
+                earlierEpisodeCount: 0
             )
         ]
 
         #expect(
-            RadioTranscriptUIPresentation.eligibleCandidates(from: rows)
+            RadioTranscriptUIPresentation.eligibleCandidates(
+                from: rows,
+                at: now
+            )
                 .map(\.key) == [npr.key, abc.key]
         )
     }

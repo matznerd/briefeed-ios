@@ -241,8 +241,14 @@ final class RadioTranscriptCoordinator:
     }
 
     func prepareAll() {
-        let eligible = visibleSnapshot
-        guard !eligible.isEmpty else {
+        let now = Date()
+        let eligible = visibleSnapshot.filter {
+            RadioEpisodeFreshnessPolicy.isFresh($0, at: now)
+        }
+        let canResumePersistedSnapshot =
+            batchPresentation.state == .stopped &&
+            !batchPresentation.episodeKeys.isEmpty
+        guard !eligible.isEmpty || canResumePersistedSnapshot else {
             batchPresentation = RadioTranscriptBatchPresentation(
                 state: .completed,
                 completedCount: 0,
@@ -383,7 +389,10 @@ final class RadioTranscriptCoordinator:
         }
         batchOperationGeneration += 1
         let operationGeneration = batchOperationGeneration
-        let visible = visibleSnapshot
+        let now = Date()
+        let visible = visibleSnapshot.filter {
+            RadioEpisodeFreshnessPolicy.isFresh($0, at: now)
+        }
         batchRestoreTask?.cancel()
         batchRestoreTask = Task { [weak self] in
             guard let self else { return }

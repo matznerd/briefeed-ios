@@ -176,12 +176,17 @@ enum RadioTranscriptUIPresentation {
     }
 
     static func eligibleCandidates(
-        from rows: [RadioPlaylistItem]
+        from rows: [RadioPlaylistItem],
+        at now: Date = Date()
     ) -> [RadioEpisodeCandidate] {
         var seen = Set<RadioEpisodeKey>()
         return rows.compactMap { row in
             guard !row.candidate.isCompleted,
                   row.status != .listened,
+                  RadioEpisodeFreshnessPolicy.isFresh(
+                      row.candidate,
+                      at: now
+                  ),
                   seen.insert(row.candidate.key).inserted else {
                 return nil
             }
