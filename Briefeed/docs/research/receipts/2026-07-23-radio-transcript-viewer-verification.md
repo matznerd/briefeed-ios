@@ -27,6 +27,9 @@
 - A finite playback-sync state that distinguishes ordinary catch-up from a
   confirmed audio-version mismatch instead of leaving the viewer on an
   indefinite "Syncing transcript" message.
+- Single-download first playback: the player and transcript pipeline now
+  coalesce on one fingerprinted local audio asset, preventing dynamic publisher
+  responses from giving them different bytes.
 - Debug transcript fixture and accessibility identifiers for deterministic
   simulator UI verification.
 
@@ -36,7 +39,7 @@
 | --- | --- | --- |
 | Earlier generic simulator compile | PASS | `make radio-compile` ended with `** TEST BUILD SUCCEEDED **` before the final freshness and restore-race hardening |
 | Current-head diff check | PASS | `git diff --check` is clean after the same-session sync copy and fixture correction |
-| Current-head generic simulator compile | PASS | `xcodebuild build-for-testing` completed for arm64 iOS Simulator after the exact-audio promotion change |
+| Earlier exact-promotion generic compile | PASS | `xcodebuild build-for-testing` completed for arm64 iOS Simulator after the exact-audio promotion change |
 | Physical-device test bundle build | PASS | Xcode built and signed the app and focused test bundle for Eric's iPhone 13 Pro |
 | Focused transcript playback and presentation tests | PASS | Both suites executed on Eric's iPhone 13 Pro with zero failures after correcting cross-source transition fixtures |
 | Current transcript playback and presentation suites | PASS | 23 tests passed on an iOS 26.5 simulator, including the 326.0s played / 304.196s prepared duration-mismatch regression |
@@ -45,6 +48,10 @@
 | Transcript UI tests | PARTIAL | Compact live-text behavior passed on the physical phone; expanded-reader gestures, accessibility, and lifecycle behavior remain in the distribution gate |
 | Same-session audio-to-transcript handoff | PASS | On Eric's iPhone 13 Pro, ABC first-play preparation advanced from queued to synchronized live text at the current media time and continued following at 1.5x and 2x |
 | Dynamic-audio mismatch presentation | PASS | On Eric's iPhone 13 Pro, NPR advanced from queued to the finite mismatch message in about 15 seconds rather than remaining on an indefinite sync state |
+| Single-download playback regression | PASS | 24 focused exact-playback and asset-service tests passed on Eric's iPhone 13 Pro, including one-download coalescing, local first playback, remote fallback, and unchanged immediate playback when transcription is unavailable |
+| Current-head generic simulator compile | PASS | `make radio-compile` completed with `** TEST BUILD SUCCEEDED **` after the single-download change |
+| Current-head signed physical app | PARTIAL | The app built, passed strict code-sign verification, and installed over the existing iPhone app without clearing data; launch/runtime verification is waiting for the locked phone and iPhone Mirroring session |
+| Broader transcript suites on physical device | PARTIAL (pre-existing harness failures) | 68 tests executed; the exact playback, asset, presentation, models, and background-task suites passed, while store/coordinator fixtures reported `invalidRelativePath` and pipeline timing failures unrelated to the three changed files |
 | Radio smoke and lifecycle | PASS | `RadioUITests.testHeadlessRadioSmoke` passed on the managed simulator, including playlist, transport, Next, terminate/relaunch, and current-title restoration; receipt: `/tmp/briefeed-radio-radio-smoke-derived-data/RadioSmokeEvidence/20260725T213013Z/receipt.txt` |
 
 The compile gate included the Briefeed app, unit-test target, and UI-test
@@ -61,23 +68,24 @@ was used for the focused suites instead.
 ## Exact-Asset Boundary
 
 The current SwiftAudioEx 1.0.0 adapter does not expose final response identity
-from the bytes it is actively playing. The viewer therefore does not use a
-separate preparation download as proof of the active stream:
+from the bytes it is actively playing. First playback therefore owns the audio
+before handing it to the transport:
 
-- prepared-ahead and replay playback use the exact fingerprinted local asset
-  and may display synchronized text;
-- uncached remote first-play audio starts immediately; when preparation
-  finishes, the player may switch to the exact prepared local bytes at the
-  current media time after duration validation, then expose synchronized text;
+- playback and transcript preparation make concurrent requests to one asset
+  service, which coalesces them into one download;
+- playback begins from that fingerprinted local file as soon as download
+  acquisition completes, without waiting for transcription;
+- prepared-ahead and replay playback use the cached exact asset;
+- if acquisition fails, playback falls back to the publisher URL and transcript
+  validation remains fail-closed;
 - a duration mismatch or failed promotion keeps synchronized text hidden, and
   failed local loading restores the original stream at the same media time;
-- GitHub issue #24 tracks a transport-owned identity or single-fetch solution.
+- GitHub issue #24 tracks progressive play-while-capturing if physical-device
+  measurement shows the download-only startup delay is unacceptable.
 
-This keeps dynamic-ad mismatches fail-closed while allowing first-play text on
-the exact prepared bytes. The physical-device playback clock continued through
-the verified ABC same-session transition; audible continuity and broader
-interruption, route-change, and background checks remain in the distribution
-gate.
+This removes the NPR two-request mismatch for newly acquired audio because
+playback and SpeechAnalyzer now consume the same bytes. The previous fail-closed
+validation remains for remote fallback and old active streams.
 
 ### NPR dynamic-audio evidence
 

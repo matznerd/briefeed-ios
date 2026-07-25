@@ -56,8 +56,42 @@ struct RadioTranscriptPlaybackTests {
         )
     }
 
-    @Test func anUnpreparedEpisodeStartsItsRemoteAudioImmediately() async {
+    @Test func anUnpreparedEpisodePlaysTheSameAssetPreparedForItsTranscript() async {
         let candidate = makeCandidate("remote")
+        let localURL = URL(fileURLWithPath: "/tmp/remote-owned.mp3")
+        let asset = makeAsset(
+            candidate: candidate,
+            fingerprint: "remote-owned-fingerprint",
+            duration: 60,
+            localURL: localURL,
+            isTranscriptReady: false
+        )
+        let assets = PlaybackTranscriptAssetProvider(
+            acquired: [candidate.key: asset]
+        )
+        let (player, transport) = await makePlayer(
+            candidates: [candidate],
+            current: candidate.key,
+            assets: assets
+        )
+
+        await player.playRadio()
+
+        #expect(transport.loads.map(\.1) == [localURL])
+        #expect(await assets.recordedAcquisitionRequests() == [
+            RadioTranscriptAudioRequest(
+                episodeKey: candidate.key,
+                remoteURL: candidate.originalPlaybackURL,
+                expectedDurationSeconds: candidate.durationSeconds,
+                purpose: .current
+            )
+        ])
+        #expect(!player.radioTranscriptPlaybackIsValidated)
+        #expect(player.radioTranscriptPlaybackSyncState == .waiting)
+    }
+
+    @Test func aFailedOwnedAssetDownloadFallsBackToRemotePlayback() async {
+        let candidate = makeCandidate("remote-fallback")
         let (player, transport) = await makePlayer(
             candidates: [candidate],
             current: candidate.key,
@@ -69,8 +103,35 @@ struct RadioTranscriptPlaybackTests {
         #expect(transport.loads.map(\.1) == [
             candidate.originalPlaybackURL
         ])
-        #expect(!player.radioTranscriptPlaybackIsValidated)
-        #expect(player.radioTranscriptPlaybackSyncState == .waiting)
+    }
+
+    @Test func unavailableTranscriptionKeepsImmediateRemotePlayback() async {
+        let candidate = makeCandidate("unsupported-os")
+        let localURL = URL(fileURLWithPath: "/tmp/unsupported-owned.mp3")
+        let assets = PlaybackTranscriptAssetProvider(
+            acquired: [
+                candidate.key: makeAsset(
+                    candidate: candidate,
+                    fingerprint: "unused",
+                    duration: 60,
+                    localURL: localURL,
+                    isTranscriptReady: false
+                )
+            ]
+        )
+        let (player, transport) = await makePlayer(
+            candidates: [candidate],
+            current: candidate.key,
+            assets: assets,
+            prefersOwnedTranscriptPlayback: false
+        )
+
+        await player.playRadio()
+
+        #expect(transport.loads.map(\.1) == [
+            candidate.originalPlaybackURL
+        ])
+        #expect(await assets.recordedAcquisitionRequests().isEmpty)
     }
 
     @Test func finishingPreparationNeverHotSwapsTheActiveRemotePlayer() async {
@@ -582,7 +643,8 @@ struct RadioTranscriptPlaybackTests {
         candidates: [RadioEpisodeCandidate],
         current: RadioEpisodeKey,
         assets: PlaybackTranscriptAssetProvider,
-        transport: SpyAudioTransport? = nil
+        transport: SpyAudioTransport? = nil,
+        prefersOwnedTranscriptPlayback: Bool = true
     ) async -> (UnifiedAudioPlayer, SpyAudioTransport) {
         let radio = RadioSessionCoordinator(
             store: FakeRadioSessionStore(
@@ -612,7 +674,8 @@ struct RadioTranscriptPlaybackTests {
             radioCoordinator: radio,
             context: PersistenceController(inMemory: true)
                 .container.viewContext,
-            radioTranscriptAssetProvider: assets
+            radioTranscriptAssetProvider: assets,
+            prefersOwnedTranscriptPlayback: prefersOwnedTranscriptPlayback
         )
         return (player, resolvedTransport)
     }
@@ -666,7 +729,8 @@ struct RadioTranscriptPlaybackTests {
         candidate: RadioEpisodeCandidate,
         fingerprint: String,
         duration: TimeInterval,
-        localURL: URL? = nil
+        localURL: URL? = nil,
+        isTranscriptReady: Bool = true
     ) -> RadioTranscriptAudioAsset {
         RadioTranscriptAudioAsset(
             schemaVersion: RadioTranscriptAudioAsset.currentSchemaVersion,
@@ -683,7 +747,7 @@ struct RadioTranscriptPlaybackTests {
                     "/tmp/\(candidate.key.episodeID).mp3"),
             completedAt: .now,
             lastAccessedAt: .now,
-            isTranscriptReady: true
+            isTranscriptReady: isTranscriptReady
         )
     }
 }
@@ -693,6 +757,8 @@ private actor PlaybackTranscriptAssetProvider:
 {
     private var prepared: [RadioEpisodeKey: URL]
     private var cached: [RadioEpisodeKey: RadioTranscriptAudioAsset]
+    private var acquired: [RadioEpisodeKey: RadioTranscriptAudioAsset]
+    private var acquisitionRequests: [RadioTranscriptAudioRequest] = []
     private var blockedLookups = Set<RadioEpisodeKey>()
     private var lookupStarts = Set<RadioEpisodeKey>()
     private var lookupWaiters: [
@@ -701,10 +767,12 @@ private actor PlaybackTranscriptAssetProvider:
 
     init(
         prepared: [RadioEpisodeKey: URL] = [:],
-        cached: [RadioEpisodeKey: RadioTranscriptAudioAsset] = [:]
+        cached: [RadioEpisodeKey: RadioTranscriptAudioAsset] = [:],
+        acquired: [RadioEpisodeKey: RadioTranscriptAudioAsset] = [:]
     ) {
         self.prepared = prepared
         self.cached = cached
+        self.acquired = acquired
     }
 
     func setPrepared(_ url: URL, for key: RadioEpisodeKey) {
@@ -739,7 +807,16 @@ private actor PlaybackTranscriptAssetProvider:
     func acquire(
         _ request: RadioTranscriptAudioRequest
     ) async throws -> RadioTranscriptAudioAsset {
+        acquisitionRequests.append(request)
+        if let asset = acquired[request.episodeKey] {
+            cached[request.episodeKey] = asset
+            return asset
+        }
         throw CocoaError(.fileNoSuchFile)
+    }
+
+    func recordedAcquisitionRequests() -> [RadioTranscriptAudioRequest] {
+        acquisitionRequests
     }
 
     func cachedAsset(

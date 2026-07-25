@@ -36,6 +36,19 @@ struct RadioTranscriptAssetServiceTests {
         #expect(await harness.downloader.callCount == 1)
     }
 
+    @Test func concurrentPlaybackAndTranscriptAcquisitionShareOneDownload() async throws {
+        let harness = try AssetHarness(downloadDelay: .milliseconds(100))
+        defer { harness.cleanup() }
+        let request = harness.request(episodeID: "shared")
+
+        async let playbackAsset = harness.service.acquire(request)
+        async let transcriptAsset = harness.service.acquire(request)
+        let assets = try await [playbackAsset, transcriptAsset]
+
+        #expect(assets[0] == assets[1])
+        #expect(await harness.downloader.callCount == 1)
+    }
+
     @Test func automaticLookaheadRejectsLongEpisodesBeforeNetworkWork() async throws {
         let harness = try AssetHarness()
         defer { harness.cleanup() }

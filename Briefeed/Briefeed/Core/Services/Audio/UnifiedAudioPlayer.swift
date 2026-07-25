@@ -223,6 +223,7 @@ final class UnifiedAudioPlayer: ObservableObject {
     private let radioCoordinator: RadioSessionCoordinating
     private let radioTranscriptAssetProvider:
         (any RadioTranscriptAssetProviding)?
+    private let prefersOwnedTranscriptPlayback: Bool
     private let pipelineTimer = PipelineTimer.shared
     private let context: NSManagedObjectContext
     private let persistPlaybackRate: @MainActor (Float) -> Void
@@ -339,6 +340,7 @@ final class UnifiedAudioPlayer: ObservableObject {
     // MARK: - Initialization
 
     private convenience init() {
+        let radioServices = RadioServiceContainer.shared
         #if DEBUG
         let transport: AudioPlaybackTransporting = AppRuntime.radioFixtureScenario == nil
             ? SwiftAudioExService()
@@ -349,10 +351,13 @@ final class UnifiedAudioPlayer: ObservableObject {
         self.init(
             audioPlayer: transport,
             queueCoordinator: QueueCoordinator.shared,
-            radioCoordinator: RadioServiceContainer.shared.coordinator,
+            radioCoordinator: radioServices.coordinator,
             context: PersistenceController.shared.container.viewContext,
             radioTranscriptAssetProvider:
-                RadioServiceContainer.shared.transcriptAssetProvider
+                radioServices.transcriptAssetProvider,
+            prefersOwnedTranscriptPlayback:
+                radioServices.transcriptCoordinator?.isPreparationAvailable
+                == true
         )
     }
 
@@ -368,7 +373,8 @@ final class UnifiedAudioPlayer: ObservableObject {
             try? await Task.sleep(for: .milliseconds(500))
         },
         radioTranscriptAssetProvider:
-            (any RadioTranscriptAssetProviding)? = nil
+            (any RadioTranscriptAssetProviding)? = nil,
+        prefersOwnedTranscriptPlayback: Bool = false
     ) {
         self.audioPlayer = audioPlayer
         self.queueCoordinator = queueCoordinator
@@ -377,6 +383,8 @@ final class UnifiedAudioPlayer: ObservableObject {
         self.persistPlaybackRate = persistPlaybackRate
         self.briefCompletionDelay = briefCompletionDelay
         self.radioTranscriptAssetProvider = radioTranscriptAssetProvider
+        self.prefersOwnedTranscriptPlayback =
+            prefersOwnedTranscriptPlayback
         setupAudioPlayer()
         rebuildQueueFromCoordinator(queueCoordinator.queue)
         reconcileBriefIndex()
@@ -1023,21 +1031,37 @@ final class UnifiedAudioPlayer: ObservableObject {
             updateRemoteAvailability()
 
             do {
-                let preparedAsset: RadioTranscriptAudioAsset?
-                if let radioTranscriptAssetProvider {
-                    preparedAsset = try? await
+                let playbackAsset: RadioTranscriptAudioAsset?
+                if prefersOwnedTranscriptPlayback,
+                   let radioTranscriptAssetProvider {
+                    let cachedAsset = try? await
                         radioTranscriptAssetProvider.cachedAsset(
                             for: request.key
                         )
+                    if let cachedAsset {
+                        playbackAsset = cachedAsset
+                    } else {
+                        playbackAsset = try? await
+                            radioTranscriptAssetProvider.acquire(
+                                RadioTranscriptAudioRequest(
+                                    episodeKey: request.key,
+                                    remoteURL: request.url,
+                                    expectedDurationSeconds:
+                                        radioCoordinator.currentEpisode?
+                                            .durationSeconds,
+                                    purpose: .current
+                                )
+                            )
+                    }
                 } else {
-                    preparedAsset = nil
+                    playbackAsset = nil
                 }
-                let exactPreparedAsset = preparedAsset?.isTranscriptReady == true
-                    ? preparedAsset
-                    : nil
-                let preparedURL = exactPreparedAsset?.localFileURL
-                await setActiveTranscriptAsset(exactPreparedAsset)
-                let url = preparedURL ??
+                guard playbackID == activePlaybackID,
+                      request.key == activeRadioKey else {
+                    return
+                }
+                await setActiveTranscriptAsset(playbackAsset)
+                let url = playbackAsset?.localFileURL ??
                     preferredRadioURL(for: request.key) ??
                     request.url
                 activeRadioPlaybackURL = url

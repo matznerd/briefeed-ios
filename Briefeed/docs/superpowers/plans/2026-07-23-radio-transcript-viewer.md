@@ -2,7 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship an iOS 26 Radio transcript viewer that starts audio immediately, prepares the current episode plus two upcoming episodes, supports an explicit resumable Prepare All operation, and follows playback using persisted word-level Apple SpeechAnalyzer timing.
+**Goal:** Ship an iOS 26 Radio transcript viewer that starts audio from the
+same owned bytes used for transcription, prepares the current episode plus two
+upcoming episodes, supports an explicit resumable Prepare All operation, and
+follows playback using persisted word-level Apple SpeechAnalyzer timing.
 
 **Architecture:** `RadioTranscriptCoordinator` is the main-actor presentation and scheduling owner. It delegates serial speech work and exact-asset acquisition to actors, persists every durable stage, and exposes a prepared local URL to the existing player before a Radio episode is loaded. SwiftUI renders immutable presentation values and uses `AudioPlayerViewModelV2.currentTime` as its only synchronization clock.
 
@@ -11,22 +14,25 @@
 **Implementation status (2026-07-23):** Tasks 1-9 are implemented on
 `codex/live-radio-mvp`. Compile verification is green. Managed simulator unit,
 UI, smoke, and lifecycle verification remain before physical-device testing.
-The current SwiftAudioEx adapter cannot expose observed HTTP response identity,
-so active uncached remote playback deliberately fails transcript validation
-closed; exact prepared local playback remains supported.
+The current SwiftAudioEx adapter cannot expose observed HTTP response identity.
+The player now coalesces its first-play asset request with transcript
+preparation so both use one downloaded, fingerprinted local file. Remote
+fallback still fails transcript validation closed.
 
 ## Global Constraints
 
 - Keep the app deployment target at iOS 18.2; every SpeechAnalyzer and continued-processing reference is availability-gated for iOS 26.
-- Start audio immediately. Transcript preparation must never block, replace, pause, or restart an already-playing remote stream.
+- Playback waits for owned-audio acquisition, not transcription. The player and
+  transcript pipeline must share that acquisition so a dynamic publisher
+  cannot return different audio to the two consumers.
 - Automatic work is exactly current plus the next two eligible Radio episodes while the app is active.
 - Prepare All snapshots the visible fresh uncompleted latest-per-source rows supplied by `RadioHomePresentation`; it never queries source history.
 - Run at most one speech-analysis operation and two audio downloads concurrently.
 - Prepared-ahead playback must use the exact local fingerprinted asset from which its transcript was generated.
-- A currently streaming episode displays a newly prepared transcript only
-  after playback has been promoted to the exact fingerprinted local audio at
-  the same media time, or final URL, response validators, content length, and
-  duration validation succeeds. Duration mismatch fails closed.
+- Remote fallback displays a newly prepared transcript only after playback has
+  been promoted to the exact fingerprinted local audio at the same media time,
+  or final URL, response validators, content length, and duration validation
+  succeeds. Duration mismatch fails closed.
 - Persist transcript artifacts and each batch stage atomically before advancing progress.
 - Use channel `<language>` or Atom feed `xml:lang`, normalize BCP 47, fall back to `en-US` only when metadata is absent or invalid, and surface unsupported Apple locales explicitly.
 - Keep prepared/pending current-plus-two and Prepare All inputs pinned. Throttle above the 500 MB cache ceiling rather than evicting and redownloading required inputs.
@@ -490,7 +496,9 @@ Assert:
 
 ```swift
 @Test func preparedAheadEpisodeLoadsExactFingerprintLocalURL()
-@Test func unpreparedEpisodeStartsRemoteImmediately()
+@Test func unpreparedEpisodePlaysTheSameAssetPreparedForItsTranscript()
+@Test func failedOwnedAssetDownloadFallsBackToRemotePlayback()
+@Test func unavailableTranscriptionKeepsImmediateRemotePlayback()
 @Test func finishingPreparationAloneDoesNotMutateActivePlayback()
 @Test func readyTranscriptPromotesActivePlaybackAtCurrentMediaTime()
 @Test func pausedResumePromotesPreparedPlaybackAtSavedMediaTime()
@@ -507,12 +515,14 @@ RADIO_TEST_SELECTOR=BriefeedTests/RadioTranscriptPlaybackTests make radio-unit
 
 - [ ] **Step 3: Inject the prepared-asset provider**
 
-Before a new Radio load, prefer the coordinator's fingerprinted local URL.
-Preserve the existing `RSSEpisode.downloadedFilePath` fallback for
-non-transcript downloads. When the active key's exact asset completes, replace
-the active transport only after duration validation and start the local item at
-the current media time. A local load failure restores the original URL at that
-same time.
+Before a new Radio load, acquire the transcript pipeline's fingerprinted audio
+asset and play that local URL. The asset service coalesces simultaneous player
+and pipeline requests into one download. Preserve the existing
+`RSSEpisode.downloadedFilePath` fallback for non-transcript downloads. If
+acquisition fails, play the remote URL. When a fallback stream's exact asset
+later completes, replace the active transport only after duration validation
+and start the local item at the current media time. A local load failure
+restores the original URL at that same time.
 
 - [ ] **Step 4: Add current-stream validation reporting**
 
