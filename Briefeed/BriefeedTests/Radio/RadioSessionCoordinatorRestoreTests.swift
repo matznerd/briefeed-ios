@@ -76,6 +76,34 @@ struct RadioSessionCoordinatorRestoreTests {
         withExtendedLifetime(cancellable) {}
     }
 
+    @Test func refreshKeepsAnOlderEpisodePlayingWhenItsSourcePublishesANewerEpisode() async {
+        let playing = candidate("npr", "4pm", date: now.addingTimeInterval(-3_600))
+        let latest = candidate("npr", "5pm")
+        let nextSource = candidate("bbc", "latest")
+        let repository = FakeRadioEpisodeRepository(candidates: [playing, nextSource])
+        let coordinator = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(snapshot: session(
+                [entry(playing.key, position: 30), entry(nextSource.key)],
+                current: playing.key
+            )),
+            repository: repository,
+            now: { now },
+            connectivityStatus: { .online }
+        )
+
+        _ = await coordinator.restore(autoplayEnabled: false)
+        #expect(coordinator.beginCurrent() == .play(request(for: playing, position: 30)))
+        coordinator.transportDidStart(for: playing.key)
+
+        repository.values = [playing, latest, nextSource]
+        coordinator.refreshStarted(enabledSourceCount: 2)
+        #expect(coordinator.applyRefresh(success()) == nil)
+        #expect(coordinator.currentKey == playing.key)
+        #expect(coordinator.currentEpisode == playing)
+        #expect(coordinator.state == .playing)
+        #expect(coordinator.entries.map(\.key) == [playing.key, nextSource.key])
+    }
+
     @Test func readableLocalRestoreAutoplaysWhileConnectivityUnknown() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try Data([1]).write(to: url)

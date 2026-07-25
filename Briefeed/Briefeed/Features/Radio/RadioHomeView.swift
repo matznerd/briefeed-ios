@@ -180,11 +180,16 @@ struct RadioHomeView: View {
     @State private var showingAddSource = false
     @State private var showingExpandedTranscript = false
     @State private var selectedSourceRoute: SourceRoute?
+    private let onAppearRefresh: @MainActor () -> Void
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \RSSEpisode.pubDate, ascending: false)],
         predicate: NSPredicate(format: "feed.isEnabled == YES"),
         animation: .default
     ) private var enabledEpisodes: FetchedResults<RSSEpisode>
+
+    init(onAppearRefresh: @escaping @MainActor () -> Void = {}) {
+        self.onAppearRefresh = onAppearRefresh
+    }
 
     var body: some View {
         NavigationStack {
@@ -281,6 +286,7 @@ struct RadioHomeView: View {
             }
         }
         .onAppear {
+            onAppearRefresh()
             updateVisibleTranscriptSnapshot()
         }
         .onChange(of: visibleTranscriptKeys) {

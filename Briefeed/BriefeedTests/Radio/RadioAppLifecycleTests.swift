@@ -218,6 +218,41 @@ struct RadioAppLifecycleTests {
         driver.handleScenePhase(.background)
     }
 
+    @Test func reopeningRadioRequestsOneFreshOpeningRefreshAfterTheLaunchDebounce() async {
+        let launchedAt = Date(timeIntervalSince1970: 10_000)
+        var now = launchedAt
+        let monitor = LifecycleConnectivityMonitor(.online)
+        var initialCount = 0
+        var openingCount = 0
+        let driver = makeDriver(monitor: monitor, now: { now })
+        driver.handleScenePhase(.active)
+
+        await driver.startColdLaunch(
+            restore: { _ in nil },
+            initialRefresh: refreshWork(
+                begin: { initialCount += 1 },
+                load: { self.emptyRefresh }
+            ),
+            foregroundRefresh: refreshWork(
+                begin: { openingCount += 1 },
+                load: { self.emptyRefresh }
+            )
+        )
+        await settle()
+
+        driver.handleRadioHomeAppeared()
+        await settle()
+        #expect(initialCount == 1)
+        #expect(openingCount == 0)
+
+        now = launchedAt.addingTimeInterval(61)
+        driver.handleRadioHomeAppeared()
+        driver.handleRadioHomeAppeared()
+        await settle()
+
+        #expect(openingCount == 1)
+    }
+
     @Test func terminationCancelsWorkAndForceSavesOnce() async {
         let monitor = LifecycleConnectivityMonitor(.unknown)
         var cancelAutoplayCount = 0

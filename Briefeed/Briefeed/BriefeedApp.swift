@@ -60,7 +60,7 @@ struct BriefeedApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(onRadioHomeAppear: handleRadioHomeAppeared)
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
                 .environmentObject(userDefaultsManager)
                 .environmentObject(audioPlayerViewModel)
@@ -178,8 +178,19 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         // Configure app appearance
         configureAppearance()
+
+        let backgroundRefresh = RadioFeedBackgroundRefreshDriver.shared
+        if backgroundRefresh.register(),
+           !AppRuntime.shouldSkipAutomaticStartupWork {
+            _ = backgroundRefresh.schedule()
+        }
         
         return true
+    }
+
+    func applicationDidEnterBackground(_ application: UIApplication) {
+        guard !AppRuntime.shouldSkipAutomaticStartupWork else { return }
+        _ = RadioFeedBackgroundRefreshDriver.shared.schedule()
     }
 
     func application(

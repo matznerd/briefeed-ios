@@ -52,6 +52,7 @@ final class RadioAppLifecycleDriver {
     }
 
     private static let pollInterval: TimeInterval = 15 * 60
+    private static let radioHomeRefreshDebounce: TimeInterval = 60
 
     private let connectivity: ConnectivityMonitoring
     private let now: @MainActor () -> Date
@@ -76,6 +77,7 @@ final class RadioAppLifecycleDriver {
     private var isActive = false
     private var isInInactiveSequence = false
     private var didTerminate = false
+    private var lastOpeningRefreshRequestAt: Date?
     private var pendingRestoreProjection: (@MainActor () async -> Void)?
     private var restoreProjectionTask: Task<Void, Never>?
 
@@ -152,6 +154,21 @@ final class RadioAppLifecycleDriver {
         launchPendingRefreshIfPossible()
     }
 
+    func handleRadioHomeAppeared() {
+        guard isActive,
+              didFinishRestore,
+              didRequestInitialRefresh,
+              !didTerminate,
+              let foregroundRefreshWork else { return }
+        let requestedAt = now()
+        if let lastOpeningRefreshRequestAt,
+           requestedAt.timeIntervalSince(lastOpeningRefreshRequestAt)
+            < Self.radioHomeRefreshDebounce {
+            return
+        }
+        requestOpeningRefresh(requestedAt, operation: foregroundRefreshWork)
+    }
+
     func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
@@ -167,7 +184,7 @@ final class RadioAppLifecycleDriver {
                 if !didRequestInitialRefresh {
                     requestInitialRefreshIfNeeded()
                 } else if isForegroundReturn, let foregroundRefreshWork {
-                    requestStaleRefreshWhenOnline(now: now(), operation: foregroundRefreshWork)
+                    requestOpeningRefresh(now(), operation: foregroundRefreshWork)
                 }
             }
             armPollIfNeeded()
@@ -219,9 +236,9 @@ final class RadioAppLifecycleDriver {
         guard !didRequestInitialRefresh else { return }
         didRequestInitialRefresh = true
         if coldLaunchAutoplayAllowed, let initialRefreshWork {
-            requestStaleRefreshWhenOnline(now: now(), operation: initialRefreshWork)
+            requestOpeningRefresh(now(), operation: initialRefreshWork)
         } else if let foregroundRefreshWork {
-            requestStaleRefreshWhenOnline(now: now(), operation: foregroundRefreshWork)
+            requestOpeningRefresh(now(), operation: foregroundRefreshWork)
         }
     }
 
@@ -229,9 +246,15 @@ final class RadioAppLifecycleDriver {
         guard isActive, !didTerminate else { return }
         didRequestInitialRefresh = true
         if let foregroundRefreshWork {
-            requestStaleRefreshWhenOnline(now: now(), operation: foregroundRefreshWork)
+            requestOpeningRefresh(now(), operation: foregroundRefreshWork)
         }
         armPollIfNeeded()
+    }
+
+    private func requestOpeningRefresh(_ requestedAt: Date, operation: RefreshWork) {
+        guard isActive, !didTerminate, pendingRefresh == nil else { return }
+        lastOpeningRefreshRequestAt = requestedAt
+        requestStaleRefreshWhenOnline(now: requestedAt, operation: operation)
     }
 
     private func applyPendingRestoreProjectionIfActive() {
@@ -397,6 +420,10 @@ extension BriefeedApp {
 
     func handleScenePhase(_ phase: ScenePhase) {
         radioLifecycleDriver.handleScenePhase(phase)
+    }
+
+    func handleRadioHomeAppeared() {
+        radioLifecycleDriver.handleRadioHomeAppeared()
     }
 
     private func makeRadioRefreshWork(

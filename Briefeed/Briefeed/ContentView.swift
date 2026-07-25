@@ -12,6 +12,11 @@ struct ContentView: View {
     @State private var showingSettings = false
     @EnvironmentObject private var userDefaultsManager: UserDefaultsManager
     @ObservedObject private var statusService = ProcessingStatusService.shared
+    private let onRadioHomeAppear: @MainActor () -> Void
+
+    init(onRadioHomeAppear: @escaping @MainActor () -> Void = {}) {
+        self.onRadioHomeAppear = onRadioHomeAppear
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,7 +31,7 @@ struct ContentView: View {
                 Group {
                     switch selectedTab {
                     case .radio:
-                        RadioHomeView()
+                        RadioHomeView(onAppearRefresh: onRadioHomeAppear)
                     case .brief:
                         FilteredBriefView()
                     case .feed:

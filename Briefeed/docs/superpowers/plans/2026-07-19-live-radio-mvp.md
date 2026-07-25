@@ -45,6 +45,8 @@
 
 **Goal:** Ship a distribution-candidate iOS build whose default Radio tab restores and deterministically advances a persisted source-ordered podcast session, supports opt-in cold-launch autoplay, 10-second transport controls, persisted speed, sleep timing, accessible compact navigation, and reliable background and remote playback without depending on Reddit or article generation.
 
+> **July 25 freshness follow-up:** The Radio lifecycle now treats a Radio Home appearance as an opening signal, debounced for 60 seconds against launch/foreground work, and registers a stale-only `BGAppRefreshTask` with a 45-minute earliest begin date. iOS background scheduling is best-effort; cold launch, foreground return, and Radio Home appearance remain the deterministic checks. Coverage lives in `RadioAppLifecycleTests` and `RadioFeedBackgroundRefreshTests`.
+
 **Architecture:** Add a Radio-only domain beside the existing Brief `QueueCoordinator`: a pure queue builder, a versioned UserDefaults session store, a Core Data repository, and a `@MainActor` `RadioSessionCoordinator`. `UnifiedAudioPlayer` projects either Brief or Radio into one single-item `SwiftAudioExService`; only the active high-level coordinator owns navigation and completion. RSS refresh publishes per-source results into the Radio coordinator, while deterministic debug fixtures and a thin adapter use the shared simulator fleet without touching human-owned devices.
 
 **Tech Stack:** Swift 6, SwiftUI, Combine, Core Data, Codable/UserDefaults, CryptoKit, Network/NWPathMonitor, AVFoundation, MediaPlayer, SwiftAudioEx, Swift Testing, XCTest/XCUITest, and `/Users/me/ericode/skills/app-testing`.
@@ -1424,6 +1426,7 @@ Expected: Radio playback tests and Brief isolation tests pass; no temporary Live
 **Interfaces:**
 - Consumes: Radio coordinator restore/intents, the shared `ConnectivityMonitoring` instance, structured refresh results, and existing autoplay key.
 - Produces: one startup task, one connectivity-gated active 15-minute stale-check poll, `handleScenePhase(_:)`, and cold-launch-only autoplay.
+- Produces: one debounced Radio Home opening hook plus one registered stale-only background app-refresh request; neither creates a later autoplay opportunity.
 
 - [ ] **Step 1: Write lifecycle tests around an extracted driver**
 
@@ -1466,6 +1469,8 @@ Skip production startup only in hosted unit tests or deterministic Radio fixture
 - [ ] **Step 4: Own one active poll and scene lifecycle**
 
 Use `scenePhase` plus a cancellable `Task` that sleeps 15 minutes while active and calls only `requestStaleRefreshWhenOnline` with a stale-refresh operation. Keep that heartbeat work distinct from the forced opening/foreground work. Cancel both poll and pending connectivity wait on inactive/background. Every transition to active idempotently creates exactly one new poll when none exists; repeated active notifications leave the existing poll unchanged. On every foreground, force one refresh but never create a new autoplay opportunity. On background and termination, cancel deferred autoplay and force-save both Radio and Brief state. Let playing audio continue.
+
+Wire `RadioHomeView.onAppear` through `ContentView` to `RadioAppLifecycleDriver.handleRadioHomeAppeared()`. Ignore appearances before restoration, and suppress duplicates for 60 seconds after launch, foreground, or another Radio opening refresh. Register `<bundle-id>.radio-refresh` in `AppDelegate` before launch completes, add the `fetch` background mode, request a 45-minute earliest begin date, re-arm on launch/background/task execution, and apply only `refreshIfStale` results without transport or autoplay.
 
 - [ ] **Step 5: Run tests and inspect timer ownership**
 

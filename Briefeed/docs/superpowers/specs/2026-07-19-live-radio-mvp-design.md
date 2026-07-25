@@ -505,7 +505,7 @@ Autoplay is off by default and is exposed as a clear Radio setting. Preserve the
 - Persist the snapshot immediately.
 - Cancel any pending deferred cold-launch autoplay opportunity.
 - Continue active audio under the existing background-audio mode.
-- Do not start a new feed refresh solely because the app entered background.
+- Re-arm one best-effort `BGAppRefreshTask` request, but do not start a feed request merely because the app entered background.
 - Continue evaluating an armed sleep deadline while audio remains active.
 
 ### Interruption and Route Change
@@ -531,9 +531,10 @@ Autoplay is off by default and is exposed as a clear Radio setting. Preserve the
 - Hourly sources become stale 30 minutes after their last successful refresh.
 - Daily sources become stale 6 hours after their last successful refresh.
 - On cold launch and every foreground return, force one enabled-source refresh so opening the app cannot trust a recently checked feed that published just afterward.
+- Reopening Radio Home after at least 60 seconds since the last forced opening request also forces one enabled-source refresh. SwiftUI remounts inside that debounce do not duplicate work.
 - While the app remains active, one authoritative 15-minute poll invokes only `refreshIfStale`; it does not force a network request for fresh sources. Entering background cancels it, and the next foreground re-arms exactly one poll.
+- Register one `BGAppRefreshTask` under `<bundle-id>.radio-refresh`, request an earliest begin date 45 minutes later, and re-arm it when it launches or the app backgrounds. It invokes only `refreshIfStale`, never autoplay or transport. This is opportunistic because iOS controls execution time; it cannot replace the deterministic opening refresh.
 - Manual Refresh ignores the stale threshold.
-- No background task is added for this MVP.
 - Remove the duplicate app and RSS-service refresh timers and update `RSSFeed.isStale` and `checkInterval` to use this single policy.
 
 ### Episode Playback Failure
