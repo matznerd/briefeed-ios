@@ -42,15 +42,16 @@
 | Current transcript playback and presentation suites | PASS | 23 tests passed on an iOS 26.5 simulator, including the 326.0s played / 304.196s prepared duration-mismatch regression |
 | Physical-device app build and install | PASS | Debug app built, signed, installed, and launched on Eric's iPhone 13 Pro |
 | Full app unit suite | BLOCKED (pre-existing) | The managed-fleet run reached unrelated Core Data duplicate-entity crashes and known intentional InfiniteScroll failures; GitHub issue #9 tracks the Core Data test-host defect |
-| Transcript UI tests | PENDING | Run after unit suite |
-| Same-session audio-to-transcript handoff | PENDING | Installed build is ready; iPhone Mirroring could not attach while the phone was in active use |
-| Radio smoke and lifecycle | PARTIAL | Managed simulator launch and screenshot passed visually; the smoke assertion used stale fixture titles and was corrected, but the rerun is waiting for the host pressure gate |
+| Transcript UI tests | PARTIAL | Compact live-text behavior passed on the physical phone; expanded-reader gestures, accessibility, and lifecycle behavior remain in the distribution gate |
+| Same-session audio-to-transcript handoff | PASS | On Eric's iPhone 13 Pro, ABC first-play preparation advanced from queued to synchronized live text at the current media time and continued following at 1.5x and 2x |
+| Dynamic-audio mismatch presentation | PASS | On Eric's iPhone 13 Pro, NPR advanced from queued to the finite mismatch message in about 15 seconds rather than remaining on an indefinite sync state |
+| Radio smoke and lifecycle | PASS | `RadioUITests.testHeadlessRadioSmoke` passed on the managed simulator, including playlist, transport, Next, terminate/relaunch, and current-title restoration; receipt: `/tmp/briefeed-radio-radio-smoke-derived-data/RadioSmokeEvidence/20260725T213013Z/receipt.txt` |
 
 The compile gate included the Briefeed app, unit-test target, and UI-test
 target. Existing Swift concurrency warnings in legacy audio/Core Data paths
-remain. The focused suites now execute on the physical phone; audible
-continuity and visible word-following intentionally remain open until the
-installed build is exercised through iPhone Mirroring or directly on-device.
+remain. The focused suites execute on the physical phone, and the installed
+build has now been exercised through iPhone Mirroring for both synchronized
+first-play text and the dynamic-audio mismatch path.
 
 The latest managed-fleet check reported `PRESSURE=critical` because swap
 headroom was below 1 GB even after scheduler load fell. The pressure gate was
@@ -73,8 +74,10 @@ separate preparation download as proof of the active stream:
 - GitHub issue #24 tracks a transport-owned identity or single-fetch solution.
 
 This keeps dynamic-ad mismatches fail-closed while allowing first-play text on
-the exact prepared bytes. Audible continuity still requires physical-device
-verification.
+the exact prepared bytes. The physical-device playback clock continued through
+the verified ABC same-session transition; audible continuity and broader
+interruption, route-change, and background checks remain in the distribution
+gate.
 
 ### NPR dynamic-audio evidence
 
@@ -94,6 +97,24 @@ inserted preroll in the played response. The transcript begins with NPR
 editorial audio and therefore must not be aligned to that longer stream. The
 player now reports that the transcript does not match the current audio rather
 than promising that synchronization is still in progress.
+
+### July 25 physical-phone result
+
+The pushed `479a5cd` build was signed, installed over the existing app without
+clearing listening history, and exercised on Eric's iPhone 13 Pro through
+iPhone Mirroring:
+
+- NPR's playback clock advanced immediately, queued transcript work, and changed to
+  "Transcript doesn't match this audio" in about 15 seconds after validation;
+- ABC's playback clock advanced immediately, completed on-device preparation, switched to
+  "Live transcript" at the current playback position, and visibly followed the
+  spoken words at both 1.5x and 2x;
+- the player was paused after verification without completing or resetting the
+  episode;
+- no mismatched text was exposed and no app crash occurred.
+
+This verifies the two user-visible first-play outcomes. It does not close the
+transport-identity limitation tracked by GitHub issue #24.
 
 ## Physical-Device Gate
 

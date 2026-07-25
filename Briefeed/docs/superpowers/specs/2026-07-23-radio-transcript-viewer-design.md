@@ -1,7 +1,7 @@
 # Briefeed Radio Transcript Viewer Design
 
 **Date:** 2026-07-23  
-**Status:** Implemented on `codex/live-radio-mvp`; simulator and physical-device verification pending
+**Status:** Implemented on `codex/live-radio-mvp`; focused simulator and physical first-play verification passed, broader distribution gate remains
 **Tracking:** GitHub issue #23  
 **Depends on:** Live Radio MVP and the completed on-device timed-transcript spike  
 **Does not include:** Ad classification or automatic ad skipping (GitHub issue #10)
