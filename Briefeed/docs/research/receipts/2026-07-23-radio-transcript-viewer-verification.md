@@ -32,9 +32,10 @@
 | Gate | Result | Evidence |
 | --- | --- | --- |
 | Earlier generic simulator compile | PASS | `make radio-compile` ended with `** TEST BUILD SUCCEEDED **` before the final freshness and restore-race hardening |
-| Current-head Swift parse and diff checks | PASS | `swiftc -frontend -parse` passed for every changed Swift file; `git diff --check` is clean at `6a3e6f6` |
+| Current-head diff check | PASS | `git diff --check` is clean at `06797f3` |
 | Current-head generic simulator compile | PASS | `xcodebuild build-for-testing` completed for arm64 iOS Simulator after the exact-audio promotion change |
-| Focused Radio unit tests | PENDING | Managed simulator lane refused work while host pressure was critical |
+| Physical-device test bundle build | PASS | Xcode built and signed the app and focused test bundle for Eric's iPhone 13 Pro |
+| Focused Radio unit tests | PENDING | Managed simulator lane refused a boot under critical swap pressure; the physical runner then waited for the locked iPhone and was stopped without a test result |
 | Full Radio unit suite | PENDING | Run after focused suite |
 | Transcript UI tests | PENDING | Run after unit suite |
 | Radio smoke and lifecycle | PENDING | Run after UI suite |
@@ -46,7 +47,9 @@ accepts work.
 
 The latest managed-fleet check reported `PRESSURE=critical` because swap
 headroom was below 1 GB even after scheduler load fell. The pressure gate was
-not bypassed and no unowned simulator was targeted.
+not bypassed and no unowned simulator was targeted. The physical test bundle
+compiled and signed, but Xcode could not launch it while both the Mac and
+iPhone were locked.
 
 ## Exact-Asset Boundary
 
