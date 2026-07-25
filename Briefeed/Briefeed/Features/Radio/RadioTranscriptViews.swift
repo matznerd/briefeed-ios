@@ -46,8 +46,8 @@ enum RadioTranscriptUIPresentation {
         }
         guard playbackIsValidated else {
             return RadioTranscriptCompactContent(
-                title: "Transcript prepared",
-                detail: "Available the next time this episode starts",
+                title: "Syncing transcript",
+                detail: "Catching up to the current audio",
                 progress: nil,
                 canRetry: false,
                 fixedHeight:

@@ -311,8 +311,8 @@ struct RadioTranscriptPlaybackTests {
     }
 
     @Test func theNextEpisodeUsesItsPreparedLocalAssetWhenItLoads() async {
-        let first = makeCandidate("first")
-        let second = makeCandidate("second")
+        let first = makeCandidate("first", feedID: "first-feed")
+        let second = makeCandidate("second", feedID: "second-feed")
         let localURL = URL(fileURLWithPath: "/tmp/second-prepared.mp3")
         let asset = makeAsset(
             candidate: second,
@@ -530,8 +530,8 @@ struct RadioTranscriptPlaybackTests {
     }
 
     @Test func anOldValidationCannotValidateTheNextEpisode() async throws {
-        let first = makeCandidate("first")
-        let second = makeCandidate("second")
+        let first = makeCandidate("first", feedID: "first-feed")
+        let second = makeCandidate("second", feedID: "second-feed")
         let transcript = try makeTranscript(
             fingerprint: "first-fingerprint",
             duration: 60
@@ -619,9 +619,12 @@ struct RadioTranscriptPlaybackTests {
         return (player, resolvedTransport)
     }
 
-    private func makeCandidate(_ id: String) -> RadioEpisodeCandidate {
+    private func makeCandidate(
+        _ id: String,
+        feedID: String = "feed"
+    ) -> RadioEpisodeCandidate {
         RadioEpisodeCandidate(
-            key: .init(feedID: "feed", episodeID: id),
+            key: .init(feedID: feedID, episodeID: id),
             originalPlaybackURL:
                 URL(string: "https://example.com/\(id).mp3")!,
             canonicalEnclosureURL:

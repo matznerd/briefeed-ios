@@ -32,24 +32,26 @@
 | Gate | Result | Evidence |
 | --- | --- | --- |
 | Earlier generic simulator compile | PASS | `make radio-compile` ended with `** TEST BUILD SUCCEEDED **` before the final freshness and restore-race hardening |
-| Current-head diff check | PASS | `git diff --check` is clean at `06797f3` |
+| Current-head diff check | PASS | `git diff --check` is clean after the same-session sync copy and fixture correction |
 | Current-head generic simulator compile | PASS | `xcodebuild build-for-testing` completed for arm64 iOS Simulator after the exact-audio promotion change |
 | Physical-device test bundle build | PASS | Xcode built and signed the app and focused test bundle for Eric's iPhone 13 Pro |
-| Focused Radio unit tests | PENDING | Managed simulator lane refused a boot under critical swap pressure; the physical runner then waited for the locked iPhone and was stopped without a test result |
+| Focused transcript playback and presentation tests | PASS | Both suites executed on Eric's iPhone 13 Pro with zero failures after correcting cross-source transition fixtures |
+| Physical-device app build and install | PASS | Debug app built, signed, installed, and launched on Eric's iPhone 13 Pro |
 | Full Radio unit suite | PENDING | Run after focused suite |
 | Transcript UI tests | PENDING | Run after unit suite |
-| Radio smoke and lifecycle | PENDING | Run after UI suite |
+| Same-session audio-to-transcript handoff | PENDING | Installed build is ready; iPhone Mirroring could not attach while the phone was in active use |
+| Radio smoke and lifecycle | PENDING | Run after same-session handoff proof |
 
-The current compile gate included the Briefeed app, unit-test target, and
-UI-test target. Existing Swift concurrency warnings in legacy audio/Core Data
-paths remain. Runtime claims intentionally remain open until the managed lane
-accepts work.
+The compile gate included the Briefeed app, unit-test target, and UI-test
+target. Existing Swift concurrency warnings in legacy audio/Core Data paths
+remain. The focused suites now execute on the physical phone; audible
+continuity and visible word-following intentionally remain open until the
+installed build is exercised through iPhone Mirroring or directly on-device.
 
 The latest managed-fleet check reported `PRESSURE=critical` because swap
 headroom was below 1 GB even after scheduler load fell. The pressure gate was
-not bypassed and no unowned simulator was targeted. The physical test bundle
-compiled and signed, but Xcode could not launch it while both the Mac and
-iPhone were locked.
+not bypassed and no unowned simulator was targeted. Physical-device execution
+was used for the focused suites instead.
 
 ## Exact-Asset Boundary
 
