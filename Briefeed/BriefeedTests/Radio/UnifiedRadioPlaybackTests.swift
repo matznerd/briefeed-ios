@@ -416,10 +416,16 @@ final class SpyAudioTransport: AudioPlaybackTransporting {
     private(set) var loads: [(TransportPlaybackID, URL)] = []
     private(set) var policies: [RemoteCommandAvailability] = []
     private var playFailuresRemaining: Int
+    private var failingURLs: Set<URL>
     private let event: (String) -> Void
 
-    init(playFailuresRemaining: Int = 0, event: @escaping (String) -> Void = { _ in }) {
+    init(
+        playFailuresRemaining: Int = 0,
+        failingURLs: Set<URL> = [],
+        event: @escaping (String) -> Void = { _ in }
+    ) {
         self.playFailuresRemaining = playFailuresRemaining
+        self.failingURLs = failingURLs
         self.event = event
     }
     func play(id: TransportPlaybackID, url: URL, title: String?, artist: String?) async throws {
@@ -427,6 +433,9 @@ final class SpyAudioTransport: AudioPlaybackTransporting {
         activeRemotePlaybackIdentity = nil
         loads.append((id, url))
         event("play")
+        if failingURLs.contains(url) {
+            throw SpyTransportError.loadFailed
+        }
         if playFailuresRemaining > 0 {
             playFailuresRemaining -= 1
             throw SpyTransportError.loadFailed

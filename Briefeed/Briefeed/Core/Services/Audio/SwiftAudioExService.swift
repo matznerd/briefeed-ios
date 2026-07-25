@@ -94,6 +94,13 @@ protocol AudioPlaybackTransporting: AnyObject {
     var duration: TimeInterval { get }
     var activeRemotePlaybackIdentity: RemotePlaybackAssetIdentity? { get }
     func play(id: TransportPlaybackID, url: URL, title: String?, artist: String?) async throws
+    func play(
+        id: TransportPlaybackID,
+        url: URL,
+        title: String?,
+        artist: String?,
+        startingAt time: TimeInterval
+    ) async throws
     func pause()
     func resume()
     func stop()
@@ -104,6 +111,19 @@ protocol AudioPlaybackTransporting: AnyObject {
 
 extension AudioPlaybackTransporting {
     var activeRemotePlaybackIdentity: RemotePlaybackAssetIdentity? { nil }
+
+    func play(
+        id: TransportPlaybackID,
+        url: URL,
+        title: String?,
+        artist: String?,
+        startingAt time: TimeInterval
+    ) async throws {
+        try await play(id: id, url: url, title: title, artist: artist)
+        if time.isFinite, time > 0 {
+            seek(to: time)
+        }
+    }
 }
 
 @MainActor
@@ -143,6 +163,38 @@ final class SwiftAudioExService: NSObject, AudioPlaybackTransporting {
     }
 
     func play(id: TransportPlaybackID, url: URL, title: String?, artist: String?) async throws {
+        try await loadPlayback(
+            id: id,
+            url: url,
+            title: title,
+            artist: artist,
+            startingAt: nil
+        )
+    }
+
+    func play(
+        id: TransportPlaybackID,
+        url: URL,
+        title: String?,
+        artist: String?,
+        startingAt time: TimeInterval
+    ) async throws {
+        try await loadPlayback(
+            id: id,
+            url: url,
+            title: title,
+            artist: artist,
+            startingAt: time.isFinite ? max(0, time) : 0
+        )
+    }
+
+    private func loadPlayback(
+        id: TransportPlaybackID,
+        url: URL,
+        title: String?,
+        artist: String?,
+        startingAt time: TimeInterval?
+    ) async throws {
         detachActivePlayer(expectStop: true)
 
         if url.isFileURL, !FileManager.default.fileExists(atPath: url.path) {
@@ -165,14 +217,29 @@ final class SwiftAudioExService: NSObject, AudioPlaybackTransporting {
         currentArtist = artist ?? "Briefeed"
         publishState(.loading, id: id)
 
-        let item = DefaultAudioItem(
-            audioUrl: url.isFileURL ? url.path : url.absoluteString,
-            artist: currentArtist ?? "Briefeed",
-            title: currentTitle ?? url.lastPathComponent,
-            albumTitle: "Briefeed",
-            sourceType: url.isFileURL ? .file : .stream,
-            artwork: nil
-        )
+        let audioURL = url.isFileURL ? url.path : url.absoluteString
+        let sourceType: SourceType = url.isFileURL ? .file : .stream
+        let item: AudioItem
+        if let time, time > 0 {
+            item = DefaultAudioItemInitialTime(
+                audioUrl: audioURL,
+                artist: currentArtist ?? "Briefeed",
+                title: currentTitle ?? url.lastPathComponent,
+                albumTitle: "Briefeed",
+                sourceType: sourceType,
+                artwork: nil,
+                initialTime: time
+            )
+        } else {
+            item = DefaultAudioItem(
+                audioUrl: audioURL,
+                artist: currentArtist ?? "Briefeed",
+                title: currentTitle ?? url.lastPathComponent,
+                albumTitle: "Briefeed",
+                sourceType: sourceType,
+                artwork: nil
+            )
+        }
         try AVAudioSession.sharedInstance().setActive(true)
         UIApplication.shared.beginReceivingRemoteControlEvents()
         nextPlayer.load(item: item, playWhenReady: true)

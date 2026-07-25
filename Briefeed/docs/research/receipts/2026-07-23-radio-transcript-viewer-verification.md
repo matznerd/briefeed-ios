@@ -21,6 +21,9 @@
   transport controls.
 - Exact prepared-local playback validation, stale-result rejection, and
   fail-closed remote playback validation.
+- Duration-gated promotion from an active remote stream to exact prepared audio
+  at the current media time, with original-stream restoration if local loading
+  fails.
 - Debug transcript fixture and accessibility identifiers for deterministic
   simulator UI verification.
 
@@ -30,20 +33,20 @@
 | --- | --- | --- |
 | Earlier generic simulator compile | PASS | `make radio-compile` ended with `** TEST BUILD SUCCEEDED **` before the final freshness and restore-race hardening |
 | Current-head Swift parse and diff checks | PASS | `swiftc -frontend -parse` passed for every changed Swift file; `git diff --check` is clean at `6a3e6f6` |
-| Current-head generic simulator compile | PENDING | Must be rerun because `8c4664d` and `6a3e6f6` changed production coordinator code after the earlier compile |
+| Current-head generic simulator compile | PASS | `xcodebuild build-for-testing` completed for arm64 iOS Simulator after the exact-audio promotion change |
 | Focused Radio unit tests | PENDING | Managed simulator lane refused work while host pressure was critical |
 | Full Radio unit suite | PENDING | Run after focused suite |
 | Transcript UI tests | PENDING | Run after unit suite |
 | Radio smoke and lifecycle | PENDING | Run after UI suite |
 
-The earlier compile gate included the Briefeed app, unit-test target, and
+The current compile gate included the Briefeed app, unit-test target, and
 UI-test target. Existing Swift concurrency warnings in legacy audio/Core Data
-paths remain. Current-head compile and runtime claims intentionally remain open
-until the managed lane accepts work.
+paths remain. Runtime claims intentionally remain open until the managed lane
+accepts work.
 
-The latest managed-fleet check reported `PRESSURE=critical`, approximately
-`load=421`, and a flat trend. The pressure gate was not bypassed, no unowned
-simulator was targeted, and no physical-device build was attempted.
+The latest managed-fleet check reported `PRESSURE=critical` because swap
+headroom was below 1 GB even after scheduler load fell. The pressure gate was
+not bypassed and no unowned simulator was targeted.
 
 ## Exact-Asset Boundary
 
@@ -53,13 +56,16 @@ separate preparation download as proof of the active stream:
 
 - prepared-ahead and replay playback use the exact fingerprinted local asset
   and may display synchronized text;
-- uncached remote first-play audio starts immediately, but synchronized text
-  stays hidden until the player can prove matching response identity; the
-  prepared transcript becomes available on the next exact local playback;
+- uncached remote first-play audio starts immediately; when preparation
+  finishes, the player may switch to the exact prepared local bytes at the
+  current media time after duration validation, then expose synchronized text;
+- a duration mismatch or failed promotion keeps synchronized text hidden, and
+  failed local loading restores the original stream at the same media time;
 - GitHub issue #24 tracks a transport-owned identity or single-fetch solution.
 
-This is intentional fail-closed behavior for publishers that dynamically insert
-different audio into separate requests.
+This keeps dynamic-ad mismatches fail-closed while allowing first-play text on
+the exact prepared bytes. Audible continuity still requires physical-device
+verification.
 
 ## Physical-Device Gate
 

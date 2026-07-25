@@ -696,25 +696,31 @@ V1 uses these safeguards:
 2. When an episode has been prepared ahead and then becomes current, playback
    starts from that exact fingerprinted local file. This applies even when it is
    the first time the user plays that episode.
-3. For the currently streaming first play, the coordinator compares the
-   transport's observed final URL, response validators, positive content
-   length, and media duration before exposing the new transcript.
-4. If duration differs beyond a small tested tolerance, synchronized text stays
+3. For the currently streaming first play, the player may promote playback to
+   the exact fingerprinted local asset after preparation completes. Promotion
+   is allowed only when the active and prepared durations match within the
+   tested tolerance. The replacement transport starts at the current media time
+   using SwiftAudioEx initial timing; stale callbacks from the old playback ID
+   are ignored.
+4. If duration differs beyond the tolerance, synchronized text stays
    unavailable for that stream. The prepared transcript becomes eligible only
-   when playback uses its exact cached asset.
-5. The player never silently hot-swaps a remote stream to a local file unless a
-   dedicated continuity test proves the transition is inaudible and time-safe.
+   on a later exact local playback.
+5. If the exact local load fails, Briefeed restores the original playback URL
+   at the same media time. Transcript preparation or promotion must not strand,
+   complete, or advance the Radio queue.
+6. A transport that exposes final URL, response validators, positive content
+   length, and duration may validate the active remote response directly
+   instead of performing the local promotion.
 
-For a currently streaming uncached episode, text may appear as soon as
-preparation finishes and validation passes. This requires the playback
-transport to expose identity from the response it is actually playing. The
-current SwiftAudioEx adapter does not expose that response identity, so V1
-fails closed for an uncached remote first play and offers the prepared
-transcript on exact local replay instead. Prepared-ahead next episodes avoid
-that ambiguity because playback begins from the exact local asset used for
-transcription. A follow-up transport task owns first-play response observation;
-the viewer must not substitute preparation-download metadata as proof of the
-active stream.
+For a currently streaming uncached episode, audio starts immediately. When
+preparation finishes, synchronized text appears only after the player is using
+the exact local bytes that produced the transcript or has independently
+validated the active remote response. The current SwiftAudioEx adapter cannot
+observe remote response identity, so V1 uses the duration-gated exact-local
+promotion above. Prepared-ahead next episodes avoid the handoff because
+playback begins from the exact local asset. A follow-up transport task still
+owns first-play response observation; the viewer never substitutes
+preparation-download metadata as proof of a different active stream.
 
 The future ad classifier must use the same fingerprinted asset identity. The
 58.62/59.40 Marketplace boundary is research evidence, not a reusable rule.
@@ -861,7 +867,9 @@ shows material data use.
   time.
 - Before starting a Radio episode, `UnifiedAudioPlayer` asks the transcript
   coordinator for an exact prepared local asset and prefers it over the remote
-  enclosure URL. It never hot-swaps an episode already streaming.
+  enclosure URL. If that asset becomes ready during active remote playback, the
+  player performs the duration-gated, media-time-preserving promotion defined
+  above before exposing synchronized text.
 - The legacy `TranscriptReaderView` remains article-summary UI and is not
   modified into the Radio viewer.
 - Article summarization, Gemini TTS, PocketTTS, Reddit discovery, Supabase, and
@@ -910,8 +918,8 @@ shows material data use.
 - Start uncached episode: audio play request occurs before transcript readiness.
 - Select an earlier source-history episode: audio starts first, its transcript
   appears when ready, and adjacent history is not prepared.
-- Current transcript becomes visible without restarting playback when asset
-  validation passes.
+- Current transcript becomes visible after exact-local promotion preserves the
+  current media time, or after active-response identity validation passes.
 - Next two prepare in deterministic Radio order.
 - Next during transcription cancels/promotes correctly.
 - Pause and resume freeze and continue the active word.
@@ -932,6 +940,10 @@ shows material data use.
 - Offline playback from cached audio restores its cached transcript.
 - A prepared-ahead episode starts playback from its exact local asset on its
   first play.
+- Prepared audio promotion preserves media time for playing and paused/resume
+  paths.
+- A failed prepared-audio load restores the original stream at the same media
+  time and keeps synchronized text hidden.
 - Dynamic-ad duration mismatch fails closed.
 
 ### Visual and Accessibility Tests

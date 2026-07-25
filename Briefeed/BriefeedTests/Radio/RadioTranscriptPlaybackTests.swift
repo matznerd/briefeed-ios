@@ -93,6 +93,223 @@ struct RadioTranscriptPlaybackTests {
         ])
     }
 
+    @Test func aReadyTranscriptPromotesActivePlaybackToItsExactLocalAudio() async throws {
+        let candidate = makeCandidate("promoted")
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("promoted-\(UUID().uuidString).mp3")
+        try Data([0]).write(to: localURL)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+
+        let transcript = try makeTranscript(
+            fingerprint: "promoted-fingerprint",
+            duration: 60
+        )
+        let asset = makeAsset(
+            candidate: candidate,
+            fingerprint: transcript.assetFingerprint,
+            duration: transcript.audioDurationSeconds,
+            localURL: localURL
+        )
+        let assets = PlaybackTranscriptAssetProvider()
+        let (player, transport) = await makePlayer(
+            candidates: [candidate],
+            current: candidate.key,
+            assets: assets
+        )
+        await player.playRadio()
+        let remotePlaybackID = try #require(transport.lastPlaybackID)
+        player.audioStateChanged(
+            id: remotePlaybackID,
+            to: .playing,
+            from: .loading
+        )
+        transport.currentTime = 23
+        transport.duration = 60
+        await assets.setCached(asset, for: candidate.key)
+
+        await player.validateActiveRadioTranscript(
+            RadioTranscriptPresentation(
+                episodeKey: candidate.key,
+                state: .ready(transcript)
+            )
+        )
+
+        let localPlaybackID = try #require(transport.lastPlaybackID)
+        #expect(localPlaybackID != remotePlaybackID)
+        #expect(transport.loads.map(\.1) == [
+            candidate.originalPlaybackURL,
+            localURL
+        ])
+        player.audioItemReady(id: localPlaybackID, duration: 60)
+        #expect(transport.seeks == [23])
+        #expect(player.radioTranscriptPlaybackIsValidated)
+    }
+
+    @Test func resumingAPausedEpisodePromotesItsPreparedTranscriptAudio() async throws {
+        let candidate = makeCandidate("resume-promoted")
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("resume-promoted-\(UUID().uuidString).mp3")
+        try Data([0]).write(to: localURL)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+
+        let transcript = try makeTranscript(
+            fingerprint: "resume-promoted-fingerprint",
+            duration: 60
+        )
+        let asset = makeAsset(
+            candidate: candidate,
+            fingerprint: transcript.assetFingerprint,
+            duration: transcript.audioDurationSeconds,
+            localURL: localURL
+        )
+        let assets = PlaybackTranscriptAssetProvider()
+        let (player, transport) = await makePlayer(
+            candidates: [candidate],
+            current: candidate.key,
+            assets: assets
+        )
+        await player.playRadio()
+        let remotePlaybackID = try #require(transport.lastPlaybackID)
+        player.audioStateChanged(
+            id: remotePlaybackID,
+            to: .playing,
+            from: .loading
+        )
+        transport.currentTime = 19
+        transport.duration = 60
+        player.audioProgressUpdated(
+            id: remotePlaybackID,
+            progress: 19 / 60,
+            currentTime: 19,
+            duration: 60
+        )
+        player.pause()
+        await assets.setCached(asset, for: candidate.key)
+
+        await player.beginEffectiveCurrent()
+
+        let localPlaybackID = try #require(transport.lastPlaybackID)
+        #expect(localPlaybackID != remotePlaybackID)
+        #expect(transport.loads.map(\.1) == [
+            candidate.originalPlaybackURL,
+            localURL
+        ])
+        player.audioItemReady(id: localPlaybackID, duration: 60)
+        #expect(transport.seeks == [19])
+    }
+
+    @Test func aFailedPreparedAudioLoadRestoresTheOriginalStream() async throws {
+        let candidate = makeCandidate("promotion-fallback")
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("promotion-fallback-\(UUID().uuidString).mp3")
+        try Data([0]).write(to: localURL)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+
+        let transcript = try makeTranscript(
+            fingerprint: "promotion-fallback-fingerprint",
+            duration: 60
+        )
+        let asset = makeAsset(
+            candidate: candidate,
+            fingerprint: transcript.assetFingerprint,
+            duration: transcript.audioDurationSeconds,
+            localURL: localURL
+        )
+        let assets = PlaybackTranscriptAssetProvider()
+        let transport = SpyAudioTransport(failingURLs: [localURL])
+        let (player, _) = await makePlayer(
+            candidates: [candidate],
+            current: candidate.key,
+            assets: assets,
+            transport: transport
+        )
+        await player.playRadio()
+        let remotePlaybackID = try #require(transport.lastPlaybackID)
+        player.audioStateChanged(
+            id: remotePlaybackID,
+            to: .playing,
+            from: .loading
+        )
+        transport.currentTime = 27
+        transport.duration = 60
+        await assets.setCached(asset, for: candidate.key)
+
+        await player.validateActiveRadioTranscript(
+            RadioTranscriptPresentation(
+                episodeKey: candidate.key,
+                state: .ready(transcript)
+            )
+        )
+
+        let fallbackPlaybackID = try #require(transport.lastPlaybackID)
+        #expect(fallbackPlaybackID != remotePlaybackID)
+        #expect(transport.loads.map(\.1) == [
+            candidate.originalPlaybackURL,
+            localURL,
+            candidate.originalPlaybackURL
+        ])
+        player.audioItemReady(id: fallbackPlaybackID, duration: 60)
+        #expect(transport.seeks == [27])
+        #expect(!player.radioTranscriptPlaybackIsValidated)
+
+        await player.validateActiveRadioTranscript(
+            RadioTranscriptPresentation(
+                episodeKey: candidate.key,
+                state: .ready(transcript)
+            )
+        )
+        #expect(transport.loads.count == 3)
+    }
+
+    @Test func aDurationMismatchDoesNotPromotePreparedAudio() async throws {
+        let candidate = makeCandidate("promotion-duration-mismatch")
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "promotion-duration-mismatch-\(UUID().uuidString).mp3"
+            )
+        try Data([0]).write(to: localURL)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+
+        let transcript = try makeTranscript(
+            fingerprint: "promotion-duration-mismatch-fingerprint",
+            duration: 60
+        )
+        let asset = makeAsset(
+            candidate: candidate,
+            fingerprint: transcript.assetFingerprint,
+            duration: transcript.audioDurationSeconds,
+            localURL: localURL
+        )
+        let assets = PlaybackTranscriptAssetProvider()
+        let (player, transport) = await makePlayer(
+            candidates: [candidate],
+            current: candidate.key,
+            assets: assets
+        )
+        await player.playRadio()
+        let remotePlaybackID = try #require(transport.lastPlaybackID)
+        player.audioStateChanged(
+            id: remotePlaybackID,
+            to: .playing,
+            from: .loading
+        )
+        transport.currentTime = 12
+        transport.duration = 54
+        await assets.setCached(asset, for: candidate.key)
+
+        await player.validateActiveRadioTranscript(
+            RadioTranscriptPresentation(
+                episodeKey: candidate.key,
+                state: .ready(transcript)
+            )
+        )
+
+        #expect(transport.loads.map(\.1) == [
+            candidate.originalPlaybackURL
+        ])
+        #expect(!player.radioTranscriptPlaybackIsValidated)
+    }
+
     @Test func theNextEpisodeUsesItsPreparedLocalAssetWhenItLoads() async {
         let first = makeCandidate("first")
         let second = makeCandidate("second")
@@ -366,7 +583,8 @@ struct RadioTranscriptPlaybackTests {
     private func makePlayer(
         candidates: [RadioEpisodeCandidate],
         current: RadioEpisodeKey,
-        assets: PlaybackTranscriptAssetProvider
+        assets: PlaybackTranscriptAssetProvider,
+        transport: SpyAudioTransport? = nil
     ) async -> (UnifiedAudioPlayer, SpyAudioTransport) {
         let radio = RadioSessionCoordinator(
             store: FakeRadioSessionStore(
@@ -389,16 +607,16 @@ struct RadioTranscriptPlaybackTests {
             connectivityStatus: { .online }
         )
         _ = await radio.restore(autoplayEnabled: false)
-        let transport = SpyAudioTransport()
+        let resolvedTransport = transport ?? SpyAudioTransport()
         let player = UnifiedAudioPlayer(
-            audioPlayer: transport,
+            audioPlayer: resolvedTransport,
             queueCoordinator: FakeBriefQueueCoordinator(),
             radioCoordinator: radio,
             context: PersistenceController(inMemory: true)
                 .container.viewContext,
             radioTranscriptAssetProvider: assets
         )
-        return (player, transport)
+        return (player, resolvedTransport)
     }
 
     private func makeCandidate(_ id: String) -> RadioEpisodeCandidate {

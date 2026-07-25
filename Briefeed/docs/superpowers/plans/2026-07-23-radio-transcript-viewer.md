@@ -23,7 +23,10 @@ closed; exact prepared local playback remains supported.
 - Prepare All snapshots the visible fresh uncompleted latest-per-source rows supplied by `RadioHomePresentation`; it never queries source history.
 - Run at most one speech-analysis operation and two audio downloads concurrently.
 - Prepared-ahead playback must use the exact local fingerprinted asset from which its transcript was generated.
-- A currently streaming episode displays a newly prepared transcript only after final URL, response validators, content length, and duration validation succeeds; otherwise fail closed.
+- A currently streaming episode displays a newly prepared transcript only
+  after playback has been promoted to the exact fingerprinted local audio at
+  the same media time, or final URL, response validators, content length, and
+  duration validation succeeds. Duration mismatch fails closed.
 - Persist transcript artifacts and each batch stage atomically before advancing progress.
 - Use channel `<language>` or Atom feed `xml:lang`, normalize BCP 47, fall back to `en-US` only when metadata is absent or invalid, and surface unsupported Apple locales explicitly.
 - Keep prepared/pending current-plus-two and Prepare All inputs pinned. Throttle above the 500 MB cache ceiling rather than evicting and redownloading required inputs.
@@ -488,7 +491,10 @@ Assert:
 ```swift
 @Test func preparedAheadEpisodeLoadsExactFingerprintLocalURL()
 @Test func unpreparedEpisodeStartsRemoteImmediately()
-@Test func finishingCurrentRemotePreparationNeverHotSwapsActivePlayer()
+@Test func finishingPreparationAloneDoesNotMutateActivePlayback()
+@Test func readyTranscriptPromotesActivePlaybackAtCurrentMediaTime()
+@Test func pausedResumePromotesPreparedPlaybackAtSavedMediaTime()
+@Test func failedPreparedLoadRestoresOriginalStream()
 @Test func mismatchedCurrentStreamDurationKeepsTranscriptHidden()
 @Test func nextLoadsLocalAssetAfterPreparationCompletes()
 ```
@@ -501,7 +507,12 @@ RADIO_TEST_SELECTOR=BriefeedTests/RadioTranscriptPlaybackTests make radio-unit
 
 - [ ] **Step 3: Inject the prepared-asset provider**
 
-Before a new Radio load, prefer the coordinator's fingerprinted local URL. Preserve the existing `RSSEpisode.downloadedFilePath` fallback for non-transcript downloads. Never reload the active key when a transcript asset completes.
+Before a new Radio load, prefer the coordinator's fingerprinted local URL.
+Preserve the existing `RSSEpisode.downloadedFilePath` fallback for
+non-transcript downloads. When the active key's exact asset completes, replace
+the active transport only after duration validation and start the local item at
+the current media time. A local load failure restores the original URL at that
+same time.
 
 - [ ] **Step 4: Add current-stream validation reporting**
 
@@ -509,9 +520,9 @@ Capture observed final URL, validators, positive response length, and duration
 from the response the transport is actually playing when the transport exposes
 them. Report that identity to the transcript coordinator; publish ready text
 only when its validation policy passes. Never use the separate preparation
-download's metadata as a proxy for the active stream. Until SwiftAudioEx exposes
-that response identity, fail closed and publish the transcript only during
-exact prepared local playback.
+download's metadata as a proxy for the active stream. Until SwiftAudioEx
+exposes that identity, use only exact prepared local playback, including the
+duration-gated media-time-preserving promotion in Step 3.
 
 - [ ] **Step 5: Verify the playback regression suites GREEN**
 
