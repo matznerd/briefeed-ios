@@ -140,8 +140,16 @@ final class RadioUITests: XCTestCase {
         ] {
             let control = app.buttons[identifier]
             XCTAssertTrue(control.waitForExistence(timeout: 3))
-            XCTAssertGreaterThanOrEqual(control.frame.width, 44)
-            XCTAssertGreaterThanOrEqual(control.frame.height, 44)
+            XCTAssertGreaterThanOrEqual(
+                control.frame.width,
+                43.99,
+                "\(identifier) must preserve a 44-point hit width"
+            )
+            XCTAssertGreaterThanOrEqual(
+                control.frame.height,
+                43.99,
+                "\(identifier) must preserve a 44-point hit height"
+            )
         }
 
         let scrubber = app.otherElements["miniPlayer.scrubber"]
@@ -367,6 +375,40 @@ final class RadioUITests: XCTestCase {
         for label in ["Off", "End of Episode", "10 min", "20 min", "30 min", "45 min", "60 min", "Custom"] {
             XCTAssertTrue(app.buttons[label].exists || app.menuItems[label].exists)
         }
+    }
+
+    @MainActor
+    func testCompactMenusRespondAcrossTheirAdvertisedHitArea() throws {
+        app.launch()
+
+        let speed = app.buttons["miniPlayer.speed"]
+        XCTAssertTrue(speed.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(
+            speed.frame.width,
+            52,
+            "Playback speed needs a forgiving thumb target, not only the 44-point minimum"
+        )
+        speed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
+        XCTAssertTrue(
+            app.buttons["1.5x"].waitForExistence(timeout: 2)
+                || app.menuItems["1.5x"].waitForExistence(timeout: 2),
+            "Playback speed should open from the lower portion of its hit target"
+        )
+        app.tap()
+
+        let sleep = app.buttons["miniPlayer.sleep"]
+        XCTAssertTrue(sleep.waitForExistence(timeout: 3))
+        XCTAssertGreaterThanOrEqual(
+            sleep.frame.width,
+            52,
+            "Sleep timer needs a forgiving thumb target, not only the 44-point minimum"
+        )
+        sleep.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
+        XCTAssertTrue(
+            app.buttons["20 min"].waitForExistence(timeout: 2)
+                || app.menuItems["20 min"].waitForExistence(timeout: 2),
+            "Sleep timer should open from the lower portion of its hit target"
+        )
     }
 
     @MainActor

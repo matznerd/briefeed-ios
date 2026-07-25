@@ -670,9 +670,11 @@ struct PlayerSpeedMenu: View {
         } label: {
             Label(PlayerPresentationFormat.speed(viewModel.playbackSpeed), systemImage: "speedometer")
                 .font(compact ? .caption2.weight(.semibold) : .subheadline.weight(.semibold))
-                .frame(minWidth: 44, minHeight: 44)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
         }
+        .frame(minWidth: compact ? 52 : 44, minHeight: 44)
+        .contentShape(Rectangle())
         .buttonStyle(.plain)
         .accessibilityLabel("Playback speed")
         .accessibilityValue(PlayerPresentationFormat.speed(viewModel.playbackSpeed))
@@ -707,9 +709,11 @@ struct RadioSleepMenu: View {
                 systemImage: "moon.fill"
             )
             .font(compact ? .caption2.weight(.semibold) : .subheadline.weight(.semibold))
-            .frame(minWidth: 44, minHeight: 44)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
         }
+        .frame(minWidth: compact ? 52 : 44, minHeight: 44)
+        .contentShape(Rectangle())
         .buttonStyle(.plain)
         .accessibilityLabel("Sleep timer")
         .accessibilityValue(PlayerPresentationFormat.sleepTimer(viewModel.sleepTimer, now: now))
