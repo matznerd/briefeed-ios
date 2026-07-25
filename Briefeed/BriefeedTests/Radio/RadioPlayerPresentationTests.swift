@@ -40,7 +40,7 @@ struct RadioPlayerPresentationTests {
 
     @Test func speedMenuUsesCanonicalOptionsAndPersistsSelection() {
         #expect(PlayerPresentationPolicy.speedOptions == PlaybackSpeedPolicy.supported)
-        #expect(PlayerPresentationPolicy.speedOptions == [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3])
+        #expect(PlayerPresentationPolicy.speedOptions == [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 3.5, 4])
 
         let suite = "RadioPlayerPresentationTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -138,14 +138,14 @@ struct RadioPlayerPresentationTests {
         )
         #expect(first.viewModel.playbackSpeed == 1.75)
 
-        first.viewModel.setSpeed(2.5)
-        #expect(savedSpeed == 2.5)
+        first.viewModel.setSpeed(4)
+        #expect(savedSpeed == 4)
 
         let relaunched = await makeRestoredPlayer(
             playbackSpeedLoad: { savedSpeed },
             playbackSpeedSave: { savedSpeed = $0 }
         )
-        #expect(relaunched.viewModel.playbackSpeed == 2.5)
+        #expect(relaunched.viewModel.playbackSpeed == 4)
     }
 
     @Test func customSleepTimerClampsAndReplacesTheActualCoordinatorDeadline() async {

@@ -76,8 +76,13 @@ Primary evidence:
 ## Product Intent
 
 Briefeed Radio is for short, repeated listening sessions. The transcript should
-make a live brief easier to follow at 1x through 3x without turning Radio into a
+make a live brief easier to follow at 1x through 4x without turning Radio into a
 document reader.
+
+Playback-rate labels are source-relative multipliers, not a measured WPM value.
+This slice does not add a WPM counter. A future diagnostic can derive base WPM
+from finalized transcript words divided by media duration and multiply it by
+the active rate without changing synchronization.
 
 The viewer must:
 
@@ -235,7 +240,7 @@ V1 ships a compact three-line teleprompter:
 
 Lines are stable groups derived from word units. The projection does not rebuild
 or slide all three lines for every word. It advances only when the active word
-crosses a line boundary. This prevents visual jitter at 2x and 3x.
+crosses a line boundary. This prevents visual jitter at 2x through 4x.
 
 The grouping algorithm is deterministic and independent of playback rate:
 
@@ -302,7 +307,7 @@ The viewer:
   `TimedTranscriptIndex`;
 - freezes on pause;
 - updates immediately after seek, +/-10, or transcript-line selection;
-- changes naturally at 0.5x through 3x because the player publishes media time;
+- changes naturally at 0.5x through 4x because the player publishes media time;
 - clears stale text immediately when the active episode identity changes;
 - does not present a transcript belonging to a previous queue item while the
   next item loads.
@@ -930,7 +935,7 @@ shows material data use.
 - Next during transcription cancels/promotes correctly.
 - Pause and resume freeze and continue the active word.
 - +/-10, scrub, and transcript-line seek update immediately.
-- 0.5x, 1x, 2x, and 3x use media time without drift.
+- 0.5x, 1x, 2x, 3x, and 4x use media time without drift.
 - Background download completion survives app suspension.
 - Returning active resumes analysis from cached audio.
 - Prepare All continues download and analysis after foreground-to-background on
@@ -979,7 +984,7 @@ On the approved iPhone:
 - a rejected `.fail` submission leaves foreground preparation working and
   reports the limitation;
 - system/user cancellation stops promptly without corrupting completed cache;
-- seeking and 2x/3x remain visually synchronized;
+- seeking and 2x/3x/4x remain visually synchronized;
 - memory and thermal state remain acceptable over a 60-minute Radio session;
 - killing and reopening restores the prepared transcript;
 - the signed production app invokes `SpeechAnalyzer` without

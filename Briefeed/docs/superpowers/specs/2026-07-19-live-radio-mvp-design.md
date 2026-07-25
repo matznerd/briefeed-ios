@@ -54,7 +54,7 @@ The rendered chrome may be visually compact, but every interactive control must 
 - Partial playback resume and completion tracking.
 - Refresh and queue replenishment without duplicates.
 - Manual Next behavior that does not lose partial progress.
-- Playback speed from 0.5x through 3.0x, persisted as the last-used speed.
+- Playback speed from 0.5x through 4.0x, persisted as the last-used speed.
 - Back and forward 10-second controls in the app and remote-command configuration.
 - Next Episode in the mini-player and remote commands where iOS exposes it.
 - A sleep timer with End of Episode, presets, and an exact custom duration.
@@ -434,10 +434,10 @@ The mini-player does not include Previous. Back 10 seconds is the fast correctio
 
 ### Playback Speed
 
-- Supported values are `0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0`.
+- Supported values are `0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 3.5, 4.0`.
 - Persist the last-used value for both Radio and Brief playback under the canonical `playbackSpeed` UserDefaults key.
 - When `playbackSpeed` is absent, migrate `rssPlaybackSpeed` once, write the normalized value to `playbackSpeed`, and stop reading the legacy key.
-- Normalize a non-finite saved value to `1.0`; otherwise clamp to `0.5...3.0` and choose the nearest supported value, resolving an exact tie toward the lower value.
+- Normalize a non-finite saved value to `1.0`; otherwise clamp to `0.5...4.0` and choose the nearest supported value, resolving an exact tie toward the lower value.
 - Remote-command supported rates match the same list.
 
 ### Remote Commands and Now Playing Ownership
@@ -746,7 +746,7 @@ save-and-cancel behavior.
 The expanded player continues as a sheet. For this slice it must:
 
 - Use 10-second back and forward intervals.
-- Use the same 0.5x through 3.0x speed source.
+- Use the same 0.5x through 4.0x speed source.
 - Expose the same sleep timer.
 - Display the Radio source and current session position.
 - Avoid presenting the Brief queue as though it were the active Radio queue.
@@ -943,7 +943,7 @@ The Live Radio MVP is ready for a distribution candidate when all of the followi
 - Offline state preserves session and position without falsely completing or skipping an episode.
 - Exhaustion shows `You're caught up` and does not loop.
 - Mini and expanded players use Back 10 and Forward 10.
-- Playback speed remains within 0.5x through 3.0x and persists across launch.
+- Playback speed remains within 0.5x through 4.0x and persists across launch.
 - Sleep presets, exact custom duration, cancel, deadline, and End of Episode work while foregrounded and while locked on device.
 - Brief queue items, Brief index, and Brief position are unchanged by Radio playback.
 - Lock Screen and Control Center show accurate metadata and working play/pause, 10-second skip controls where iOS exposes them, and Next.

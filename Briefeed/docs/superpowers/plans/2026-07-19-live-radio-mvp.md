@@ -59,7 +59,7 @@
 - `QueueCoordinator` remains the single source of truth for Brief only. `RadioSessionCoordinator` is the single source of truth for Radio only.
 - Core Data remains authoritative for RSS sources, episode metadata, normalized progress, and completion. `briefeed_radio_session_v1` remains authoritative for Radio order and seconds-based resume position.
 - Autoplay uses the existing `autoPlayLiveNewsOnOpen` key, defaults Off, and runs once per process cold launch only. Remote autoplay is gated on a forced opening refresh and starts the reconciled newest eligible entry; its opportunity lasts at most 60 foreground seconds and is canceled by inactive/background or any manual playback command. Readable downloaded content may start immediately offline.
-- Playback speed uses the canonical `playbackSpeed` key and exactly `0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0`.
+- Playback speed uses the canonical `playbackSpeed` key and exactly `0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 3.5, 4.0`.
 - In-app and remote skip intervals are exactly 10 seconds. Radio Previous is disabled.
 - Manual Next never marks the episode complete. It retires an automatic hourly
   bulletin from the current scan and persists that retirement across relaunch
@@ -1815,7 +1815,7 @@ Expected: the branch is clean and reports up to date with its origin. Work is no
 - Offline, no-sources, refreshing, all-failed, degraded, and truly exhausted states are distinct.
 - Core Data completion saves before snapshot removal; save failure retains a recoverable entry.
 - Radio failure budget is one initial online load plus one online retry and resets only under the specified events.
-- Mini and expanded players provide Back 10, Play/Pause, Forward 10, Next, precise scrubber, 0.5x through 3.0x speed, and complete sleep timing.
+- Mini and expanded players provide Back 10, Play/Pause, Forward 10, Next, precise scrubber, 0.5x through 4.0x speed, and complete sleep timing.
 - Manual Next cancels End of Episode sleep.
 - Lock Screen and Control Center route every command through the active mode; Radio Previous is disabled.
 - Each foreground transition re-arms exactly one active 15-minute stale-refresh poll.

@@ -364,7 +364,7 @@ final class RadioUITests: XCTestCase {
         let speed = app.buttons["miniPlayer.speed"]
         XCTAssertTrue(speed.waitForExistence(timeout: 5))
         speed.tap()
-        for label in ["0.5x", "0.75x", "1x", "1.25x", "1.5x", "1.75x", "2x", "2.5x", "3x"] {
+        for label in ["0.5x", "0.75x", "1x", "1.25x", "1.5x", "1.75x", "2x", "2.5x", "3x", "3.5x", "4x"] {
             XCTAssertTrue(app.buttons[label].exists || app.menuItems[label].exists)
         }
         app.tap()

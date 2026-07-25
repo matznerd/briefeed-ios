@@ -14,8 +14,8 @@ struct PlaybackSpeedSettingsTests {
             legacyValue: 20.0
         )
 
-        #expect(speed == 3.0)
-        #expect(defaults.float(forKey: UserDefaultsKey.playbackSpeed.rawValue) == 3.0)
+        #expect(speed == 4.0)
+        #expect(defaults.float(forKey: UserDefaultsKey.playbackSpeed.rawValue) == 4.0)
     }
 
     @Test func canonicalWinsOverLegacy() {
@@ -32,7 +32,8 @@ struct PlaybackSpeedSettingsTests {
         #expect(PlaybackSpeedPolicy.normalize(.nan) == 1.0)
         #expect(PlaybackSpeedPolicy.normalize(.infinity) == 1.0)
         #expect(PlaybackSpeedPolicy.normalize(-1) == 0.5)
-        #expect(PlaybackSpeedPolicy.normalize(20) == 3.0)
+        #expect(PlaybackSpeedPolicy.normalize(20) == 4.0)
+        #expect(PlaybackSpeedPolicy.normalize(3.6) == 3.5)
         #expect(PlaybackSpeedPolicy.normalize(1.6) == 1.5)
         #expect(PlaybackSpeedPolicy.normalize(1.125) == 1.0)
     }
@@ -43,8 +44,8 @@ struct PlaybackSpeedSettingsTests {
 
         let speed = PlaybackSpeedPolicy.persist(20, defaults: defaults)
 
-        #expect(speed == 3.0)
-        #expect(defaults.float(forKey: UserDefaultsKey.playbackSpeed.rawValue) == 3.0)
+        #expect(speed == 4.0)
+        #expect(defaults.float(forKey: UserDefaultsKey.playbackSpeed.rawValue) == 4.0)
     }
 
     @Test func everySpeedControlUsesCanonicalOptions() {

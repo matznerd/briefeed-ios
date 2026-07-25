@@ -56,7 +56,7 @@ functional, audio, lifecycle, route, or isolation row below was executed.
 | Refresh appends new episodes without duplicating existing episode identity | NOT RUN | Physical device required |
 | Offline state skips remote-only media but keeps locally available media usable | NOT RUN | Physical device required |
 | Reconnection replenishes the queue without auto-starting after autoplay intent expires | NOT RUN | Physical device required |
-| Back 10, Forward 10, Next, scrub, and 0.5x through 3.0x speed work audibly | NOT RUN | Physical device required |
+| Back 10, Forward 10, Next, scrub, and 0.5x through 4.0x speed work audibly | NOT RUN | Physical device required |
 | Playback speed persists after terminate and relaunch | NOT RUN | Physical device required |
 | Sleep Off cancels an active timer | NOT RUN | Physical device required |
 | Sleep at End of Episode stops after the current episode | NOT RUN | Physical device required |

@@ -54,7 +54,7 @@ struct TimedTranscriptTests {
     @Test func playbackRateNeverEntersMediaTimeLookup() throws {
         let transcript = try TimedTranscript(assetFingerprint: "a", engineIdentifier: "e", engineVersion: "1", localeIdentifier: "en-US", recognizedText: "Good morning California news", audioDurationSeconds: 3, processingDurationSeconds: 1, units: units)
         let index = TimedTranscriptIndex(transcript: transcript)
-        let simulatedPlaybackRates = [0.5, 1.0, 2.0, 3.0]
+        let simulatedPlaybackRates = [0.5, 1.0, 2.0, 3.0, 3.5, 4.0]
         let selections = simulatedPlaybackRates.map { _ in index.activeUnit(at: 1.25)?.text }
         #expect(selections == Array(repeating: "California", count: simulatedPlaybackRates.count))
     }

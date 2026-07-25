@@ -248,8 +248,8 @@ final class MiniPlayerUITests: XCTestCase {
         XCTAssertEqual(viewModel.playbackSpeed, 0.5)
         
         viewModel.playbackSpeed = 20.0
-        XCTAssertEqual(viewModel.playbackSpeed, 3.0)
-        XCTAssertEqual(UnifiedAudioPlayer.shared.playbackRate, 3.0)
+        XCTAssertEqual(viewModel.playbackSpeed, 4.0)
+        XCTAssertEqual(UnifiedAudioPlayer.shared.playbackRate, 4.0)
     }
     
     // MARK: - Accessibility Tests

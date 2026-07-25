@@ -8,11 +8,17 @@
 import Foundation
 
 enum PlaybackSpeedPolicy {
-    static let supported: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
+    static let supported: [Float] = [
+        0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 3.5, 4.0
+    ]
 
     static func normalize(_ raw: Float) -> Float {
-        guard raw.isFinite else { return 1.0 }
-        let clamped = min(3.0, max(0.5, raw))
+        guard raw.isFinite,
+              let minimum = supported.first,
+              let maximum = supported.last else {
+            return 1.0
+        }
+        let clamped = min(maximum, max(minimum, raw))
         return supported.min { lhs, rhs in
             let left = abs(lhs - clamped)
             let right = abs(rhs - clamped)
