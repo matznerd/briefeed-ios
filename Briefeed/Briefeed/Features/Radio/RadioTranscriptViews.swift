@@ -36,7 +36,7 @@ enum RadioTranscriptUIPresentation {
         presentation: RadioTranscriptPresentation,
         mediaTime: TimeInterval,
         accessibilityTextSize: Bool,
-        playbackIsValidated: Bool = true
+        playbackSyncState: RadioTranscriptPlaybackSyncState = .synchronized
     ) -> RadioTranscriptCompactContent {
         guard case .ready(let transcript) = presentation.state else {
             return statusContent(
@@ -44,10 +44,11 @@ enum RadioTranscriptUIPresentation {
                 accessibilityTextSize: accessibilityTextSize
             )
         }
-        guard playbackIsValidated else {
+        guard playbackSyncState == .synchronized else {
+            let status = playbackSyncStatus(playbackSyncState)
             return RadioTranscriptCompactContent(
-                title: "Syncing transcript",
-                detail: "Catching up to the current audio",
+                title: status.title,
+                detail: status.detail,
                 progress: nil,
                 canRetry: false,
                 fixedHeight:
@@ -69,6 +70,25 @@ enum RadioTranscriptUIPresentation {
             mediaTime: mediaTime,
             accessibilityTextSize: accessibilityTextSize
         )
+    }
+
+    static func playbackSyncStatus(
+        _ state: RadioTranscriptPlaybackSyncState
+    ) -> (title: String, detail: String) {
+        switch state {
+        case .waiting:
+            (
+                "Syncing transcript",
+                "Catching up to the current audio"
+            )
+        case .audioVersionMismatch:
+            (
+                "Transcript doesn't match this audio",
+                "This stream included different audio, so text stays hidden."
+            )
+        case .synchronized:
+            ("Live transcript", "")
+        }
     }
 
     static func compactContent(
@@ -313,7 +333,7 @@ enum RadioTranscriptUIPresentation {
 struct RadioTranscriptViewer: View {
     let presentation: RadioTranscriptPresentation
     let currentTime: TimeInterval
-    let playbackIsValidated: Bool
+    let playbackSyncState: RadioTranscriptPlaybackSyncState
     let onOpen: () -> Void
     let onRetry: () -> Void
 
@@ -375,13 +395,13 @@ struct RadioTranscriptViewer: View {
     }
 
     private var compactContent: RadioTranscriptCompactContent {
-        guard playbackIsValidated else {
+        guard playbackSyncState == .synchronized else {
             return RadioTranscriptUIPresentation.compactContent(
                 presentation: presentation,
                 mediaTime: currentTime,
                 accessibilityTextSize:
                     dynamicTypeSize.isAccessibilitySize,
-                playbackIsValidated: false
+                playbackSyncState: playbackSyncState
             )
         }
         if let cachedProjection,
@@ -397,7 +417,7 @@ struct RadioTranscriptViewer: View {
             presentation: presentation,
             mediaTime: currentTime,
             accessibilityTextSize: dynamicTypeSize.isAccessibilitySize,
-            playbackIsValidated: playbackIsValidated
+            playbackSyncState: playbackSyncState
         )
     }
 
@@ -518,7 +538,10 @@ struct RadioTranscriptViewer: View {
     }
 
     private var statusSymbol: String {
-        switch presentation.state {
+        if playbackSyncState == .audioVersionMismatch {
+            return "exclamationmark.triangle"
+        }
+        return switch presentation.state {
         case .failed:
             "exclamationmark.triangle"
         case .unavailableOS, .unsupportedDevice, .unsupportedLocale:
@@ -534,7 +557,7 @@ struct RadioTranscriptViewer: View {
 struct RadioExpandedTranscriptView: View {
     let presentation: RadioTranscriptPresentation
     let currentTime: TimeInterval
-    let playbackIsValidated: Bool
+    let playbackSyncState: RadioTranscriptPlaybackSyncState
     let isPlaying: Bool
     let canPlayNext: Bool
     let onSeek: (TimeInterval) -> Void
@@ -552,18 +575,28 @@ struct RadioExpandedTranscriptView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if playbackIsValidated,
+                if playbackSyncState == .synchronized,
                    let transcript = presentation.transcript,
                    let projection {
                     transcriptScroll(
                         transcript: transcript,
                         projection: projection
                     )
+                } else if presentation.transcript != nil {
+                    let status = RadioTranscriptUIPresentation
+                        .playbackSyncStatus(playbackSyncState)
+                    ContentUnavailableView(
+                        status.title,
+                        systemImage: "captions.bubble",
+                        description: Text(status.detail)
+                    )
                 } else {
                     ContentUnavailableView(
                         "Transcript is not ready",
                         systemImage: "captions.bubble",
-                        description: Text("Audio can keep playing while text is prepared.")
+                        description: Text(
+                            "Audio can keep playing while text is prepared."
+                        )
                     )
                 }
             }

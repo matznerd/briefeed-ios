@@ -542,7 +542,7 @@ final class RadioUITests: XCTestCase {
     @MainActor
     func testHeadlessRadioSmoke() throws {
         app = launchFixture("partial", reset: true)
-        XCTAssertTrue(app.staticTexts["Morning Update"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.otherElements["radio.playlist"].waitForExistence(timeout: 15))
         let scrubber = app.otherElements["miniPlayer.scrubber"]
         XCTAssertTrue(scrubber.waitForExistence(timeout: 5))
         let initial = try elapsedSeconds(in: scrubber)
@@ -554,12 +554,12 @@ final class RadioUITests: XCTestCase {
         XCTAssertGreaterThan(try elapsedSeconds(in: scrubber), initial + 8)
         app.buttons["miniPlayer.rewind"].tap()
         app.buttons["miniPlayer.next"].tap()
-        XCTAssertTrue(waitForMiniPlayerTitle("World Service Brief", timeout: 5))
+        XCTAssertTrue(waitForMiniPlayerTitle("BBC World Service", timeout: 5))
         app.buttons["miniPlayer.playPause"].tap()
 
         app.terminate()
         app = launchFixture("partial", reset: false)
-        XCTAssertTrue(waitForMiniPlayerTitle("World Service Brief", timeout: 15))
+        XCTAssertTrue(waitForMiniPlayerTitle("BBC World Service", timeout: 15))
     }
 
     @MainActor

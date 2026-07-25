@@ -70,6 +70,7 @@ struct RadioTranscriptPlaybackTests {
             candidate.originalPlaybackURL
         ])
         #expect(!player.radioTranscriptPlaybackIsValidated)
+        #expect(player.radioTranscriptPlaybackSyncState == .waiting)
     }
 
     @Test func finishingPreparationNeverHotSwapsTheActiveRemotePlayer() async {
@@ -453,11 +454,12 @@ struct RadioTranscriptPlaybackTests {
         #expect(!player.radioTranscriptPlaybackIsValidated)
     }
 
-    @Test func mismatchedCurrentRemoteDurationKeepsTranscriptHidden() async throws {
+    @Test func mismatchedCurrentRemoteDurationReportsAnotherAudioVersion() async throws {
         let candidate = makeCandidate("mismatch")
+        let preparedDuration = 304.19591836734696
         let transcript = try makeTranscript(
             fingerprint: "mismatch-fingerprint",
-            duration: 60
+            duration: preparedDuration
         )
         let asset = makeAsset(
             candidate: candidate,
@@ -475,16 +477,8 @@ struct RadioTranscriptPlaybackTests {
         await player.playRadio()
         await assets.setCached(asset, for: candidate.key)
         let playbackID = try #require(transport.lastPlaybackID)
-        player.audioItemReady(id: playbackID, duration: 54)
-        transport.activeRemotePlaybackIdentity = RemotePlaybackAssetIdentity(
-            playbackID: playbackID,
-            requestedURL: candidate.originalPlaybackURL,
-            finalURL: asset.finalURL,
-            etag: asset.etag,
-            lastModified: asset.lastModified,
-            responseContentLength: asset.responseContentLength,
-            duration: 54
-        )
+        transport.duration = 326
+        player.audioItemReady(id: playbackID, duration: transport.duration)
 
         await player.validateActiveRadioTranscript(
             RadioTranscriptPresentation(
@@ -494,6 +488,10 @@ struct RadioTranscriptPlaybackTests {
         )
 
         #expect(!player.radioTranscriptPlaybackIsValidated)
+        #expect(
+            player.radioTranscriptPlaybackSyncState ==
+                .audioVersionMismatch
+        )
     }
 
     @Test func aPreparedLocalAssetWithAnotherFingerprintStaysHidden() async throws {

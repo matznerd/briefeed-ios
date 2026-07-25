@@ -47,7 +47,12 @@ final class AudioPlayerViewModelV2: ObservableObject {
         RadioTranscriptPresentation.idle
     @Published private(set) var radioTranscriptBatchPresentation =
         RadioTranscriptBatchPresentation.idle
-    @Published private(set) var radioTranscriptPlaybackIsValidated = false
+    @Published private(set) var radioTranscriptPlaybackSyncState:
+        RadioTranscriptPlaybackSyncState = .waiting
+
+    var radioTranscriptPlaybackIsValidated: Bool {
+        radioTranscriptPlaybackSyncState == .synchronized
+    }
     
     @Published private(set) var lastError: Error?
     @Published private(set) var generationPhase: GenerationPhase = .idle
@@ -176,8 +181,8 @@ final class AudioPlayerViewModelV2: ObservableObject {
             .store(in: &cancellables)
         radioTranscriptCoordinator?.batchPresentationPublisher
             .assign(to: &$radioTranscriptBatchPresentation)
-        unifiedPlayer.$radioTranscriptPlaybackIsValidated
-            .assign(to: &$radioTranscriptPlaybackIsValidated)
+        unifiedPlayer.$radioTranscriptPlaybackSyncState
+            .assign(to: &$radioTranscriptPlaybackSyncState)
         unifiedPlayer.$radioTranscriptValidationRevision
             .dropFirst()
             .sink { [weak self] _ in

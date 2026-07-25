@@ -195,9 +195,9 @@ struct RadioHomeView: View {
                             presentation:
                                 audioPlayerViewModel.radioTranscriptPresentation,
                             currentTime: audioPlayerViewModel.currentTime,
-                            playbackIsValidated:
+                            playbackSyncState:
                                 audioPlayerViewModel
-                                    .radioTranscriptPlaybackIsValidated,
+                                    .radioTranscriptPlaybackSyncState,
                             onOpen: {
                                 showingExpandedTranscript = true
                             },
@@ -264,9 +264,9 @@ struct RadioHomeView: View {
                     presentation:
                         audioPlayerViewModel.radioTranscriptPresentation,
                     currentTime: audioPlayerViewModel.currentTime,
-                    playbackIsValidated:
+                    playbackSyncState:
                         audioPlayerViewModel
-                            .radioTranscriptPlaybackIsValidated,
+                            .radioTranscriptPlaybackSyncState,
                     isPlaying: audioPlayerViewModel.isPlaying,
                     canPlayNext: audioPlayerViewModel.canPlayNext,
                     onSeek: audioPlayerViewModel.seek(to:),

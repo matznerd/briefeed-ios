@@ -24,6 +24,9 @@
 - Duration-gated promotion from an active remote stream to exact prepared audio
   at the current media time, with original-stream restoration if local loading
   fails.
+- A finite playback-sync state that distinguishes ordinary catch-up from a
+  confirmed audio-version mismatch instead of leaving the viewer on an
+  indefinite "Syncing transcript" message.
 - Debug transcript fixture and accessibility identifiers for deterministic
   simulator UI verification.
 
@@ -36,11 +39,12 @@
 | Current-head generic simulator compile | PASS | `xcodebuild build-for-testing` completed for arm64 iOS Simulator after the exact-audio promotion change |
 | Physical-device test bundle build | PASS | Xcode built and signed the app and focused test bundle for Eric's iPhone 13 Pro |
 | Focused transcript playback and presentation tests | PASS | Both suites executed on Eric's iPhone 13 Pro with zero failures after correcting cross-source transition fixtures |
+| Current transcript playback and presentation suites | PASS | 23 tests passed on an iOS 26.5 simulator, including the 326.0s played / 304.196s prepared duration-mismatch regression |
 | Physical-device app build and install | PASS | Debug app built, signed, installed, and launched on Eric's iPhone 13 Pro |
-| Full Radio unit suite | PENDING | Run after focused suite |
+| Full app unit suite | BLOCKED (pre-existing) | The managed-fleet run reached unrelated Core Data duplicate-entity crashes and known intentional InfiniteScroll failures; GitHub issue #9 tracks the Core Data test-host defect |
 | Transcript UI tests | PENDING | Run after unit suite |
 | Same-session audio-to-transcript handoff | PENDING | Installed build is ready; iPhone Mirroring could not attach while the phone was in active use |
-| Radio smoke and lifecycle | PENDING | Run after same-session handoff proof |
+| Radio smoke and lifecycle | PARTIAL | Managed simulator launch and screenshot passed visually; the smoke assertion used stale fixture titles and was corrected, but the rerun is waiting for the host pressure gate |
 
 The compile gate included the Briefeed app, unit-test target, and UI-test
 target. Existing Swift concurrency warnings in legacy audio/Core Data paths
@@ -71,6 +75,25 @@ separate preparation download as proof of the active stream:
 This keeps dynamic-ad mismatches fail-closed while allowing first-play text on
 the exact prepared bytes. Audible continuity still requires physical-device
 verification.
+
+### NPR dynamic-audio evidence
+
+On July 25, 2026, the active NPR News Now play remained on "Syncing
+transcript." The saved physical-device artifacts showed that transcription had
+already completed:
+
+- played stream duration inferred from the player: approximately 326 seconds;
+- downloaded/transcribed asset duration: 304.195918 seconds;
+- on-device transcription processing time: 6.527490 seconds;
+- timed units: 817;
+- asset fingerprint:
+  `0ce3a74d2175c9adb705b5da9cda36377d7f7ff4427640669f17827a7623c2b3`.
+
+The approximately 21.8-second difference is consistent with a dynamically
+inserted preroll in the played response. The transcript begins with NPR
+editorial audio and therefore must not be aligned to that longer stream. The
+player now reports that the transcript does not match the current audio rather
+than promising that synchronization is still in progress.
 
 ## Physical-Device Gate
 

@@ -100,3 +100,9 @@ enum RadioTranscriptPreparationState: Equatable, Sendable {
     case deferred
     case failed(message: String, canRetry: Bool)
 }
+
+enum RadioTranscriptPlaybackSyncState: Equatable, Sendable {
+    case waiting
+    case synchronized
+    case audioVersionMismatch
+}

@@ -93,12 +93,34 @@ struct RadioTranscriptPresentationTests {
             presentation: presentation,
             mediaTime: 1,
             accessibilityTextSize: false,
-            playbackIsValidated: false
+            playbackSyncState: .waiting
         )
 
         #expect(!content.isReady)
         #expect(content.title == "Syncing transcript")
         #expect(content.detail == "Catching up to the current audio")
+        #expect(content.visibleLines.isEmpty)
+    }
+
+    @Test func anotherAudioVersionStopsClaimingTheTranscriptIsSyncing() throws {
+        let presentation = RadioTranscriptPresentation(
+            episodeKey: .init(feedID: "npr", episodeID: "hour"),
+            state: .ready(try makeTranscript())
+        )
+
+        let content = RadioTranscriptUIPresentation.compactContent(
+            presentation: presentation,
+            mediaTime: 90,
+            accessibilityTextSize: false,
+            playbackSyncState: .audioVersionMismatch
+        )
+
+        #expect(!content.isReady)
+        #expect(content.title == "Transcript doesn't match this audio")
+        #expect(
+            content.detail ==
+                "This stream included different audio, so text stays hidden."
+        )
         #expect(content.visibleLines.isEmpty)
     }
 

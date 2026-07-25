@@ -254,8 +254,13 @@ final class UnifiedAudioPlayer: ObservableObject {
     @Published private(set) var activeMode: ActivePlaybackMode = .none
     @Published private(set) var radioQueue: [UnifiedQueueItem] = []
     @Published private(set) var radioIndex: Int = -1
-    @Published private(set) var radioTranscriptPlaybackIsValidated = false
+    @Published private(set) var radioTranscriptPlaybackSyncState:
+        RadioTranscriptPlaybackSyncState = .waiting
     @Published private(set) var radioTranscriptValidationRevision = 0
+
+    var radioTranscriptPlaybackIsValidated: Bool {
+        radioTranscriptPlaybackSyncState == .synchronized
+    }
 
     /// A restored Radio episode is usable before the audio transport is loaded,
     /// so `.none` can still present and route as Radio.
@@ -1008,7 +1013,7 @@ final class UnifiedAudioPlayer: ObservableObject {
             activePlaybackID = playbackID
             activeRadioKey = request.key
             activeRadioPlaybackURL = nil
-            radioTranscriptPlaybackIsValidated = false
+            radioTranscriptPlaybackSyncState = .waiting
             consumedPlaybackIDs.remove(playbackID)
             activeMode = .radio
             pendingSeekTime = request.positionSeconds > 0 ? request.positionSeconds : nil
@@ -1036,7 +1041,7 @@ final class UnifiedAudioPlayer: ObservableObject {
                     preferredRadioURL(for: request.key) ??
                     request.url
                 activeRadioPlaybackURL = url
-                radioTranscriptPlaybackIsValidated = false
+                radioTranscriptPlaybackSyncState = .waiting
                 try await audioPlayer.play(
                     id: playbackID,
                     url: url,
@@ -1111,12 +1116,12 @@ final class UnifiedAudioPlayer: ObservableObject {
 
         guard let presentationKey = presentation.episodeKey,
               case .ready(let transcript) = presentation.state else {
-            radioTranscriptPlaybackIsValidated = false
+            radioTranscriptPlaybackSyncState = .waiting
             return
         }
         #if DEBUG
         if AppRuntime.radioFixtureScenario != nil {
-            radioTranscriptPlaybackIsValidated = true
+            radioTranscriptPlaybackSyncState = .synchronized
             return
         }
         #endif
@@ -1133,22 +1138,26 @@ final class UnifiedAudioPlayer: ObservableObject {
                   activePlaybackID == validationPlaybackID else {
                 return
             }
-            radioTranscriptPlaybackIsValidated =
+            radioTranscriptPlaybackSyncState =
                 radioCoordinator.currentKey == presentationKey &&
                 asset?.isTranscriptReady == true &&
                 asset?.assetFingerprint == transcript.assetFingerprint
+                    ? .synchronized
+                    : .waiting
             return
         }
         guard let key = activeRadioKey,
               presentationKey == key else {
-            radioTranscriptPlaybackIsValidated = false
+            radioTranscriptPlaybackSyncState = .waiting
             return
         }
         if let identity = activeTranscriptAssetIdentity,
            identity.episodeKey == key {
-            radioTranscriptPlaybackIsValidated =
+            radioTranscriptPlaybackSyncState =
                 identity.assetFingerprint == transcript.assetFingerprint &&
                 identity.localFileURL == activeRadioPlaybackURL
+                    ? .synchronized
+                    : .waiting
             return
         }
         let asset: RadioTranscriptAudioAsset?
@@ -1178,14 +1187,45 @@ final class UnifiedAudioPlayer: ObservableObject {
                 source: radioCoordinator.currentEpisode?.sourceName
             )
             if promotion != .notPerformed {
-                radioTranscriptPlaybackIsValidated =
+                radioTranscriptPlaybackSyncState =
                     promotion == .promoted &&
                     activeTranscriptAssetIdentity?.episodeKey == key &&
                     activeTranscriptAssetIdentity?.assetFingerprint ==
                         transcript.assetFingerprint &&
                     activeRadioPlaybackURL == asset.localFileURL
+                        ? .synchronized
+                        : .waiting
                 return
             }
+        }
+        let observedDuration: TimeInterval
+        if let remoteIdentity,
+           remoteIdentity.playbackID == validationPlaybackID {
+            observedDuration = remoteIdentity.duration
+        } else {
+            observedDuration = finiteNonnegative(audioPlayer.duration)
+        }
+        if let asset,
+           asset.isTranscriptReady,
+           asset.episodeKey == key,
+           asset.assetFingerprint == transcript.assetFingerprint,
+           observedDuration > 0,
+           (!Self.durationsMatch(
+                observedDuration,
+                asset.audioDurationSeconds
+            ) ||
+            !Self.durationsMatch(
+                observedDuration,
+                transcript.audioDurationSeconds
+            )) {
+            guard validationSequence == transcriptValidationSequence,
+                  activePlaybackID == validationPlaybackID,
+                  activeRadioKey == validationKey,
+                  self.activeRadioPlaybackURL == validationURL else {
+                return
+            }
+            radioTranscriptPlaybackSyncState = .audioVersionMismatch
+            return
         }
         guard let activeRadioPlaybackURL,
               let activePlaybackID,
@@ -1219,7 +1259,7 @@ final class UnifiedAudioPlayer: ObservableObject {
                   self.activeRadioPlaybackURL == validationURL else {
                 return
             }
-            radioTranscriptPlaybackIsValidated = false
+            radioTranscriptPlaybackSyncState = .waiting
             return
         }
         guard validationSequence == transcriptValidationSequence,
@@ -1228,7 +1268,7 @@ final class UnifiedAudioPlayer: ObservableObject {
               self.activeRadioPlaybackURL == validationURL else {
             return
         }
-        radioTranscriptPlaybackIsValidated = true
+        radioTranscriptPlaybackSyncState = .synchronized
     }
 
     private func promoteActiveRadioPlayback(
@@ -1274,7 +1314,7 @@ final class UnifiedAudioPlayer: ObservableObject {
         let playbackID = TransportPlaybackID()
         activePlaybackID = playbackID
         activeRadioPlaybackURL = asset.localFileURL
-        radioTranscriptPlaybackIsValidated = false
+        radioTranscriptPlaybackSyncState = .waiting
         consumedPlaybackIDs.remove(playbackID)
         pendingSeekTime = nil
         currentTime = position
@@ -1373,7 +1413,7 @@ final class UnifiedAudioPlayer: ObservableObject {
         transcriptValidationSequence += 1
         failedTranscriptPromotionIdentity = nil
         activeRadioPlaybackURL = nil
-        radioTranscriptPlaybackIsValidated = false
+        radioTranscriptPlaybackSyncState = .waiting
         radioTranscriptValidationRevision += 1
     }
 
