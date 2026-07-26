@@ -244,15 +244,6 @@ struct MiniAudioPlayerV4: View {
         .background(playerBackground)
         .overlay(playerBoundary)
         .clipShape(playerShape)
-        .background(alignment: .bottom) {
-            if bottomDocked {
-                Rectangle()
-                    .fill(playerBackground)
-                    .frame(height: 64)
-                    .offset(y: 64)
-                    .ignoresSafeArea(edges: .bottom)
-            }
-        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(AccessibilityID.MiniPlayer.container)
         .sheet(isPresented: $showTranscript) {
@@ -670,7 +661,11 @@ struct PlayerSpeedMenu: View {
         } label: {
             Label(PlayerPresentationFormat.speed(viewModel.playbackSpeed), systemImage: "speedometer")
                 .font(compact ? .caption2.weight(.semibold) : .subheadline.weight(.semibold))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(
+                    minWidth: compact ? 52 : 44,
+                    minHeight: 44,
+                    maxHeight: 44
+                )
                 .contentShape(Rectangle())
         }
         .frame(minWidth: compact ? 52 : 44, minHeight: 44)
@@ -709,7 +704,11 @@ struct RadioSleepMenu: View {
                 systemImage: "moon.fill"
             )
             .font(compact ? .caption2.weight(.semibold) : .subheadline.weight(.semibold))
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(
+                minWidth: compact ? 52 : 44,
+                minHeight: 44,
+                maxHeight: 44
+            )
             .contentShape(Rectangle())
         }
         .frame(minWidth: compact ? 52 : 44, minHeight: 44)
