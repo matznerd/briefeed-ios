@@ -31,6 +31,8 @@ struct RadioTranscriptPrepareAllContent: Equatable {
 enum RadioTranscriptUIPresentation {
     static let compactHeight = 116.0
     static let compactAccessibilityHeight = 148.0
+    static let readingLineMaximumCharacters = 38
+    static let readingLineMaximumWords = 4
 
     static func compactContent(
         presentation: RadioTranscriptPresentation,
@@ -212,6 +214,16 @@ enum RadioTranscriptUIPresentation {
             }
             return row.candidate
         }
+    }
+
+    static func expandedProjection(
+        transcript: TimedTranscript
+    ) -> TimedTranscriptProjection {
+        TimedTranscriptProjection(
+            transcript: transcript,
+            maxCharactersPerLine: readingLineMaximumCharacters,
+            maxWordsPerLine: readingLineMaximumWords
+        )
     }
 
     private static func statusContent(
@@ -669,10 +681,8 @@ struct RadioExpandedTranscriptView: View {
             return
         }
         guard projectionIdentity != transcriptIdentity else { return }
-        projection = TimedTranscriptProjection(
-            transcript: transcript,
-            maxCharactersPerLine: 72,
-            maxWordsPerLine: 10
+        projection = RadioTranscriptUIPresentation.expandedProjection(
+            transcript: transcript
         )
         projectionIdentity = transcriptIdentity
         followsPlayback = true
@@ -684,7 +694,7 @@ struct RadioExpandedTranscriptView: View {
     ) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(projection.lines) { line in
                         Button {
                             onSeek(line.startSeconds)
@@ -699,8 +709,8 @@ struct RadioExpandedTranscriptView: View {
                             )
                             .font(
                                 line.id == activeLineID
-                                    ? .title3.weight(.semibold)
-                                    : .body
+                                    ? .body.weight(.medium)
+                                    : .subheadline
                             )
                             .foregroundStyle(
                                 line.id == activeLineID
@@ -708,12 +718,15 @@ struct RadioExpandedTranscriptView: View {
                                     : .secondary
                             )
                             .frame(
-                                maxWidth: .infinity,
-                                minHeight: 48,
+                                maxWidth: 300,
                                 alignment: .leading
                             )
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 8)
+                            .frame(
+                                maxWidth: .infinity,
+                                minHeight: 44,
+                                alignment: .center
+                            )
+                            .padding(.horizontal, 16)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -724,7 +737,7 @@ struct RadioExpandedTranscriptView: View {
                         )
                     }
                 }
-                .padding(.vertical, 120)
+                .padding(.vertical, 80)
             }
             .simultaneousGesture(
                 DragGesture(minimumDistance: 5)
@@ -910,8 +923,8 @@ private func transcriptLine(
         var segment = Text(prefix + unit.text)
         if unitIndex == activeUnitIndex {
             segment = segment
-                .fontWeight(.bold)
-                .foregroundColor(.briefeedRed)
+                .fontWeight(.semibold)
+                .foregroundColor(Color(uiColor: .systemRed))
         } else if line.id == activeLineID {
             segment = segment.fontWeight(.medium)
         }

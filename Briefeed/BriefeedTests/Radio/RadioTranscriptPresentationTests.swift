@@ -61,6 +61,19 @@ struct RadioTranscriptPresentationTests {
         #expect(early.visibleLines.count == 3)
     }
 
+    @Test func expandedTranscriptKeepsShortFourWordReadingSpans() throws {
+        let projection = RadioTranscriptUIPresentation.expandedProjection(
+            transcript: try makeTranscript()
+        )
+
+        #expect(projection.lines.count >= 3)
+        #expect(
+            projection.lines.allSatisfy {
+                $0.text.split(whereSeparator: \.isWhitespace).count <= 4
+            }
+        )
+    }
+
     @Test func accessibilityTextUsesFewerContextLinesInsteadOfShrinkingType() throws {
         let presentation = RadioTranscriptPresentation(
             episodeKey: .init(feedID: "npr", episodeID: "hour"),
