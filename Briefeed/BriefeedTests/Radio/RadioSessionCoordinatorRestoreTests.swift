@@ -218,6 +218,64 @@ struct RadioSessionCoordinatorRestoreTests {
         #expect(coordinator.applyRefresh(success()) == nil)
     }
 
+    @Test func activeRefreshAutoplaysANewCurrentItemOnlyWhenIdle() async {
+        let previous = candidate("npr", "previous", date: now.addingTimeInterval(-3_600))
+        let latest = candidate("npr", "latest")
+        let repository = FakeRadioEpisodeRepository(candidates: [previous])
+        let coordinator = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(snapshot: session(
+                [entry(previous.key)],
+                current: previous.key
+            )),
+            repository: repository,
+            now: { now },
+            connectivityStatus: { .online }
+        )
+        _ = await coordinator.restore(autoplayEnabled: false)
+        repository.values = [previous, latest]
+        coordinator.refreshStarted(enabledSourceCount: 1)
+        let result = RSSRefreshBatchResult(results: [
+            .init(
+                feedID: latest.key.feedID,
+                outcome: .success(insertedEpisodeIDs: [latest.key.episodeID])
+            )
+        ])
+
+        #expect(
+            coordinator.applyRefresh(result, autoplayWhenIdle: true)
+                == .play(request(for: latest, position: 0))
+        )
+        #expect(coordinator.currentKey == latest.key)
+        #expect(coordinator.state == .loading)
+    }
+
+    @Test func activeRefreshDoesNotOverrideAnExplicitPause() async {
+        let previous = candidate("npr", "previous", date: now.addingTimeInterval(-3_600))
+        let latest = candidate("npr", "latest")
+        let repository = FakeRadioEpisodeRepository(candidates: [previous])
+        let coordinator = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(snapshot: session(
+                [entry(previous.key)],
+                current: previous.key
+            )),
+            repository: repository,
+            now: { now },
+            connectivityStatus: { .online }
+        )
+        _ = await coordinator.restore(autoplayEnabled: false)
+        coordinator.setPlaybackStateForTesting(.pausedByUser)
+        repository.values = [previous, latest]
+        coordinator.refreshStarted(enabledSourceCount: 1)
+        let result = RSSRefreshBatchResult(results: [
+            .init(
+                feedID: latest.key.feedID,
+                outcome: .success(insertedEpisodeIDs: [latest.key.episodeID])
+            )
+        ])
+
+        #expect(coordinator.applyRefresh(result, autoplayWhenIdle: true) == nil)
+    }
+
     @Test func invalidCurrentIsRepairedAndLocalEntriesWinBeforeRefresh() async {
         let episode = candidate("npr", "one")
         let coordinator = makeCoordinator(store: FakeRadioSessionStore(snapshot: session([entry(episode.key)], current: key("missing", "x"))), candidates: [episode])

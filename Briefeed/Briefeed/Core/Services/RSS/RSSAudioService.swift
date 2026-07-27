@@ -28,6 +28,8 @@ class RSSAudioService: NSObject, ObservableObject {
     private let dataLoader: (String) async throws -> Data
     private let saveContext: () throws -> Void
     private let speechMetadataStore: any RadioFeedSpeechMetadataStoring
+    private var refreshWaiters:
+        [CheckedContinuation<RSSRefreshBatchResult, Never>] = []
     
     // MARK: - Default Feeds Configuration
     private static let defaultFeedsConfig: [(id: String, url: String, name: String, frequency: String, priority: Int)] = [
@@ -121,11 +123,10 @@ class RSSAudioService: NSObject, ObservableObject {
     }
 
     func refreshAll(now: Date) async -> RSSRefreshBatchResult {
-        guard !isRefreshing else { return RSSRefreshBatchResult(results: []) }
+        guard !isRefreshing else { return await waitForActiveRefresh() }
         
         isRefreshing = true
         lastError = nil
-        defer { isRefreshing = false }
         
         var results: [RSSFeedRefreshResult] = []
         for feed in feeds.filter(\.isEnabled).sorted(by: { lhs, rhs in
@@ -136,20 +137,23 @@ class RSSAudioService: NSObject, ObservableObject {
         
         // Clean up old episodes
         cleanupOldEpisodes()
-        return RSSRefreshBatchResult(results: results)
+        let result = RSSRefreshBatchResult(results: results)
+        completeRefresh(with: result)
+        return result
     }
 
     func refreshIfStale(now: Date) async -> RSSRefreshBatchResult {
-        guard !isRefreshing else { return RSSRefreshBatchResult(results: []) }
+        guard !isRefreshing else { return await waitForActiveRefresh() }
         isRefreshing = true
-        defer { isRefreshing = false }
         var results: [RSSFeedRefreshResult] = []
         for feed in feeds.filter(\.isEnabled).sorted(by: { lhs, rhs in
             lhs.priority == rhs.priority ? lhs.id < rhs.id : lhs.priority < rhs.priority
         }) {
             results.append(await refreshIfStale(feed, now: now))
         }
-        return RSSRefreshBatchResult(results: results)
+        let result = RSSRefreshBatchResult(results: results)
+        completeRefresh(with: result)
+        return result
     }
 
     func refreshIfStale(_ feed: RSSFeed, now: Date) async -> RSSFeedRefreshResult {
@@ -389,6 +393,19 @@ class RSSAudioService: NSObject, ObservableObject {
         } catch {
             print("Error loading feeds: \(error)")
         }
+    }
+
+    private func waitForActiveRefresh() async -> RSSRefreshBatchResult {
+        await withCheckedContinuation { continuation in
+            refreshWaiters.append(continuation)
+        }
+    }
+
+    private func completeRefresh(with result: RSSRefreshBatchResult) {
+        isRefreshing = false
+        let waiters = refreshWaiters
+        refreshWaiters.removeAll()
+        waiters.forEach { $0.resume(returning: result) }
     }
     
     private func createEpisode(from data: ParsedRSSEpisode, for feed: RSSFeed) -> RSSEpisode {

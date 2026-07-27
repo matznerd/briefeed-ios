@@ -4,10 +4,12 @@ import Testing
 
 @Suite("Audio session configuration")
 struct AudioSessionConfigurationTests {
-    @Test func playbackReliesOnSystemManagedOutputRouting() {
+    @Test func playbackMixesWithOtherAppsAndReliesOnSystemManagedOutputRouting() {
         let options = AudioSessionConfiguration.playbackOptions
 
-        #expect(options.isEmpty)
+        #expect(options.contains(.mixWithOthers))
+        #expect(!options.contains(.duckOthers))
+        #expect(!options.contains(.interruptSpokenAudioAndMixWithOthers))
         #expect(!options.contains(.allowAirPlay))
         #expect(!options.contains(.allowBluetoothA2DP))
         #expect(!options.contains(.allowBluetoothHFP))

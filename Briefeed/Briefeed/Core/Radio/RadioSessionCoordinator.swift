@@ -47,6 +47,10 @@ protocol RadioSessionCoordinating: AnyObject {
     func restore(autoplayEnabled: Bool) async -> RadioPlaybackIntent?
     func refreshStarted(enabledSourceCount: Int)
     func applyRefresh(_ result: RSSRefreshBatchResult) -> RadioPlaybackIntent?
+    func applyRefresh(
+        _ result: RSSRefreshBatchResult,
+        autoplayWhenIdle: Bool
+    ) -> RadioPlaybackIntent?
     func applyInitialRefresh(_ result: RSSRefreshBatchResult) -> RadioPlaybackIntent?
     func sourceConfigurationDidChange(enabledSourceCount: Int) -> RadioPlaybackIntent?
     func beginCurrent() -> RadioPlaybackIntent?
@@ -216,11 +220,30 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
     }
 
     func applyRefresh(_ result: RSSRefreshBatchResult) -> RadioPlaybackIntent? {
-        applyRefresh(result, isInitialColdLaunchRefresh: false)
+        applyRefresh(
+            result,
+            isInitialColdLaunchRefresh: false,
+            autoplayWhenIdle: false
+        )
+    }
+
+    func applyRefresh(
+        _ result: RSSRefreshBatchResult,
+        autoplayWhenIdle: Bool
+    ) -> RadioPlaybackIntent? {
+        applyRefresh(
+            result,
+            isInitialColdLaunchRefresh: false,
+            autoplayWhenIdle: autoplayWhenIdle
+        )
     }
 
     func applyInitialRefresh(_ result: RSSRefreshBatchResult) -> RadioPlaybackIntent? {
-        applyRefresh(result, isInitialColdLaunchRefresh: true)
+        applyRefresh(
+            result,
+            isInitialColdLaunchRefresh: true,
+            autoplayWhenIdle: false
+        )
     }
 
     func sourceConfigurationDidChange(enabledSourceCount: Int) -> RadioPlaybackIntent? {
@@ -263,7 +286,11 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         return currentChanged && previousHadActivePlayback ? .pause : nil
     }
 
-    private func applyRefresh(_ result: RSSRefreshBatchResult, isInitialColdLaunchRefresh: Bool) -> RadioPlaybackIntent? {
+    private func applyRefresh(
+        _ result: RSSRefreshBatchResult,
+        isInitialColdLaunchRefresh: Bool,
+        autoplayWhenIdle: Bool
+    ) -> RadioPlaybackIntent? {
         isRefreshing = false
         successfulSourceEvidenceCount = result.successfulSourceEvidenceCount
         attemptedFailureCount = result.attemptedFailureCount
@@ -308,24 +335,44 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         )
         store.saveDebounced(currentSession())
 
-        guard isInitialColdLaunchRefresh, hasPendingColdLaunchAutoplay else { return nil }
-        guard let deadline = coldLaunchAutoplayDeadline, now() < deadline else {
-            cancelPendingColdLaunchAutoplay()
-            return nil
-        }
-        if result.successfulSourceEvidenceCount > 0,
-           let request = requestForCurrent() {
-            if canLoad(request.url) {
+        if isInitialColdLaunchRefresh, hasPendingColdLaunchAutoplay {
+            guard let deadline = coldLaunchAutoplayDeadline, now() < deadline else {
                 cancelPendingColdLaunchAutoplay()
-                state = .loading
-                return .play(request)
+                return nil
             }
-            setPending(request, purpose: .coldLaunchAutoplay)
-            state = .waitingForNetwork
+            if result.successfulSourceEvidenceCount > 0,
+               let request = requestForCurrent() {
+                if canLoad(request.url) {
+                    cancelPendingColdLaunchAutoplay()
+                    state = .loading
+                    return .play(request)
+                }
+                setPending(request, purpose: .coldLaunchAutoplay)
+                state = .waitingForNetwork
+                return nil
+            }
+            if isTerminalInitialRefresh(result) {
+                cancelPendingColdLaunchAutoplay()
+            }
             return nil
         }
-        if isTerminalInitialRefresh(result) { cancelPendingColdLaunchAutoplay() }
-        return nil
+
+        let insertedKeys = Set(result.results.flatMap { item -> [RadioEpisodeKey] in
+            guard case .success(let episodeIDs) = item.outcome else { return [] }
+            return episodeIDs.map {
+                RadioEpisodeKey(feedID: item.feedID, episodeID: $0)
+            }
+        })
+        guard autoplayWhenIdle,
+              previousState != .pausedByUser,
+              !hasActivePlaybackState,
+              let currentKey,
+              insertedKeys.contains(currentKey),
+              let request = requestForCurrent(),
+              canLoad(request.url) else { return nil }
+        cancelPendingColdLaunchAutoplay()
+        state = .loading
+        return .play(request)
     }
 
     func beginCurrent() -> RadioPlaybackIntent? {

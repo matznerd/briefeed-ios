@@ -178,6 +178,54 @@ struct RSSRefreshPolicyTests {
         #expect(!context.hasChanges)
     }
 
+    @Test @MainActor func overlappingRefreshWaitsForAndReusesActiveResult() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let context = persistence.container.viewContext
+        _ = makeFeed(in: context, id: "npr")
+        try context.save()
+        let gate = RSSRefreshDataGate()
+        var loadCount = 0
+        let service = RSSAudioService(
+            viewContext: context,
+            dataLoader: { _ in
+                loadCount += 1
+                return await gate.wait()
+            }
+        )
+        let now = Date(timeIntervalSince1970: 200)
+
+        let first = Task { @MainActor in
+            await service.refreshAll(now: now)
+        }
+        for _ in 0..<12 where !gate.isWaiting {
+            await Task.yield()
+        }
+        #expect(gate.isWaiting)
+
+        var overlappingResult: RSSRefreshBatchResult?
+        let overlapping = Task { @MainActor in
+            let result = await service.refreshIfStale(now: now)
+            overlappingResult = result
+            return result
+        }
+        for _ in 0..<12 {
+            await Task.yield()
+        }
+        #expect(overlappingResult == nil)
+
+        gate.release(Self.feedXML(
+            url: "https://example.com/latest.mp3",
+            date: "Wed, 17 Jul 2024 12:05:00 GMT"
+        ))
+        let firstResult = await first.value
+        let secondResult = await overlapping.value
+
+        #expect(loadCount == 1)
+        #expect(firstResult == secondResult)
+        #expect(firstResult.successfulSourceEvidenceCount == 1)
+        #expect(firstResult.results.count == 1)
+    }
+
     private enum SaveError: Error { case denied }
 
     @MainActor private func makeFeed(in context: NSManagedObjectContext, id: String, lastFetchDate: Date? = nil) -> RSSFeed {
@@ -213,5 +261,23 @@ struct RSSRefreshPolicyTests {
     private static func feedXML(url: String, date: String) -> Data {
         let escapedURL = url.replacingOccurrences(of: "&", with: "&amp;")
         return Data("<rss><channel><item><title>Updated</title><pubDate>\(date)</pubDate><enclosure url=\"\(escapedURL)\" type=\"audio/mpeg\" /></item></channel></rss>".utf8)
+    }
+}
+
+@MainActor
+private final class RSSRefreshDataGate {
+    private var continuation: CheckedContinuation<Data, Never>?
+    private(set) var isWaiting = false
+
+    func wait() async -> Data {
+        isWaiting = true
+        let data = await withCheckedContinuation { continuation = $0 }
+        isWaiting = false
+        return data
+    }
+
+    func release(_ data: Data) {
+        continuation?.resume(returning: data)
+        continuation = nil
     }
 }

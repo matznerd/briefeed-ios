@@ -1,9 +1,9 @@
 import AVFoundation
 
 enum AudioSessionConfiguration {
-    // The playback category provides AirPlay and A2DP output routing itself.
-    // Input-oriented route options are invalid here and make setCategory fail.
-    static let playbackOptions: AVAudioSession.CategoryOptions = []
+    // Keep spoken news playing while the user browses apps that activate their
+    // own audio session. The playback category provides output routing itself.
+    static let playbackOptions: AVAudioSession.CategoryOptions = [.mixWithOthers]
 
     static func activatePlayback(on session: AVAudioSession = .sharedInstance()) throws {
         try session.setCategory(

@@ -24,6 +24,7 @@ enum RadioStartupPolicy {
 @MainActor
 final class RadioAppLifecycleDriver {
     typealias Sleep = @MainActor (TimeInterval) async throws -> Void
+    typealias SettleActiveScene = @MainActor () async -> Void
 
     enum SaveReason {
         case background
@@ -57,6 +58,7 @@ final class RadioAppLifecycleDriver {
     private let connectivity: ConnectivityMonitoring
     private let now: @MainActor () -> Date
     private let sleep: Sleep
+    private let settleActiveScene: SettleActiveScene
     private let cancelPendingColdLaunchAutoplay: @MainActor () -> Void
     private let forceSave: @MainActor (SaveReason) -> Void
     private var connectivityCancellable: AnyCancellable?
@@ -91,12 +93,16 @@ final class RadioAppLifecycleDriver {
         sleep: @escaping Sleep = { seconds in
             try await Task.sleep(for: .seconds(seconds))
         },
+        settleActiveScene: @escaping SettleActiveScene = {
+            try? await Task.sleep(for: .milliseconds(300))
+        },
         cancelPendingColdLaunchAutoplay: @escaping @MainActor () -> Void,
         forceSave: @escaping @MainActor (SaveReason) -> Void
     ) {
         self.connectivity = connectivity
         self.now = now
         self.sleep = sleep
+        self.settleActiveScene = settleActiveScene
         self.cancelPendingColdLaunchAutoplay = cancelPendingColdLaunchAutoplay
         self.forceSave = forceSave
         connectivityCancellable = connectivity.statusPublisher.sink { [weak self] status in
@@ -112,13 +118,19 @@ final class RadioAppLifecycleDriver {
         foregroundRefresh: RefreshWork,
         pollRefresh: RefreshWork? = nil
     ) async {
-        // The first active callback can enqueue startup immediately before a
-        // transient inactive transition. Wait for the next active callback
-        // instead of consuming the one cold-launch autoplay evaluation while
-        // the app cannot safely start audio. A true background has already
-        // disabled autoplay and may restore its paused projection here.
+        // Let the first active callback settle before consuming the one
+        // cold-launch autoplay evaluation. iOS can immediately follow that
+        // callback with a transient inactive transition during presentation.
         guard isActive || !coldLaunchAutoplayAllowed else { return }
         guard !didStartColdLaunch, !didTerminate else { return }
+        if coldLaunchAutoplayAllowed {
+            let settleGeneration = generation
+            await settleActiveScene()
+            guard isActive,
+                  settleGeneration == generation,
+                  !didStartColdLaunch,
+                  !didTerminate else { return }
+        }
         didStartColdLaunch = true
 
         await prepare()
@@ -190,19 +202,12 @@ final class RadioAppLifecycleDriver {
             armPollIfNeeded()
 
         case .inactive:
-            // A cold launch commonly passes through inactive before its first
-            // active frame. Treat only a later inactive transition as leaving
-            // an established foreground session.
-            guard hasObservedActiveScene else { return }
-            if didStartColdLaunch {
-                coldLaunchAutoplayAllowed = false
-            }
-            guard !isInInactiveSequence, !didTerminate else { return }
-            isInInactiveSequence = true
-            isActive = false
-            cancelLifecycleWork()
-            cancelPendingColdLaunchAutoplay()
-            forceSave(.background)
+            // Inactive is still a foreground scene. Launch animations,
+            // iPhone Mirroring focus, system overlays, and interruptions can
+            // all produce this phase without sending the app to background.
+            // Waiting for `.background` keeps the opening refresh and its
+            // autoplay opportunity alive through those transient changes.
+            break
 
         case .background:
             coldLaunchAutoplayAllowed = false
@@ -446,7 +451,13 @@ extension BriefeedApp {
             apply: { result in
                 let intent = useInitialAutoplayOpportunity
                     ? services.coordinator.applyInitialRefresh(result)
-                    : services.coordinator.applyRefresh(result)
+                    : services.coordinator.applyRefresh(
+                        result,
+                        autoplayWhenIdle:
+                            UserDefaultsManager.shared.autoPlayLiveNewsOnOpen
+                            && !UnifiedAudioPlayer.shared.isPlaying
+                            && UnifiedAudioPlayer.shared.activeMode != .brief
+                    )
                 await UnifiedAudioPlayer.shared.execute(intent)
             }
         )

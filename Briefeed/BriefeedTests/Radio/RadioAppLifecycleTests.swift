@@ -320,7 +320,7 @@ struct RadioAppLifecycleTests {
         #expect(restoreAutoplayValues == [true])
     }
 
-    @Test func transientInactiveAfterFirstActiveDefersColdLaunchAndPreservesAutoplay() async {
+    @Test func transientInactiveAfterFirstActiveKeepsColdLaunchEligible() async {
         let monitor = LifecycleConnectivityMonitor(.online)
         var restoreAutoplayValues: [Bool] = []
         var initialRefreshCount = 0
@@ -340,7 +340,9 @@ struct RadioAppLifecycleTests {
             ),
             foregroundRefresh: refreshWork(load: { self.emptyRefresh })
         )
-        #expect(restoreAutoplayValues.isEmpty)
+        await settle()
+        #expect(restoreAutoplayValues == [true])
+        #expect(initialRefreshCount == 1)
 
         driver.handleScenePhase(.active)
         await driver.startColdLaunch(
@@ -353,6 +355,63 @@ struct RadioAppLifecycleTests {
                 load: { self.emptyRefresh }
             ),
             foregroundRefresh: refreshWork(load: { self.emptyRefresh })
+        )
+        await settle()
+
+        #expect(restoreAutoplayValues == [true])
+        #expect(initialRefreshCount == 1)
+    }
+
+    @Test func transientInactiveDuringStartupSettleKeepsAutoplayAlive() async {
+        let monitor = LifecycleConnectivityMonitor(.online)
+        let gate = LifecycleVoidGate()
+        var settleCount = 0
+        var restoreAutoplayValues: [Bool] = []
+        var initialRefreshCount = 0
+        let driver = makeDriver(
+            monitor: monitor,
+            settleActiveScene: {
+                settleCount += 1
+                if settleCount == 1 {
+                    await gate.wait()
+                }
+            }
+        )
+        let initial = refreshWork(
+            begin: { initialRefreshCount += 1 },
+            load: { self.emptyRefresh }
+        )
+        let foreground = refreshWork(load: { self.emptyRefresh })
+
+        driver.handleScenePhase(.active)
+        let firstStartup = Task { @MainActor in
+            await driver.startColdLaunch(
+                restore: {
+                    restoreAutoplayValues.append($0)
+                    return nil
+                },
+                initialRefresh: initial,
+                foregroundRefresh: foreground
+            )
+        }
+        await settle()
+        #expect(gate.isWaiting)
+
+        driver.handleScenePhase(.inactive)
+        gate.release()
+        await firstStartup.value
+        await settle()
+        #expect(restoreAutoplayValues == [true])
+        #expect(initialRefreshCount == 1)
+
+        driver.handleScenePhase(.active)
+        await driver.startColdLaunch(
+            restore: {
+                restoreAutoplayValues.append($0)
+                return nil
+            },
+            initialRefresh: initial,
+            foregroundRefresh: foreground
         )
         await settle()
 
@@ -586,6 +645,7 @@ struct RadioAppLifecycleTests {
         sleep: @escaping RadioAppLifecycleDriver.Sleep = { _ in
             try await Task.sleep(for: .seconds(3_600))
         },
+        settleActiveScene: @escaping RadioAppLifecycleDriver.SettleActiveScene = {},
         cancelAutoplay: @escaping @MainActor () -> Void = {},
         forceSave: @escaping @MainActor (RadioAppLifecycleDriver.SaveReason) -> Void = { _ in }
     ) -> RadioAppLifecycleDriver {
@@ -593,6 +653,7 @@ struct RadioAppLifecycleTests {
             connectivity: monitor,
             now: now,
             sleep: sleep,
+            settleActiveScene: settleActiveScene,
             cancelPendingColdLaunchAutoplay: cancelAutoplay,
             forceSave: forceSave
         )
@@ -675,6 +736,23 @@ private final class LifecycleIntentGate {
 
     func release(_ intent: RadioPlaybackIntent?) {
         continuation?.resume(returning: intent)
+        continuation = nil
+    }
+}
+
+@MainActor
+private final class LifecycleVoidGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var isWaiting = false
+
+    func wait() async {
+        isWaiting = true
+        await withCheckedContinuation { continuation = $0 }
+        isWaiting = false
+    }
+
+    func release() {
+        continuation?.resume()
         continuation = nil
     }
 }

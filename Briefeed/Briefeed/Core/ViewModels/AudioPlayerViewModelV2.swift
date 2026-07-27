@@ -719,7 +719,13 @@ extension AudioPlayerViewModelV2 {
         #endif
         radioCoordinator.refreshStarted(enabledSourceCount: rssService.feeds.filter(\.isEnabled).count)
         let result = await rssService.refreshAllFeeds()
-        await unifiedPlayer.execute(radioCoordinator.applyRefresh(result))
+        await unifiedPlayer.execute(radioCoordinator.applyRefresh(
+            result,
+            autoplayWhenIdle:
+                UserDefaultsManager.shared.autoPlayLiveNewsOnOpen
+                && !unifiedPlayer.isPlaying
+                && unifiedPlayer.activeMode != .brief
+        ))
         isLoading = false
     }
 
