@@ -11,6 +11,7 @@ import Combine
 
 struct SavedArticlesView: View {
     @StateObject private var viewModel = SavedArticlesViewModel()
+    @EnvironmentObject var appViewModel: AppViewModel
     @State private var selectedArticle: Article?
     
     var body: some View {
@@ -45,26 +46,20 @@ struct SavedArticlesView: View {
     // MARK: - Views
     
     private var savedArticlesListView: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(viewModel.savedArticles) { article in
-                    ArticleRowView(article: article) {
-                        selectedArticle = article
-                    } onSave: {
-                        Task {
-                            await viewModel.toggleArticleSaved(article)
-                        }
-                    } onDelete: {
-                        Task {
-                            await viewModel.deleteArticle(article)
-                        }
+        List {
+            ForEach(viewModel.savedArticles) { article in
+                ArticleRowView(article: article) {
+                    selectedArticle = article
+                } onSave: {
+                    Task {
+                        await viewModel.toggleArticleSaved(article)
                     }
-                    
-                    Divider()
-                        .padding(.horizontal, Constants.UI.padding)
                 }
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.visible)
             }
         }
+        .listStyle(.plain)
         .background(Color.briefeedBackground)
     }
     

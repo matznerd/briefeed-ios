@@ -10,7 +10,7 @@ import SwiftUI
 struct ContentView: View {
     @State private var selectedTab = 0
     @EnvironmentObject var userDefaultsManager: UserDefaultsManager
-    @ObservedObject private var audioService = AudioService.shared
+    @EnvironmentObject var audioPlayerViewModel: AudioPlayerViewModelV2
     @ObservedObject private var statusService = ProcessingStatusService.shared
     
     var body: some View {
@@ -31,19 +31,19 @@ struct ContentView: View {
                             Label("Feed", systemImage: "newspaper")
                         }
                         .tag(0)
-                    
+
                     FilteredBriefView()
                         .tabItem {
                             Label("Brief", systemImage: "music.note.list")
                         }
                         .tag(1)
-                    
-                    LiveNewsView()
+
+                    LiveNewsViewV2()
                         .tabItem {
                             Label("Live News", systemImage: "dot.radiowaves.left.and.right")
                         }
                         .tag(2)
-                    
+
                     SettingsView()
                         .tabItem {
                             Label("Settings", systemImage: "gear")
@@ -51,21 +51,32 @@ struct ContentView: View {
                         .tag(3)
                 }
                 .accentColor(.briefeedRed)
-                
-                // Audio player always visible
-                MiniAudioPlayer()
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            .onAppear {
-                // Apply theme settings when view appears
-                applyThemePreference()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ThemeChanged"))) { _ in
-                // Update theme when notification is received
-                applyThemePreference()
+            
+            // Audio player positioned above the tab bar
+            // Show when Brief queue has items OR when streaming Live News (temporary queue)
+            if audioPlayerViewModel.isStreamingLiveNews || !audioPlayerViewModel.queueItems.isEmpty {
+                VStack(spacing: 0) {
+                    Spacer()
+                    MiniAudioPlayerV4()
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .animation(
+                            .easeInOut(duration: 0.3),
+                            value: audioPlayerViewModel.isStreamingLiveNews || !audioPlayerViewModel.queueItems.isEmpty
+                        )
+                        .padding(.bottom, 49) // Height of tab bar
+                }
             }
         }
         .ignoresSafeArea(.keyboard)
+        .onAppear {
+            // Apply theme settings when view appears
+            applyThemePreference()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ThemeChanged"))) { _ in
+            // Update theme when notification is received
+            applyThemePreference()
+        }
     }
     
     private func applyThemePreference() {

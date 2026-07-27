@@ -6,88 +6,94 @@
 //
 
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 struct ArticleRowView: View {
     let article: Article
     let onTap: () -> Void
     let onSave: () -> Void
-    let onDelete: () -> Void
-    
-    @StateObject private var stateManager = ArticleStateManager.shared
-    @State private var offset: CGFloat = 0
-    @State private var isSwiped = false
-    @State private var hasTriggeredHaptic = false
-    @State private var isDragging = false
+
+    @EnvironmentObject var appViewModel: AppViewModel
+    @EnvironmentObject var audioPlayerViewModel: AudioPlayerViewModelV2
     @State private var waveformPhase: CGFloat = 0
-    @State private var showActionButtons = false
-    @State private var actionButtonsTimer: Timer?
-    @State private var timeRemaining = 5
-    
-    private let swipeThreshold: CGFloat = 100
-    private let actionIconSize: CGFloat = 24
-    
-    // Computed properties for swipe state
-    private var swipeProgress: CGFloat {
-        abs(offset) / swipeThreshold
-    }
-    
-    private var isSwipingRight: Bool {
-        offset > 0
-    }
-    
-    private var isSwipingLeft: Bool {
-        offset < 0
-    }
-    
-    private var hasReachedThreshold: Bool {
-        abs(offset) >= swipeThreshold
-    }
-    
+    @State private var swipeOffset: CGFloat = 0
+    @State private var activeSwipeTier: SwipeActionTier?
+    @State private var hapticSwipeTier: SwipeActionTier?
+
+    private var isArticlePlaying: Bool { appViewModel.isArticlePlaying(article) }
+    private var isArticleQueued: Bool { appViewModel.isArticleQueued(article) }
+    private var queuePosition: Int? { appViewModel.queuePosition(for: article) }
+
     var body: some View {
-        ZStack {
-            // Background actions
-            HStack(spacing: 0) {
-                // Save action (left side - revealed when swiping right)
-                saveActionBackground
-                
-                Spacer()
-                
-                // Archive action (right side - revealed when swiping left)
-                archiveActionBackground
-            }
-            
-            // Main content
+        ZStack(alignment: .leading) {
+            progressiveSwipeBackground
+
             articleContent
-                .background(Color.briefeedBackground)
-                .offset(x: offset)
-                .opacity(stateManager.isArchived(article) ? 0.5 : 1.0)
-                .simultaneousGesture(swipeGesture)
-                .allowsHitTesting(!isDragging) // Disable tap while dragging
-            
-            // Action buttons overlay (Play Now / Play Next)
-            if showActionButtons {
-                actionButtonsOverlay
+                .offset(x: swipeOffset)
+        }
+        .contentShape(Rectangle())
+        .simultaneousGesture(progressiveSwipeGesture)
+        .accessibilityAction(named: "Save") {
+            Task { @MainActor in
+                await performSwipeAction(.save)
             }
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.7, blendDuration: 0), value: offset)
-        .animation(.easeInOut(duration: 0.2), value: stateManager.isArchived(article))
-        .animation(.easeInOut(duration: 0.2), value: showActionButtons)
-        .onAppear {
-            startWaveformAnimation()
+        .accessibilityAction(named: "Play Next") {
+            Task { @MainActor in
+                await performSwipeAction(.playNext)
+            }
         }
-        .onDisappear {
-            actionButtonsTimer?.invalidate()
+        .accessibilityAction(named: "Play Now") {
+            Task { @MainActor in
+                await performSwipeAction(.playNow)
+            }
         }
+        .accessibilityAction(named: "Queue") {
+            Task { @MainActor in
+                await audioPlayerViewModel.addToQueue(article)
+            }
+        }
+        .opacity(appViewModel.isArticleArchived(article) ? 0.5 : 1.0)
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive) {
+                if appViewModel.isArticleArchived(article) {
+                    appViewModel.unarchiveArticle(article)
+                } else {
+                    appViewModel.archiveArticle(article)
+                }
+            } label: {
+                Label("Archive", systemImage: "archivebox")
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: appViewModel.isArticleArchived(article))
     }
-    
+
     // MARK: - Views
-    
+
+    private var progressiveSwipeBackground: some View {
+        let previewTier = activeSwipeTier ?? (swipeOffset > SwipeMetrics.previewThreshold ? SwipeActionTier.save : nil)
+        let tier = previewTier ?? .save
+        let progress = min(1, max(0, swipeOffset / SwipeMetrics.saveThreshold))
+
+        return HStack(spacing: 10) {
+            Image(systemName: tier.systemImage)
+                .font(.system(size: 18, weight: .bold))
+
+            Text(tier.title)
+                .font(.subheadline.weight(.semibold))
+        }
+        .foregroundStyle(.white)
+        .padding(.leading, Constants.UI.padding)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(tier.color.opacity(swipeOffset > 0 ? 0.92 : 0))
+        .opacity(previewTier == nil ? 0 : progress)
+    }
+
     private var articleContent: some View {
         Button(action: {
-            // Only trigger tap if we're not swiping
-            if !isDragging && offset == 0 {
-                onTap()
-            }
+            onTap()
         }) {
             HStack(alignment: .top, spacing: 12) {
                 // Thumbnail
@@ -107,7 +113,7 @@ struct ArticleRowView: View {
                     .frame(width: 80, height: 80)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-                
+
                 // Article info
                 VStack(alignment: .leading, spacing: 4) {
                     // Title
@@ -116,52 +122,55 @@ struct ArticleRowView: View {
                         .foregroundColor(article.isRead ? .briefeedSecondaryLabel : .briefeedLabel)
                         .lineLimit(3)
                         .multilineTextAlignment(.leading)
-                    
+
                     // Metadata
                     HStack(spacing: 8) {
                         // Subreddit
                         Text(article.subreddit ?? "")
                             .font(.caption)
                             .foregroundColor(.briefeedSecondaryLabel)
-                        
-                        // Author
-                        if let author = article.author {
+
+                        // Domain
+                        if let url = article.url, let domain = url.extractedDomain {
                             Text("•")
                                 .font(.caption)
                                 .foregroundColor(.briefeedSecondaryLabel)
-                            
-                            Text("u/\(author)")
+
+                            Text(domain)
                                 .font(.caption)
                                 .foregroundColor(.briefeedSecondaryLabel)
                         }
-                        
+
                         // Time
                         if let createdAt = article.createdAt {
                             Text("•")
                                 .font(.caption)
                                 .foregroundColor(.briefeedSecondaryLabel)
-                            
+
                             Text(createdAt.timeAgoDisplay)
                                 .font(.caption)
                                 .foregroundColor(.briefeedSecondaryLabel)
                         }
                     }
-                    
+
                     // Indicators
                     HStack(spacing: 12) {
                         // Playing indicator
-                        if stateManager.isPlaying(article) {
+                        if isArticlePlaying {
                             HStack(spacing: 4) {
-                                if stateManager.isPlaying(article, withState: .playing) {
+                                if audioPlayerViewModel.isPlaying {
                                     WaveformAnimationView(phase: $waveformPhase)
                                         .frame(width: 16, height: 12)
-                                } else if stateManager.isPlaying(article, withState: .paused) {
+                                        .onAppear {
+                                            startWaveformAnimation()
+                                        }
+                                } else {
                                     Image(systemName: "pause.fill")
                                         .font(.caption2)
                                         .foregroundColor(.briefeedRed)
-                                } else if stateManager.isPlaying(article, withState: .loading) {
-                                    ProgressView()
-                                        .scaleEffect(0.6)
+                                        .onAppear {
+                                            waveformPhase = 0
+                                        }
                                 }
                                 Text("Playing")
                                     .font(.caption2)
@@ -169,8 +178,8 @@ struct ArticleRowView: View {
                             }
                             .transition(.scale.combined(with: .opacity))
                         }
-                        
-                        if !article.isRead && !stateManager.isPlaying(article) {
+
+                        if !article.isRead && !isArticlePlaying {
                             HStack(spacing: 4) {
                                 Circle()
                                     .fill(Color.briefeedRed)
@@ -180,7 +189,7 @@ struct ArticleRowView: View {
                                     .foregroundColor(.briefeedRed)
                             }
                         }
-                        
+
                         if article.isSaved {
                             HStack(spacing: 4) {
                                 Image(systemName: "bookmark.fill")
@@ -191,9 +200,9 @@ struct ArticleRowView: View {
                                     .foregroundColor(.green)
                             }
                         }
-                        
-                        if stateManager.isQueued(article) && !stateManager.isPlaying(article) {
-                            if let position = stateManager.queuePosition(for: article) {
+
+                        if isArticleQueued && !isArticlePlaying {
+                            if let position = queuePosition {
                                 HStack(spacing: 4) {
                                     Image(systemName: "list.number")
                                         .font(.caption2)
@@ -204,8 +213,8 @@ struct ArticleRowView: View {
                                 }
                             }
                         }
-                        
-                        if stateManager.isArchived(article) {
+
+                        if appViewModel.isArticleArchived(article) {
                             HStack(spacing: 4) {
                                 Image(systemName: "archivebox.fill")
                                     .font(.caption2)
@@ -216,262 +225,185 @@ struct ArticleRowView: View {
                             }
                         }
                     }
-                    .animation(.easeInOut(duration: 0.2), value: stateManager.isPlaying(article))
-                    .animation(.easeInOut(duration: 0.2), value: stateManager.isQueued(article))
+                    .animation(.easeInOut(duration: 0.2), value: isArticlePlaying)
+                    .animation(.easeInOut(duration: 0.2), value: isArticleQueued)
                 }
-                
+
                 Spacer()
             }
             .padding(.horizontal, Constants.UI.padding)
             .padding(.vertical, 12)
         }
         .buttonStyle(PlainButtonStyle())
+        .accessibilityIdentifier(AccessibilityID.ArticleRow.row(article.id?.uuidString ?? "unknown"))
     }
-    
-    private var saveActionBackground: some View {
-        ZStack {
-            // Green background that expands as you swipe
-            Color.green
-                .opacity(isSwipingRight ? min(swipeProgress, 1.0) : 0)
-            
-            HStack {
-                VStack(spacing: 8) {
-                    Image(systemName: "bookmark.fill")
-                        .font(.system(size: actionIconSize))
-                        .foregroundColor(.white)
-                        .scaleEffect(isSwipingRight ? min(1.0, swipeProgress) : 0.5)
-                        .opacity(isSwipingRight ? min(1.0, swipeProgress * 2) : 0)
-                    
-                    if hasReachedThreshold && isSwipingRight {
-                        Text("Save")
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .foregroundColor(.white)
-                            .transition(.scale.combined(with: .opacity))
-                    }
-                }
-                .padding(.leading, 20)
-                .animation(.spring(response: 0.3, dampingFraction: 0.6), value: swipeProgress)
-                
-                Spacer()
-            }
-        }
-        .frame(width: abs(offset))
-        .clipped()
-    }
-    
-    private var archiveActionBackground: some View {
-        ZStack {
-            // Red background that expands as you swipe
-            Color.red
-                .opacity(isSwipingLeft ? min(swipeProgress, 1.0) : 0)
-            
-            HStack {
-                Spacer()
-                
-                VStack(spacing: 8) {
-                    Image(systemName: "archivebox.fill")
-                        .font(.system(size: actionIconSize))
-                        .foregroundColor(.white)
-                        .scaleEffect(isSwipingLeft ? min(1.0, swipeProgress) : 0.5)
-                        .opacity(isSwipingLeft ? min(1.0, swipeProgress * 2) : 0)
-                    
-                    if hasReachedThreshold && isSwipingLeft {
-                        Text("Archive")
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .foregroundColor(.white)
-                            .transition(.scale.combined(with: .opacity))
-                    }
-                }
-                .padding(.trailing, 20)
-                .animation(.spring(response: 0.3, dampingFraction: 0.6), value: swipeProgress)
-            }
-        }
-        .frame(width: abs(offset))
-        .clipped()
-    }
-    
-    // MARK: - Gestures
-    
-    private var swipeGesture: some Gesture {
-        DragGesture(minimumDistance: 30, coordinateSpace: .local)
+
+    private var progressiveSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 18, coordinateSpace: .local)
             .onChanged { value in
-                // Only respond to horizontal swipes
-                let horizontalAmount = value.translation.width
-                let verticalAmount = value.translation.height
-                
-                // Require a more horizontal gesture to avoid interfering with scroll
-                if abs(horizontalAmount) > abs(verticalAmount) * 1.5 && abs(horizontalAmount) > 30 {
-                    withAnimation(.interactiveSpring(response: 0.15, dampingFraction: 1.0)) {
-                        isDragging = true
-                        
-                        // Apply elastic resistance when swiping beyond threshold
-                        if abs(horizontalAmount) > swipeThreshold {
-                            let excess = abs(horizontalAmount) - swipeThreshold
-                            let resistance = 1 - min(excess / 200, 0.8)
-                            offset = horizontalAmount > 0 
-                                ? swipeThreshold + (excess * resistance)
-                                : -swipeThreshold - (excess * resistance)
-                        } else {
-                            offset = horizontalAmount
-                        }
-                        
-                        // Haptic feedback when reaching threshold
-                        if hasReachedThreshold && !hasTriggeredHaptic {
-                            HapticManager.shared.swipeThresholdReached()
-                            hasTriggeredHaptic = true
-                        } else if !hasReachedThreshold && hasTriggeredHaptic {
-                            hasTriggeredHaptic = false
-                        }
+                let horizontalDrag = value.translation.width
+                let verticalDrag = abs(value.translation.height)
+
+                guard horizontalDrag > 0, horizontalDrag > verticalDrag else {
+                    return
+                }
+
+                swipeOffset = resistedOffset(for: horizontalDrag)
+                let tier = swipeTier(for: horizontalDrag)
+
+                if tier != activeSwipeTier {
+                    activeSwipeTier = tier
+                    if tier == nil {
+                        hapticSwipeTier = nil
+                    }
+                    if let tier, hapticSwipeTier != tier {
+                        fireThresholdHaptic(for: tier)
+                        hapticSwipeTier = tier
                     }
                 }
             }
             .onEnded { value in
-                // Only process if we were dragging horizontally
-                if isDragging {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                        isDragging = false
-                        
-                        // Determine action based on final offset and velocity
-                        let velocity = value.predictedEndLocation.x - value.location.x
-                        let shouldTriggerAction = hasReachedThreshold || abs(velocity) > 200
-                        
-                        if shouldTriggerAction {
-                            if offset > 0 {
-                                // Save action
-                                performSaveAction()
-                            } else {
-                                // Archive action
-                                performArchiveAction()
-                            }
-                        }
-                        
-                        // Reset position
-                        resetSwipe()
+                let horizontalDrag = max(0, value.translation.width)
+                let tier = swipeTier(for: horizontalDrag)
+
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                    swipeOffset = 0
+                    activeSwipeTier = nil
+                    hapticSwipeTier = nil
+                }
+
+                if let tier {
+                    Task { @MainActor in
+                        await performSwipeAction(tier)
                     }
-                } else {
-                    // Reset if we weren't dragging
-                    resetSwipe()
                 }
             }
     }
-    
-    private func resetSwipe() {
-        offset = 0
-        isSwiped = false
-        hasTriggeredHaptic = false
-    }
-    
-    private func performSaveAction() {
-        // Haptic feedback
-        HapticManager.shared.saveAction()
-        
-        // Check if article is being saved (not already saved)
-        let isBeingSaved = !article.isSaved
-        
-        // Toggle saved state
-        onSave()
-        
-        // Add to audio queue if article is being saved
-        if isBeingSaved {
-            Task { @MainActor in
-                QueueService.shared.addToQueue(article)
-            }
+
+    private func resistedOffset(for drag: CGFloat) -> CGFloat {
+        guard drag > SwipeMetrics.playNowThreshold else {
+            return drag
         }
-        
-        // Don't show action buttons - swipe should just add to queue
-        // Users can tap the article to open it and see play options there
+
+        let overflow = drag - SwipeMetrics.playNowThreshold
+        return SwipeMetrics.playNowThreshold + min(overflow * 0.28, SwipeMetrics.elasticOverflow)
     }
-    
-    private func performArchiveAction() {
-        // Haptic feedback
-        HapticManager.shared.archiveAction()
-        
-        // Archive the article
-        Task { @MainActor in
-            stateManager.toggleArchiveState(for: article)
+
+    private func swipeTier(for drag: CGFloat) -> SwipeActionTier? {
+        if drag >= SwipeMetrics.playNowThreshold {
+            return .playNow
+        } else if drag >= SwipeMetrics.playNextThreshold {
+            return .playNext
+        } else if drag >= SwipeMetrics.saveThreshold {
+            return .save
+        } else {
+            return nil
         }
     }
-    
+
+    @MainActor
+    private func performSwipeAction(_ tier: SwipeActionTier) async {
+        saveArticleIfNeeded()
+
+        switch tier {
+        case .save:
+            break
+        case .playNext:
+            await audioPlayerViewModel.addToQueue(article, playNext: true)
+        case .playNow:
+            await audioPlayerViewModel.play(article: article)
+        }
+    }
+
+    @MainActor
+    private func saveArticleIfNeeded() {
+        guard !article.isSaved else {
+            return
+        }
+
+        article.isSaved = true
+        article.savedAt = Date()
+
+        guard let context = article.managedObjectContext, context.hasChanges else {
+            return
+        }
+
+        do {
+            try context.save()
+        } catch {
+            print("[ArticleRowView] Failed to save article from swipe action: \(error)")
+        }
+    }
+
+    private func fireThresholdHaptic(for tier: SwipeActionTier) {
+        #if os(iOS)
+        let style: UIImpactFeedbackGenerator.FeedbackStyle
+
+        switch tier {
+        case .save:
+            style = .light
+        case .playNext:
+            style = .medium
+        case .playNow:
+            style = .heavy
+        }
+
+        UIImpactFeedbackGenerator(style: style).impactOccurred()
+        #endif
+    }
+
     private func startWaveformAnimation() {
-        guard stateManager.isPlaying(article, withState: .playing) else { return }
-        
+        guard isArticlePlaying && audioPlayerViewModel.isPlaying else { return }
+
         withAnimation(.linear(duration: 0.5).repeatForever(autoreverses: false)) {
             waveformPhase = 1.0
         }
     }
-    
-    // MARK: - Action Buttons Overlay
-    
-    private var actionButtonsOverlay: some View {
-        ZStack {
-            // Semi-transparent background
-            Color.black.opacity(0.6)
-                .allowsHitTesting(false)
-            
-            VStack(spacing: 20) {
-                // Buttons
-                HStack(spacing: 20) {
-                    // Play Now button
-                    Button(action: handlePlayNow) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 18))
-                            Text("Play Now")
-                                .font(.system(size: 16, weight: .medium))
-                        }
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
-                        .background(Color.blue)
-                        .cornerRadius(25)
-                    }
-                    
-                    // Play Next button
-                    Button(action: handlePlayNext) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 18))
-                            Text("Play Next")
-                                .font(.system(size: 16, weight: .medium))
-                        }
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
-                        .background(Color.green)
-                        .cornerRadius(25)
-                    }
-                }
-                
-                // Timer
-                Text("\(timeRemaining)s")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.6))
+
+    private enum SwipeMetrics {
+        static let previewThreshold: CGFloat = 24
+        static let saveThreshold: CGFloat = 80
+        static let playNextThreshold: CGFloat = 150
+        static let playNowThreshold: CGFloat = 220
+        static let elasticOverflow: CGFloat = 44
+    }
+
+    private enum SwipeActionTier {
+        case save
+        case playNext
+        case playNow
+
+        var title: String {
+            switch self {
+            case .save:
+                return "Save"
+            case .playNext:
+                return "Play Next"
+            case .playNow:
+                return "Play Now"
             }
         }
-        .transition(.opacity)
-    }
-    
-    private func handlePlayNow() {
-        showActionButtons = false
-        actionButtonsTimer?.invalidate()
-        
-        Task { @MainActor in
-            do {
-                try await AudioService.shared.playNow(article)
-            } catch {
-                print("Failed to play article: \(error)")
+
+        var systemImage: String {
+            switch self {
+            case .save:
+                return "bookmark.fill"
+            case .playNext:
+                return "list.number"
+            case .playNow:
+                return "play.fill"
             }
         }
-    }
-    
-    private func handlePlayNext() {
-        showActionButtons = false
-        actionButtonsTimer?.invalidate()
-        
-        Task { @MainActor in
-            AudioService.shared.playAfterCurrent(article)
+
+        var color: Color {
+            switch self {
+            case .save:
+                return Color.green.opacity(0.55)
+            case .playNext:
+                return Color.green.opacity(0.72)
+            case .playNow:
+                return Color.green
+            }
         }
     }
 }
@@ -479,7 +411,7 @@ struct ArticleRowView: View {
 // MARK: - Waveform Animation View
 struct WaveformAnimationView: View {
     @Binding var phase: CGFloat
-    
+
     var body: some View {
         HStack(spacing: 2) {
             ForEach(0..<3) { index in
@@ -495,7 +427,7 @@ struct WaveformAnimationView: View {
             }
         }
     }
-    
+
     private func waveHeight(for index: Int) -> CGFloat {
         let baseHeight: CGFloat = 4
         let maxHeight: CGFloat = 12
@@ -522,12 +454,11 @@ struct WaveformAnimationView: View {
                 return article
             }(),
             onTap: { print("Tapped") },
-            onSave: { print("Saved") },
-            onDelete: { print("Deleted") }
+            onSave: { print("Saved") }
         )
-        
+
         Divider()
-        
+
         ArticleRowView(
             article: {
                 let context = PersistenceController.preview.container.viewContext
@@ -543,9 +474,9 @@ struct WaveformAnimationView: View {
                 return article
             }(),
             onTap: { print("Tapped") },
-            onSave: { print("Saved") },
-            onDelete: { print("Deleted") }
+            onSave: { print("Saved") }
         )
     }
     .background(Color.briefeedBackground)
+    .environmentObject(AudioPlayerViewModelV2())
 }

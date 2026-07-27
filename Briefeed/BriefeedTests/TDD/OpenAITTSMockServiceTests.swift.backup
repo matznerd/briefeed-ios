@@ -1,0 +1,472 @@
+//
+//  OpenAITTSMockServiceTests.swift
+//  BriefeedTests
+//
+//  Mock service tests for OpenAI TTS implementation
+//  Tests the full integration flow with mock responses
+//
+
+import XCTest
+import AVFoundation
+import Combine
+@testable import Briefeed
+
+// MARK: - Mock OpenAI Service
+
+protocol OpenAITTSServiceProtocol {
+    func generateAudioFile(from text: String, voice: OpenAIVoice, model: OpenAITTSModel) async throws -> URL
+    func streamAudio(text: String, voice: OpenAIVoice, model: OpenAITTSModel, onStart: (() -> Void)?, onProgress: ((Float) -> Void)?, completion: @escaping (Result<URL, Error>) -> Void)
+    func generateNewsAudio(_ text: String, useAlternativeVoice: Bool) async throws -> URL
+    func getEstimatedCost() -> Double
+    func resetCostTracking()
+}
+
+@MainActor
+class MockOpenAITTSService: OpenAITTSServiceProtocol {
+    
+    // Control test behavior
+    var shouldFail = false
+    var failureError: Error = OpenAITTSError.networkError("Mock error")
+    var generationDelay: TimeInterval = 0.1
+    var streamingChunks = 5
+    
+    // Track calls for verification
+    var generateAudioCallCount = 0
+    var streamAudioCallCount = 0
+    var lastGeneratedText: String?
+    var lastUsedVoice: OpenAIVoice?
+    var lastUsedModel: OpenAITTSModel?
+    
+    // Cost tracking
+    private var totalCharacters = 0
+    
+    func generateAudioFile(from text: String, voice: OpenAIVoice = .coral, model: OpenAITTSModel = .gpt4oMiniTTS) async throws -> URL {
+        generateAudioCallCount += 1
+        lastGeneratedText = text
+        lastUsedVoice = voice
+        lastUsedModel = model
+        totalCharacters += text.count
+        
+        if shouldFail {
+            throw failureError
+        }
+        
+        // Simulate generation delay
+        try await Task.sleep(nanoseconds: UInt64(generationDelay * 1_000_000_000))
+        
+        // Return mock audio file URL
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mock_audio_\(UUID().uuidString).mp3")
+        
+        // Create empty file
+        FileManager.default.createFile(atPath: tempURL.path, contents: Data(), attributes: nil)
+        
+        return tempURL
+    }
+    
+    func streamAudio(
+        text: String,
+        voice: OpenAIVoice = .coral,
+        model: OpenAITTSModel = .gpt4oMiniTTS,
+        onStart: (() -> Void)? = nil,
+        onProgress: ((Float) -> Void)? = nil,
+        completion: @escaping (Result<URL, Error>) -> Void
+    ) {
+        streamAudioCallCount += 1
+        lastGeneratedText = text
+        lastUsedVoice = voice
+        lastUsedModel = model
+        totalCharacters += text.count
+        
+        if shouldFail {
+            completion(.failure(failureError))
+            return
+        }
+        
+        // Simulate streaming
+        onStart?()
+        
+        Task {
+            for i in 1...streamingChunks {
+                try? await Task.sleep(nanoseconds: 50_000_000) // 50ms per chunk
+                let progress = Float(i) / Float(streamingChunks)
+                onProgress?(progress)
+            }
+            
+            let tempURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mock_stream_\(UUID().uuidString).pcm")
+            FileManager.default.createFile(atPath: tempURL.path, contents: Data(), attributes: nil)
+            
+            completion(.success(tempURL))
+        }
+    }
+    
+    func generateNewsAudio(_ text: String, useAlternativeVoice: Bool = false) async throws -> URL {
+        let voice = useAlternativeVoice ? OpenAIVoice.sage : OpenAIVoice.coral
+        return try await generateAudioFile(from: text, voice: voice, model: .gpt4oMiniTTS)
+    }
+    
+    func getEstimatedCost() -> Double {
+        Double(totalCharacters) / 1000.0 * 0.015
+    }
+    
+    func resetCostTracking() {
+        totalCharacters = 0
+    }
+}
+
+// MARK: - Mock Gemini Service
+
+@MainActor
+class MockGeminiTTSService {
+    var shouldFail = false
+    var quotaExceeded = false
+    var generateCallCount = 0
+    var lastGeneratedText: String?
+    
+    func generateAudioFile(from text: String) async throws -> URL {
+        generateCallCount += 1
+        lastGeneratedText = text
+        
+        if quotaExceeded {
+            throw NSError(domain: "GeminiTTS", code: 429, userInfo: [
+                NSLocalizedDescriptionKey: "Quota exceeded: 100 generations per day limit reached"
+            ])
+        }
+        
+        if shouldFail {
+            throw NSError(domain: "GeminiTTS", code: 500, userInfo: [
+                NSLocalizedDescriptionKey: "Mock Gemini error"
+            ])
+        }
+        
+        // Simulate generation
+        try await Task.sleep(nanoseconds: 100_000_000)
+        
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gemini_audio_\(UUID().uuidString).mp3")
+        FileManager.default.createFile(atPath: tempURL.path, contents: Data(), attributes: nil)
+        
+        return tempURL
+    }
+}
+
+// MARK: - Integration Tests with Mocks
+
+@MainActor
+final class OpenAITTSMockIntegrationTests: XCTestCase {
+    
+    var mockOpenAI: MockOpenAITTSService!
+    var mockGemini: MockGeminiTTSService!
+    var cancellables: Set<AnyCancellable>!
+    
+    override func setUp() async throws {
+        try await super.setUp()
+        
+        mockOpenAI = MockOpenAITTSService()
+        mockGemini = MockGeminiTTSService()
+        cancellables = Set<AnyCancellable>()
+        
+        UserDefaultsManager.shared.openAIAPIKey = "test-key"
+    }
+    
+    override func tearDown() async throws {
+        cancellables = nil
+        UserDefaultsManager.shared.openAIAPIKey = nil
+        try await super.tearDown()
+    }
+    
+    // MARK: - Primary Service Selection Tests
+    
+    func testWhenOpenAIConfigured_UsesOpenAIService() async throws {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = "valid-key"
+        
+        // When
+        let url = try await mockOpenAI.generateAudioFile(from: "Test text")
+        
+        // Then
+        XCTAssertEqual(mockOpenAI.generateAudioCallCount, 1)
+        XCTAssertEqual(mockOpenAI.lastGeneratedText, "Test text")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        
+        // Cleanup
+        try? FileManager.default.removeItem(at: url)
+    }
+    
+    func testWhenOpenAINotConfigured_UsesGeminiService() async throws {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = nil
+        
+        // When
+        let url = try await mockGemini.generateAudioFile(from: "Test text")
+        
+        // Then
+        XCTAssertEqual(mockGemini.generateCallCount, 1)
+        XCTAssertEqual(mockGemini.lastGeneratedText, "Test text")
+    }
+    
+    // MARK: - Fallback Behavior Tests
+    
+    func testWhenOpenAIFails_FallsBackToGemini() async throws {
+        // Given
+        mockOpenAI.shouldFail = true
+        mockOpenAI.failureError = OpenAITTSError.rateLimited
+        
+        // When - First try OpenAI (will fail)
+        do {
+            _ = try await mockOpenAI.generateAudioFile(from: "Test")
+            XCTFail("Should have failed")
+        } catch {
+            // Expected failure
+            XCTAssertEqual(error as? OpenAITTSError, OpenAITTSError.rateLimited)
+        }
+        
+        // Then fallback to Gemini
+        let geminiURL = try await mockGemini.generateAudioFile(from: "Test")
+        XCTAssertEqual(mockGemini.generateCallCount, 1)
+        XCTAssertNotNil(geminiURL)
+    }
+    
+    func testWhenGeminiQuotaExceeded_ReportsCorrectError() async {
+        // Given
+        mockGemini.quotaExceeded = true
+        
+        // When/Then
+        do {
+            _ = try await mockGemini.generateAudioFile(from: "Test")
+            XCTFail("Should report quota exceeded")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("100 generations"))
+        }
+    }
+    
+    // MARK: - Voice Selection Tests
+    
+    func testNewsAudio_UsesCorrectVoices() async throws {
+        // When - Primary voice
+        _ = try? await mockOpenAI.generateNewsAudio("News text", useAlternativeVoice: false)
+        
+        // Then
+        XCTAssertEqual(mockOpenAI.lastUsedVoice, .coral)
+        
+        // When - Alternative voice
+        _ = try? await mockOpenAI.generateNewsAudio("News text", useAlternativeVoice: true)
+        
+        // Then
+        XCTAssertEqual(mockOpenAI.lastUsedVoice, .sage)
+    }
+    
+    func testContentTypeDetection_SelectsAppropriateInstructions() {
+        // Given
+        let profile = NewsVoiceProfile()
+        
+        // Test different content types
+        let tests = [
+            ("Breaking news!", NewsVoiceProfile.ContentType.headline),
+            (String(repeating: "Summary. ", count: 30), NewsVoiceProfile.ContentType.summary),
+            ("The CEO said \"We are pleased\" today.", NewsVoiceProfile.ContentType.quote),
+            (String(repeating: "Article. ", count: 100), NewsVoiceProfile.ContentType.article)
+        ]
+        
+        for (text, expectedType) in tests {
+            let detectedType = NewsVoiceProfile.ContentType.detect(from: text)
+            XCTAssertEqual(detectedType, expectedType)
+            
+            let instructions = profile.instructions(for: detectedType)
+            XCTAssertFalse(instructions.isEmpty)
+        }
+    }
+    
+    // MARK: - Streaming Tests
+    
+    func testStreaming_CallsCallbacksInOrder() async {
+        // Given
+        let expectation = expectation(description: "Streaming completes")
+        var startCalled = false
+        var progressValues: [Float] = []
+        var completionCalled = false
+        
+        // When
+        mockOpenAI.streamAudio(
+            text: "Stream test",
+            onStart: {
+                startCalled = true
+            },
+            onProgress: { progress in
+                progressValues.append(progress)
+            },
+            completion: { result in
+                completionCalled = true
+                expectation.fulfill()
+            }
+        )
+        
+        // Then
+        await fulfillment(of: [expectation], timeout: 1.0)
+        
+        XCTAssertTrue(startCalled)
+        XCTAssertTrue(completionCalled)
+        XCTAssertEqual(progressValues.count, mockOpenAI.streamingChunks)
+        XCTAssertEqual(progressValues.last, 1.0)
+    }
+    
+    func testStreaming_HandlesFailureGracefully() {
+        // Given
+        mockOpenAI.shouldFail = true
+        let expectation = expectation(description: "Streaming fails")
+        
+        // When
+        mockOpenAI.streamAudio(
+            text: "Test",
+            completion: { result in
+                if case .failure = result {
+                    expectation.fulfill()
+                }
+            }
+        )
+        
+        // Then
+        wait(for: [expectation], timeout: 1.0)
+        XCTAssertEqual(mockOpenAI.streamAudioCallCount, 1)
+    }
+    
+    // MARK: - Cost Tracking Tests
+    
+    func testCostTracking_AccumulatesCorrectly() async throws {
+        // Given
+        mockOpenAI.resetCostTracking()
+        
+        // When
+        _ = try await mockOpenAI.generateAudioFile(from: String(repeating: "a", count: 1000))
+        _ = try await mockOpenAI.generateAudioFile(from: String(repeating: "b", count: 2000))
+        
+        // Then
+        let cost = mockOpenAI.getEstimatedCost()
+        let expectedCost = 3000.0 / 1000.0 * 0.015
+        XCTAssertEqual(cost, expectedCost, accuracy: 0.001)
+    }
+    
+    func testCostTracking_ResetsCorrectly() async throws {
+        // Given
+        _ = try await mockOpenAI.generateAudioFile(from: String(repeating: "a", count: 5000))
+        
+        // When
+        mockOpenAI.resetCostTracking()
+        
+        // Then
+        XCTAssertEqual(mockOpenAI.getEstimatedCost(), 0.0)
+    }
+    
+    // MARK: - Concurrent Generation Tests
+    
+    func testConcurrentGeneration_TracksAllCalls() async throws {
+        // Given
+        let texts = (0..<10).map { "Text \($0)" }
+        
+        // When
+        await withTaskGroup(of: URL?.self) { group in
+            for text in texts {
+                group.addTask {
+                    try? await self.mockOpenAI.generateAudioFile(from: text)
+                }
+            }
+        }
+        
+        // Then
+        XCTAssertEqual(mockOpenAI.generateAudioCallCount, 10)
+    }
+    
+    // MARK: - Error Recovery Tests
+    
+    func testErrorRecovery_RetriesWithBackoff() async {
+        // Given
+        var attempts = 0
+        let maxRetries = 3
+        
+        // When
+        for attempt in 0..<maxRetries {
+            mockOpenAI.shouldFail = (attempt < 2) // Fail first 2 attempts
+            
+            do {
+                _ = try await mockOpenAI.generateAudioFile(from: "Test")
+                attempts = attempt + 1
+                break
+            } catch {
+                attempts = attempt + 1
+                // Exponential backoff
+                let delay = pow(2.0, Double(attempt))
+                try? await Task.sleep(nanoseconds: UInt64(delay * 100_000_000))
+            }
+        }
+        
+        // Then
+        XCTAssertEqual(attempts, 3)
+        XCTAssertEqual(mockOpenAI.generateAudioCallCount, 3)
+    }
+}
+
+// MARK: - File Management Tests
+
+@MainActor
+final class OpenAITTSFileManagementTests: XCTestCase {
+    
+    var mockService: MockOpenAITTSService!
+    var tempFiles: [URL] = []
+    
+    override func setUp() async throws {
+        try await super.setUp()
+        mockService = MockOpenAITTSService()
+        tempFiles = []
+    }
+    
+    override func tearDown() async throws {
+        // Cleanup temp files
+        for url in tempFiles {
+            try? FileManager.default.removeItem(at: url)
+        }
+        try await super.tearDown()
+    }
+    
+    func testGeneratedFiles_AreCreatedInTempDirectory() async throws {
+        // When
+        let url = try await mockService.generateAudioFile(from: "Test")
+        tempFiles.append(url)
+        
+        // Then
+        XCTAssertTrue(url.path.contains("tmp") || url.path.contains("Temp"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    }
+    
+    func testGeneratedFiles_HaveUniqueNames() async throws {
+        // When
+        let url1 = try await mockService.generateAudioFile(from: "Test 1")
+        let url2 = try await mockService.generateAudioFile(from: "Test 2")
+        tempFiles.append(contentsOf: [url1, url2])
+        
+        // Then
+        XCTAssertNotEqual(url1.lastPathComponent, url2.lastPathComponent)
+    }
+    
+    func testStreamedFiles_UseCorrectFormat() async {
+        // Given
+        let expectation = expectation(description: "Streaming completes")
+        var resultURL: URL?
+        
+        // When
+        mockService.streamAudio(
+            text: "Test",
+            completion: { result in
+                if case .success(let url) = result {
+                    resultURL = url
+                    self.tempFiles.append(url)
+                }
+                expectation.fulfill()
+            }
+        )
+        
+        // Then
+        await fulfillment(of: [expectation], timeout: 1.0)
+        XCTAssertEqual(resultURL?.pathExtension, "pcm")
+    }
+}

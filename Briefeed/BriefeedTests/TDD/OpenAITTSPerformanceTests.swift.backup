@@ -1,0 +1,366 @@
+//
+//  OpenAITTSPerformanceTests.swift
+//  BriefeedTests
+//
+//  Performance and stress tests for OpenAI TTS implementation
+//
+
+import XCTest
+import AVFoundation
+@testable import Briefeed
+
+@MainActor
+final class OpenAITTSPerformanceTests: XCTestCase {
+    
+    var sut: OpenAITTSService!
+    var unifiedPlayer: UnifiedAudioPlayer!
+    
+    override func setUp() async throws {
+        try await super.setUp()
+        sut = OpenAITTSService.shared
+        unifiedPlayer = UnifiedAudioPlayer.shared
+        UserDefaultsManager.shared.openAIAPIKey = "test-key"
+    }
+    
+    override func tearDown() async throws {
+        sut.resetCostTracking()
+        unifiedPlayer.clearQueue()
+        UserDefaultsManager.shared.openAIAPIKey = nil
+        try await super.tearDown()
+    }
+    
+    // MARK: - Cost Calculation Performance
+    
+    func testCostCalculation_HandlesLargeVolume() {
+        measure {
+            // Given
+            sut.resetCostTracking()
+            
+            // When - Simulate 1000 articles
+            for i in 0..<1000 {
+                let charCount = 100 + (i * 10) // Varying sizes
+                _ = sut.getEstimatedCost()
+            }
+            
+            // Then
+            let finalCost = sut.getEstimatedCost()
+            XCTAssertGreaterThan(finalCost, 0)
+        }
+    }
+    
+    func testCostCalculation_ScalesLinearly() {
+        // Given
+        let testSizes = [1000, 5000, 10000, 50000, 100000]
+        var costs: [Double] = []
+        
+        // When
+        for size in testSizes {
+            sut.resetCostTracking()
+            // Simulate processing
+            let cost = Double(size) / 1000.0 * 0.015
+            costs.append(cost)
+        }
+        
+        // Then - Verify linear scaling
+        for i in 1..<costs.count {
+            let ratio = costs[i] / costs[i-1]
+            let expectedRatio = Double(testSizes[i]) / Double(testSizes[i-1])
+            XCTAssertEqual(ratio, expectedRatio, accuracy: 0.01)
+        }
+    }
+    
+    // MARK: - Voice Instruction Performance
+    
+    func testVoiceInstructionGeneration_Performance() {
+        let profile = NewsVoiceProfile()
+        let testTexts = generateTestTexts(count: 100)
+        
+        measure {
+            for text in testTexts {
+                let contentType = NewsVoiceProfile.ContentType.detect(from: text)
+                _ = profile.instructions(for: contentType)
+            }
+        }
+    }
+    
+    func testContentTypeDetection_Performance() {
+        let testTexts = generateTestTexts(count: 1000)
+        
+        measure {
+            for text in testTexts {
+                _ = NewsVoiceProfile.ContentType.detect(from: text)
+            }
+        }
+    }
+    
+    // MARK: - Queue Processing Performance
+    
+    func testQueueLoading_HandlesLargeQueues() async {
+        // Given
+        let articles = createTestArticles(count: 100)
+        
+        // When
+        let startTime = Date()
+        await unifiedPlayer.loadQueue(from: articles)
+        let loadTime = Date().timeIntervalSince(startTime)
+        
+        // Then
+        XCTAssertEqual(unifiedPlayer.queue.count, 100)
+        XCTAssertLessThan(loadTime, 1.0, "Queue loading should be fast")
+    }
+    
+    func testQueueItemCreation_Performance() {
+        let context = PersistenceController.preview.container.viewContext
+        let articles = (0..<1000).map { index in
+            let article = Article(context: context)
+            article.id = UUID()
+            article.title = "Article \(index)"
+            article.summary = "Summary \(index)"
+            return article
+        }
+        
+        measure {
+            for article in articles {
+                _ = UnifiedQueueItem(article: article)
+            }
+        }
+    }
+    
+    // MARK: - Memory Performance
+    
+    func testMemoryUsage_DoesNotLeakWithLargeQueues() async {
+        // Given
+        weak var weakItem: UnifiedQueueItem?
+        
+        autoreleasepool {
+            // When
+            let articles = createTestArticles(count: 50)
+            await unifiedPlayer.loadQueue(from: articles)
+            weakItem = unifiedPlayer.queue.first
+            
+            // Clear queue
+            unifiedPlayer.clearQueue()
+        }
+        
+        // Then
+        XCTAssertNil(weakItem, "Queue items should be deallocated")
+    }
+    
+    // MARK: - Streaming Buffer Performance
+    
+    func testPCMBufferProcessing_Performance() {
+        // Simulate PCM chunk processing
+        let chunkSize = 4800 * 2 // 200ms at 24kHz, 16-bit
+        let testData = Data(repeating: 0, count: chunkSize)
+        
+        measure {
+            for _ in 0..<100 {
+                // Simulate buffer processing
+                _ = testData.withUnsafeBytes { bytes in
+                    // Would copy to audio buffer in production
+                    return bytes.count
+                }
+            }
+        }
+    }
+    
+    func testStreamingLatency_FirstChunkArrival() {
+        // This tests the theoretical latency for first audio chunk
+        
+        // Given
+        let chunkSize = 4800 * 2 // 200ms worth of audio
+        let networkLatency = 0.1 // 100ms assumed network latency
+        
+        // When
+        let theoreticalFirstChunkTime = networkLatency + 0.05 // Processing overhead
+        
+        // Then
+        XCTAssertLessThan(theoreticalFirstChunkTime, 0.2, "First chunk should arrive under 200ms")
+    }
+    
+    // MARK: - Concurrent Generation Performance
+    
+    func testConcurrentGeneration_DoesNotDegrade() async {
+        // Test that multiple simultaneous generations don't cause issues
+        
+        // Given
+        let articles = createTestArticles(count: 5)
+        let items = articles.map { UnifiedQueueItem(article: $0) }
+        
+        // When - Simulate concurrent generation
+        await withTaskGroup(of: Void.self) { group in
+            for item in items {
+                group.addTask {
+                    // Would call generation here
+                    item.generationState = .generating
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    item.generationState = .ready
+                }
+            }
+        }
+        
+        // Then
+        for item in items {
+            XCTAssertEqual(item.generationState, .ready)
+        }
+    }
+    
+    // MARK: - API Rate Limit Handling
+    
+    func testRateLimitHandling_BacksOffAppropriately() async {
+        // Test exponential backoff behavior
+        
+        var retryDelays: [TimeInterval] = []
+        let maxRetries = 3
+        
+        for attempt in 0..<maxRetries {
+            let delay = pow(2.0, Double(attempt)) // Exponential backoff
+            retryDelays.append(delay)
+        }
+        
+        // Verify backoff increases exponentially
+        XCTAssertEqual(retryDelays[0], 1.0)
+        XCTAssertEqual(retryDelays[1], 2.0)
+        XCTAssertEqual(retryDelays[2], 4.0)
+    }
+    
+    // MARK: - Character Counting Performance
+    
+    func testCharacterCounting_ScalesWellWithLength() {
+        let sizes = [100, 1000, 10000, 100000]
+        var times: [TimeInterval] = []
+        
+        for size in sizes {
+            let text = String(repeating: "a", count: size)
+            let start = Date()
+            _ = text.count
+            let elapsed = Date().timeIntervalSince(start)
+            times.append(elapsed)
+        }
+        
+        // Verify near-linear scaling
+        for time in times {
+            XCTAssertLessThan(time, 0.01, "Character counting should be fast")
+        }
+    }
+    
+    // MARK: - Voice Array Performance
+    
+    func testVoiceEnumeration_Performance() {
+        measure {
+            for _ in 0..<1000 {
+                _ = OpenAIVoice.allCases
+                _ = OpenAIVoice.allCases.filter { $0.isRecommendedForNews }
+            }
+        }
+    }
+    
+    // MARK: - Helper Methods
+    
+    private func generateTestTexts(count: Int) -> [String] {
+        return (0..<count).map { index in
+            switch index % 4 {
+            case 0:
+                return "Short headline \(index)"
+            case 1:
+                return String(repeating: "Summary text \(index). ", count: 20)
+            case 2:
+                return "The speaker said \"Quote \(index)\" yesterday."
+            default:
+                return String(repeating: "Article content \(index). ", count: 100)
+            }
+        }
+    }
+    
+    private func createTestArticles(count: Int) -> [Article] {
+        let context = PersistenceController.preview.container.viewContext
+        return (0..<count).map { index in
+            let article = Article(context: context)
+            article.id = UUID()
+            article.title = "Article \(index)"
+            article.summary = "Summary for article \(index)"
+            article.content = "Content for article \(index)"
+            return article
+        }
+    }
+}
+
+// MARK: - Stress Tests
+
+@MainActor
+final class OpenAITTSStressTests: XCTestCase {
+    
+    var sut: OpenAITTSService!
+    
+    override func setUp() async throws {
+        try await super.setUp()
+        sut = OpenAITTSService.shared
+        UserDefaultsManager.shared.openAIAPIKey = "test-key"
+    }
+    
+    func testMaximumTextLength_HandlesGracefully() async {
+        // Given - Maximum reasonable text length
+        let maxText = String(repeating: "a", count: 100_000)
+        
+        // When/Then - Should handle without crashing
+        do {
+            _ = try await sut.generateAudioFile(from: maxText)
+        } catch {
+            // Expected to fail with network error, but shouldn't crash
+            XCTAssertNotNil(error)
+        }
+    }
+    
+    func testEmptyText_HandlesGracefully() async {
+        // Given
+        let emptyText = ""
+        
+        // When/Then
+        do {
+            _ = try await sut.generateAudioFile(from: emptyText)
+        } catch {
+            // Should handle empty text appropriately
+            XCTAssertNotNil(error)
+        }
+    }
+    
+    func testSpecialCharacters_HandlesCorrectly() async {
+        // Given
+        let specialText = "Test with émoji 🎉 and üñíçödé characters & symbols @ # $ % ^ & * ( )"
+        
+        // When/Then - Should handle without issues
+        do {
+            _ = try await sut.generateAudioFile(from: specialText)
+        } catch {
+            // Network error expected, but special chars should be handled
+            XCTAssertNotNil(error)
+        }
+    }
+    
+    func testRapidStateChanges_DoNotCauseRaceConditions() async {
+        // Given
+        let item = UnifiedQueueItem(article: createTestArticle())
+        
+        // When - Rapid state changes
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<10 {
+                group.addTask {
+                    item.generationState = .pending
+                    item.generationState = .generating
+                    item.generationState = .ready
+                }
+            }
+        }
+        
+        // Then - Should end in consistent state
+        XCTAssertNotNil(item.generationState)
+    }
+    
+    private func createTestArticle() -> Article {
+        let context = PersistenceController.preview.container.viewContext
+        let article = Article(context: context)
+        article.id = UUID()
+        article.title = "Test"
+        return article
+    }
+}

@@ -49,7 +49,8 @@ class RSSAudioService: NSObject, ObservableObject {
     // MARK: - Public Methods
     
     /// Initialize default feeds if needed
-    func initializeDefaultFeedsIfNeeded() async {
+    @discardableResult
+    func initializeDefaultFeedsIfNeeded() async -> Bool {
         let fetchRequest: NSFetchRequest<RSSFeed> = RSSFeed.fetchRequest()
         let count = (try? viewContext.count(for: fetchRequest)) ?? 0
         
@@ -62,28 +63,37 @@ class RSSAudioService: NSObject, ObservableObject {
                 try viewContext.save()
                 loadFeeds()
                 await refreshAllFeeds()
+                return true
             } catch {
                 print("Error creating default feeds: \(error)")
             }
         }
+
+        return false
     }
     
-    /// Refresh all enabled feeds
-    func refreshAllFeeds() async {
-        guard !isRefreshing else { return }
+    /// Refresh all enabled feeds.
+    /// If another refresh is already in flight, wait for it so callers that
+    /// depend on the new episodes can continue after fresh data lands.
+    @discardableResult
+    func refreshAllFeeds() async -> Bool {
+        if isRefreshing {
+            await waitForCurrentRefresh()
+            return false
+        }
         
         isRefreshing = true
         lastError = nil
+        defer { isRefreshing = false }
         
         // Refresh each enabled feed
         for feed in feeds.filter({ $0.isEnabled }) {
             await refreshFeed(feed)
         }
         
-        isRefreshing = false
-        
         // Clean up old episodes
         cleanupOldEpisodes()
+        return true
     }
     
     /// Refresh a specific feed
@@ -349,6 +359,13 @@ class RSSAudioService: NSObject, ObservableObject {
             }
         } catch {
             print("Error cleaning up episodes: \(error)")
+        }
+    }
+
+    private func waitForCurrentRefresh(timeout: TimeInterval = 60) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while isRefreshing && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
         }
     }
     

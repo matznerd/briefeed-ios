@@ -70,10 +70,23 @@ class NetworkService: NetworkServiceProtocol {
     func request<T: Decodable>(_ endpoint: String, method: HTTPMethod = .get, parameters: [String: Any]? = nil, headers: [String: String]? = nil, timeout: TimeInterval? = nil) async throws -> T {
         let data = try await requestData(endpoint, method: method, parameters: parameters, headers: headers, timeout: timeout)
         
+        // Log raw response for Gemini API debugging
+        if endpoint.contains("generativelanguage.googleapis.com") {
+            if let jsonString = String(data: data, encoding: .utf8) {
+                print("[NetworkService] Raw Gemini response: \(jsonString.prefix(500))...")
+            }
+        }
+        
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
             print("Decoding error: \(error)")
+            // Log more details for Gemini API errors
+            if endpoint.contains("generativelanguage.googleapis.com") {
+                if let jsonString = String(data: data, encoding: .utf8) {
+                    print("[NetworkService] Failed to decode response: \(jsonString.prefix(1000))")
+                }
+            }
             throw NetworkError.decodingError
         }
     }
@@ -103,7 +116,8 @@ class NetworkService: NetworkServiceProtocol {
                 throw NetworkError.unknown(NSError(domain: "NetworkService", code: 0, userInfo: nil))
             }
             
-            print("🌐 HTTP Response: \(httpResponse.statusCode) for \(url)")
+            let safeURL = redactedURLDescription(url)
+            print("🌐 HTTP Response: \(httpResponse.statusCode) for \(safeURL)")
             
             switch httpResponse.statusCode {
             case 200...299:
@@ -111,7 +125,7 @@ class NetworkService: NetworkServiceProtocol {
             case 401:
                 throw NetworkError.unauthorized
             case 404:
-                print("❌ 404 Not Found: \(url)")
+                print("❌ 404 Not Found: \(safeURL)")
                 if let responseString = String(data: data, encoding: .utf8) {
                     print("   Response body: \(responseString.prefix(200))...")
                 }
@@ -136,5 +150,29 @@ class NetworkService: NetworkServiceProtocol {
             }
             throw NetworkError.unknown(error)
         }
+    }
+
+    private func redactedURLDescription(_ url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url.absoluteString
+        }
+
+        let sensitiveQueryNames: Set<String> = [
+            "key",
+            "api_key",
+            "apikey",
+            "access_token",
+            "token",
+            "authorization"
+        ]
+
+        components.queryItems = components.queryItems?.map { item in
+            guard sensitiveQueryNames.contains(item.name.lowercased()) else {
+                return item
+            }
+            return URLQueryItem(name: item.name, value: "***")
+        }
+
+        return components.string ?? url.absoluteString
     }
 }

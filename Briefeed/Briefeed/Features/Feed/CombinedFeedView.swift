@@ -10,7 +10,7 @@ import CoreData
 
 struct CombinedFeedView: View {
     @StateObject private var viewModel = CombinedFeedViewModel()
-    @StateObject private var stateManager = ArticleStateManager.shared
+    @EnvironmentObject var appViewModel: AppViewModel
     @State private var selectedFeedId: String = "all"
     @State private var selectedArticle: Article?
     @State private var showingAddFeed = false
@@ -42,6 +42,7 @@ struct CombinedFeedView: View {
                     } label: {
                         Image(systemName: "plus.circle")
                     }
+                    .accessibilityIdentifier(AccessibilityID.Feed.addFeed)
                 }
             }
             .sheet(isPresented: $showingAddFeed) {
@@ -61,6 +62,11 @@ struct CombinedFeedView: View {
                 Text(viewModel.errorMessage ?? "")
             }
             .onAppear {
+                guard !AppRuntime.shouldSkipAutomaticStartupWork else {
+                    print("🧪 Skipping automatic feed load for hosted XCTest")
+                    return
+                }
+
                 Task {
                     await viewModel.loadFeeds()
                 }
@@ -99,36 +105,43 @@ struct CombinedFeedView: View {
     }
     
     private var articleListView: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(filteredArticles) { article in
-                    ArticleRowView(article: article) {
-                        selectedArticle = article
-                    } onSave: {
-                        Task {
-                            await viewModel.toggleArticleSaved(article)
-                        }
-                    } onDelete: {
-                        Task {
-                            await viewModel.archiveArticle(article)
-                        }
+        List {
+            ForEach(Array(filteredArticles.enumerated()), id: \.element.id) { index, article in
+                ArticleRowView(article: article) {
+                    selectedArticle = article
+                } onSave: {
+                    Task {
+                        await viewModel.toggleArticleSaved(article)
                     }
-                    .onAppear {
+                }
+                .id(article.id)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.visible)
+                .onAppear {
+                    print("📱 Article appeared at index \(index) of \(filteredArticles.count)")
+                    if index >= filteredArticles.count - 3 {
+                        print("📱 Triggering loadMoreIfNeeded for article at index \(index)")
                         Task {
                             await viewModel.loadMoreIfNeeded(currentArticle: article)
                         }
                     }
-                    
-                    Divider()
-                        .padding(.horizontal, Constants.UI.padding)
-                }
-                
-                if viewModel.isLoadingMore {
-                    ProgressView()
-                        .padding()
                 }
             }
+
+            if viewModel.isLoadingMore {
+                HStack {
+                    ProgressView()
+                    Text("Loading more articles...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding()
+                .frame(maxWidth: .infinity)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+            }
         }
+        .listStyle(.plain)
         .background(Color.briefeedBackground)
     }
     
@@ -176,17 +189,23 @@ struct CombinedFeedView: View {
     
     private func selectFeed(_ feedId: String) {
         selectedFeedId = feedId
+        // Clear existing articles when switching feeds for cleaner UX
+        viewModel.articles = []
+        // Clear pagination tokens when switching feeds
+        viewModel.feedPaginationTokens.removeAll()
         Task {
             await viewModel.refresh(feedId: feedId)
         }
     }
     
     private var filteredArticles: [Article] {
+        let base: [Article]
         if selectedFeedId == "all" {
-            return viewModel.articles
+            base = viewModel.articles
         } else {
-            return viewModel.articles.filter { $0.feed?.id?.uuidString == selectedFeedId }
+            base = viewModel.articles.filter { $0.feed?.id?.uuidString == selectedFeedId }
         }
+        return base.filter { !$0.isArchived }
     }
 }
 
@@ -209,6 +228,7 @@ struct FeedSelectorButton: View {
                 )
         }
         .buttonStyle(PlainButtonStyle())
+        .accessibilityIdentifier(AccessibilityID.Feed.selector(title))
     }
 }
 
@@ -223,6 +243,10 @@ class CombinedFeedViewModel: ObservableObject {
     private let redditService = RedditService()
     private let viewContext = PersistenceController.shared.container.viewContext
     private var currentTask: Task<Void, Never>?
+    private var afterToken: String?  // For single feed pagination
+    var feedPaginationTokens: [String: String] = [:]  // Track pagination per feed
+    private var hasMorePages = true
+    private var currentFeedId = "all"
     
     @MainActor
     func loadFeeds() async {
@@ -260,6 +284,11 @@ class CombinedFeedViewModel: ObservableObject {
         isLoading = true
         errorMessage = nil
         
+        // Reset pagination when refreshing
+        afterToken = nil
+        hasMorePages = true
+        currentFeedId = feedId
+        
         print("🔄 Refreshing feed: \(feedId)")
         print("  📊 Total feeds available: \(feeds.count)")
         
@@ -274,6 +303,10 @@ class CombinedFeedViewModel: ObservableObject {
                     
                     print("  📋 Loading articles from all active feeds...")
                     
+                    // Reset pagination tokens for all feeds on refresh
+                    feedPaginationTokens.removeAll()
+                    hasMorePages = true  // Always allow loading more for "all" view
+                    
                     for feed in feeds where feed.isActive {
                         guard !Task.isCancelled else { break }
                         
@@ -285,6 +318,12 @@ class CombinedFeedViewModel: ObservableObject {
                             
                             do {
                                 let response = try await redditService.fetchFeedWithURL(url)
+                                
+                                // Store pagination token for this feed
+                                if let token = response.data.after {
+                                    feedPaginationTokens[feed.id?.uuidString ?? ""] = token
+                                    print("    📄 Stored pagination token for \(feed.name ?? ""): \(token)")
+                                }
                                 
                                 let feedArticles = response.data.children.map { child in
                                     createOrUpdateArticle(from: child.data, feed: feed)
@@ -309,13 +348,24 @@ class CombinedFeedViewModel: ObservableObject {
                     // Load articles from specific feed
                     if let feed = feeds.first(where: { $0.id?.uuidString == feedId }),
                        feed.path != nil {
-                        // Generate proper URL for the feed
-                        let url = DefaultDataService.shared.generateFeedURL(for: feed)
+                        // Generate proper URL for the feed (with no after token for initial load)
+                        let url = DefaultDataService.shared.generateFeedURL(for: feed, after: nil)
+                        print("📄 Initial load URL for \(feed.name ?? ""): \(url)")
                         let response = try await redditService.fetchFeedWithURL(url)
+                        
+                        // Set up pagination for next load
+                        afterToken = response.data.after
+                        hasMorePages = response.data.after != nil
+                        print("📄 Feed \(feed.name ?? "") initial load:")
+                        print("  - Received \(response.data.children.count) posts")
+                        print("  - afterToken: \(afterToken ?? "nil")")
+                        print("  - hasMorePages: \(hasMorePages)")
                         
                         articles = response.data.children.map { child in
                             createOrUpdateArticle(from: child.data, feed: feed)
                         }
+                        
+                        print("📄 Loaded \(articles.count) initial articles from \(feed.name ?? "")")
                     }
                 }
                 
@@ -332,7 +382,118 @@ class CombinedFeedViewModel: ObservableObject {
     
     @MainActor
     func loadMoreIfNeeded(currentArticle: Article) async {
-        // Implement pagination if needed
+        // Check if we're at the last few articles and should load more
+        guard let lastArticle = articles.last,
+              let currentIndex = articles.firstIndex(where: { $0.id == currentArticle.id }),
+              currentIndex >= articles.count - 3,  // Trigger when we're near the end
+              hasMorePages,
+              !isLoadingMore,
+              !isLoading else { 
+            let index = articles.firstIndex(where: { $0.id == currentArticle.id }) ?? -1
+            print("📄 loadMoreIfNeeded skipped:")
+            print("  - currentIndex: \(index) of \(articles.count)")
+            print("  - hasMorePages: \(hasMorePages)")
+            print("  - isLoadingMore: \(isLoadingMore)")
+            print("  - isLoading: \(isLoading)")
+            print("  - afterToken: \(afterToken ?? "nil")")
+            print("  - currentFeedId: \(currentFeedId)")
+            return 
+        }
+        
+        print("📄 Loading more articles - currentFeedId: \(currentFeedId), afterToken: \(afterToken ?? "nil")")
+        isLoadingMore = true
+        
+        // Support pagination for both "all" and individual feeds
+        if currentFeedId == "all" {
+            // Load more from all feeds that have pagination tokens
+            var newArticles: [Article] = []
+            
+            for feed in feeds where feed.isActive {
+                guard let feedId = feed.id?.uuidString,
+                      let token = feedPaginationTokens[feedId] else {
+                    print("📄 No more pages for feed: \(feed.name ?? "Unknown")")
+                    continue
+                }
+                
+                print("📄 Loading more from feed: \(feed.name ?? "Unknown") with token: \(token)")
+                
+                do {
+                    let url = DefaultDataService.shared.generateFeedURL(for: feed, after: token)
+                    let response = try await redditService.fetchFeedWithURL(url)
+                    
+                    // Update pagination token for this feed
+                    if let newToken = response.data.after {
+                        feedPaginationTokens[feedId] = newToken
+                    } else {
+                        // No more pages for this feed
+                        feedPaginationTokens.removeValue(forKey: feedId)
+                    }
+                    
+                    let feedArticles = response.data.children.map { child in
+                        createOrUpdateArticle(from: child.data, feed: feed)
+                    }
+                    newArticles.append(contentsOf: feedArticles)
+                    print("📄 Loaded \(feedArticles.count) more articles from \(feed.name ?? "")")
+                } catch {
+                    print("❌ Failed to load more from \(feed.name ?? ""): \(error)")
+                    // Remove token for this feed to prevent retrying
+                    feedPaginationTokens.removeValue(forKey: feedId)
+                }
+            }
+            
+            // Add new articles to existing list
+            if !newArticles.isEmpty {
+                articles.append(contentsOf: newArticles)
+                print("📄 Total articles after loading more: \(articles.count)")
+            }
+            
+            // Check if any feed still has more pages
+            hasMorePages = !feedPaginationTokens.isEmpty
+            if !hasMorePages {
+                print("📄 No more articles available from any feed")
+            }
+        } else {
+            // Load more from specific feed
+            if let feed = feeds.first(where: { $0.id?.uuidString == currentFeedId }) {
+                print("📄 Loading more from feed: \(feed.name ?? "Unknown")")
+                print("📄 Current afterToken: \(afterToken ?? "nil")")
+                do {
+                    // Make sure we have an afterToken for pagination
+                    guard let token = afterToken else {
+                        print("❌ No afterToken available for pagination!")
+                        hasMorePages = false
+                        isLoadingMore = false
+                        return
+                    }
+                    
+                    let url = DefaultDataService.shared.generateFeedURL(for: feed, after: token)
+                    print("📄 Pagination URL: \(url)")
+                    let response = try await redditService.fetchFeedWithURL(url)
+                    
+                    // Update pagination token
+                    afterToken = response.data.after
+                    hasMorePages = response.data.after != nil
+                    print("📄 New afterToken: \(afterToken ?? "nil"), hasMore: \(hasMorePages)")
+                    
+                    // Add new articles
+                    let newArticles = response.data.children.map { child in
+                        createOrUpdateArticle(from: child.data, feed: feed)
+                    }
+                    
+                    // Append to existing articles
+                    articles.append(contentsOf: newArticles)
+                    
+                    print("📄 Loaded \(newArticles.count) more articles. Total: \(articles.count)")
+                } catch {
+                    print("❌ Failed to load more: \(error)")
+                    hasMorePages = false // Stop trying if we hit an error
+                }
+            } else {
+                print("❌ Could not find feed with ID: \(currentFeedId)")
+            }
+        }
+        
+        isLoadingMore = false
     }
     
     @MainActor
@@ -340,14 +501,10 @@ class CombinedFeedViewModel: ObservableObject {
         article.isSaved.toggle()
         if article.isSaved {
             article.savedAt = Date()
-            // Add to audio queue when saving
-            AudioService.shared.addToQueue(article)
+            // Article saving now handled by the Brief view's queue management
         } else {
             article.savedAt = nil
-            // Remove from audio queue when unsaving
-            if let index = AudioService.shared.queue.firstIndex(where: { $0.id == article.id }) {
-                AudioService.shared.removeFromQueue(at: index)
-            }
+            // Article removal now handled by the Brief view's queue management
         }
         do {
             try viewContext.save()

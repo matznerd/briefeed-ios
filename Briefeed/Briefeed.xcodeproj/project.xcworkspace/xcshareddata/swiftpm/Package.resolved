@@ -1,0 +1,24 @@
+{
+  "originHash" : "6f630e671fe5becf36fd15feeac90130ccfc31b45102e349d685870478e6985d",
+  "pins" : [
+    {
+      "identity" : "fluidaudio",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/FluidInference/FluidAudio.git",
+      "state" : {
+        "revision" : "ce59fb14b8b8978b196f6a34282e20ea6762d164",
+        "version" : "0.14.5"
+      }
+    },
+    {
+      "identity" : "swiftaudioex",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/doublesymmetry/SwiftAudioEx",
+      "state" : {
+        "revision" : "7fb762db9c60ee232223122ace798333d6add195",
+        "version" : "1.0.0"
+      }
+    }
+  ],
+  "version" : 3
+}

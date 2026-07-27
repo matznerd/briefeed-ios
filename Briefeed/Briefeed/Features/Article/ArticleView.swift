@@ -13,6 +13,7 @@ struct ArticleView: View {
     @State private var showShareSheet = false
     @State private var showReaderSettings = false
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var appViewModel: AppViewModel
     
     init(article: Article) {
         self.article = article
@@ -259,33 +260,39 @@ struct ArticleView: View {
             // Audio playback button
             if viewModel.canPlayAudio {
                 Button(action: {
-                    viewModel.toggleAudioPlayback()
+                    // Use AppViewModel for audio playback to update the expanded player
+                    if appViewModel.isArticlePlaying(article) && appViewModel.isPlaying {
+                        appViewModel.pause()
+                    } else {
+                        Task {
+                            await appViewModel.play(article: article)
+                        }
+                    }
                 }) {
                     Group {
-                        switch viewModel.audioState {
-                        case .loading:
+                        if appViewModel.isLoading && appViewModel.isArticlePlaying(article) {
                             ProgressView()
                                 .scaleEffect(0.8)
-                        case .playing:
+                        } else if appViewModel.isArticlePlaying(article) && appViewModel.isPlaying {
                             Image(systemName: "pause.fill")
-                        case .paused:
-                            Image(systemName: "play.fill")
-                        default:
+                        } else {
                             Image(systemName: "play.fill")
                         }
                     }
                     .foregroundColor(.briefeedRed)
                 }
-                .disabled(viewModel.audioState == .loading)
+                .disabled(appViewModel.isLoading && appViewModel.isArticlePlaying(article))
+                .accessibilityIdentifier(AccessibilityID.Article.play)
             }
-            
+
             // Reader settings
             Button(action: {
                 showReaderSettings = true
             }) {
                 Image(systemName: "textformat.size")
             }
-            
+            .accessibilityIdentifier(AccessibilityID.Article.readerSettings)
+
             // Save button
             Button(action: {
                 Task {
@@ -295,13 +302,15 @@ struct ArticleView: View {
                 Image(systemName: viewModel.article.isSaved ? "bookmark.fill" : "bookmark")
                     .foregroundColor(viewModel.article.isSaved ? .orange : .primary)
             }
-            
+            .accessibilityIdentifier(AccessibilityID.Article.save)
+
             // Share button
             Button(action: {
                 showShareSheet = true
             }) {
                 Image(systemName: "square.and.arrow.up")
             }
+            .accessibilityIdentifier(AccessibilityID.Article.share)
         }
     }
     

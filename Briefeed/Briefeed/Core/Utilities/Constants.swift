@@ -11,15 +11,28 @@ import SwiftUI
 enum Constants {
     enum API {
         static let redditBaseURL = "https://www.reddit.com"
-        static let firecrawlBaseURL = "https://api.firecrawl.dev/v0"
+        static let firecrawlBaseURL = "https://api.firecrawl.dev/v2"
         static let geminiBaseURL = "https://generativelanguage.googleapis.com/v1beta"
         
-        // API Keys are now managed through UserDefaultsManager
+        // API keys are user-overridable via Keychain and may be injected at
+        // archive time for TestFlight builds through Info.plist build settings.
         static var firecrawlAPIKey: String? {
-            UserDefaultsManager.shared.firecrawlAPIKey
+            UserDefaultsManager.shared.firecrawlAPIKey ?? bundledSecret(named: "FirecrawlAPIKey")
         }
         static var geminiAPIKey: String? {
-            UserDefaultsManager.shared.geminiAPIKey
+            UserDefaultsManager.shared.geminiAPIKey ?? bundledSecret(named: "GeminiAPIKey")
+        }
+
+        private static func bundledSecret(named key: String) -> String? {
+            guard let rawValue = Bundle.main.object(forInfoDictionaryKey: key) as? String else {
+                return nil
+            }
+
+            let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty, !value.contains("$(") else {
+                return nil
+            }
+            return value
         }
         
         static let defaultTimeout: TimeInterval = 30
@@ -70,7 +83,57 @@ enum Constants {
             "youtu.be",
             "twitch.tv",
             "clips.twitch.tv",
-            "streamable.com"
+            "streamable.com",
+            "reddit.com/gallery",
+            "reddit.com/poll",
+            "forms.gle",
+            "docs.google.com",
+            "drive.google.com",
+            "dropbox.com",
+            "mega.nz",
+            "mediafire.com",
+            "sendspace.com",
+            "wetransfer.com",
+            "discord.gg",
+            "discord.com"
+        ]
+        
+        // File extensions to filter out (non-article content)
+        static let filteredFileExtensions = [
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".xls",
+            ".xlsx",
+            ".ppt",
+            ".pptx",
+            ".zip",
+            ".rar",
+            ".7z",
+            ".tar",
+            ".gz",
+            ".exe",
+            ".dmg",
+            ".pkg",
+            ".deb",
+            ".rpm",
+            ".apk",
+            ".ipa",
+            ".mp3",
+            ".mp4",
+            ".avi",
+            ".mov",
+            ".wmv",
+            ".flv",
+            ".mkv",
+            ".webm",
+            ".gif",
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".bmp",
+            ".svg",
+            ".webp"
         ]
     }
     
@@ -102,9 +165,9 @@ enum Constants {
             
             var maxTokens: Int {
                 switch self {
-                case .brief: return 100
-                case .standard: return 250
-                case .detailed: return 500
+                case .brief: return 500      // Increased from 100
+                case .standard: return 1000   // Increased from 250 - THIS WAS THE PROBLEM!
+                case .detailed: return 2000   // Increased from 500
                 }
             }
             

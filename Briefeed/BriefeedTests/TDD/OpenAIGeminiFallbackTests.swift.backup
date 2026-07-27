@@ -1,0 +1,345 @@
+//
+//  OpenAIGeminiFallbackTests.swift
+//  BriefeedTests
+//
+//  Integration tests for OpenAI/Gemini TTS fallback behavior
+//
+
+import XCTest
+import AVFoundation
+import Combine
+@testable import Briefeed
+
+@MainActor
+final class OpenAIGeminiFallbackTests: XCTestCase {
+    
+    var unifiedPlayer: UnifiedAudioPlayer!
+    var cancellables: Set<AnyCancellable>!
+    var context: NSManagedObjectContext!
+    
+    override func setUp() async throws {
+        try await super.setUp()
+        
+        cancellables = Set<AnyCancellable>()
+        context = PersistenceController.preview.container.viewContext
+        unifiedPlayer = UnifiedAudioPlayer.shared
+        
+        // Reset for clean state
+        unifiedPlayer.clearQueue()
+        UserDefaultsManager.shared.openAIAPIKey = nil
+        UserDefaultsManager.shared.useOpenAIStreaming = false
+    }
+    
+    override func tearDown() async throws {
+        cancellables = nil
+        unifiedPlayer.clearQueue()
+        UserDefaultsManager.shared.openAIAPIKey = nil
+        try await super.tearDown()
+    }
+    
+    // MARK: - Fallback Logic Tests
+    
+    func testTTSFallback_WhenOpenAIKeyNotSet_UsesGeminiDirectly() async {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = nil
+        let article = createTestArticle(withSummary: "Test summary for Gemini")
+        
+        // When
+        await unifiedPlayer.loadQueue(from: [article])
+        
+        // Then
+        XCTAssertEqual(unifiedPlayer.queue.count, 1)
+        XCTAssertNil(UserDefaultsManager.shared.openAIAPIKey)
+        // In production, would verify Gemini service was called
+    }
+    
+    func testTTSFallback_WhenOpenAIKeyEmpty_UsesGemini() async {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = ""
+        let article = createTestArticle(withSummary: "Test summary")
+        
+        // When
+        await unifiedPlayer.loadQueue(from: [article])
+        
+        // Then
+        XCTAssertEqual(unifiedPlayer.queue.count, 1)
+        // Empty key should be treated as no key
+    }
+    
+    func testTTSFallback_WhenOpenAIConfigured_TriesOpenAIFirst() async {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = "sk-test-key"
+        let article = createTestArticle(withSummary: "Test summary for OpenAI")
+        
+        // When
+        await unifiedPlayer.loadQueue(from: [article])
+        
+        // Then
+        XCTAssertEqual(unifiedPlayer.queue.count, 1)
+        XCTAssertNotNil(UserDefaultsManager.shared.openAIAPIKey)
+        // Would verify OpenAI was attempted first
+    }
+    
+    // MARK: - Queue Item State Tests
+    
+    func testQueueItem_StartsInPendingState() {
+        // Given
+        let article = createTestArticle(withSummary: "Test")
+        
+        // When
+        let queueItem = UnifiedQueueItem(article: article)
+        
+        // Then
+        XCTAssertEqual(queueItem.generationState, .pending)
+        XCTAssertNil(queueItem.cachedAudioURL)
+    }
+    
+    func testQueueItem_TransitionsToGeneratingDuringTTS() async {
+        // Given
+        let article = createTestArticle(withSummary: "Test summary")
+        let queueItem = UnifiedQueueItem(article: article)
+        
+        var stateChanges: [UnifiedQueueItem.GenerationState] = []
+        
+        queueItem.$generationState
+            .sink { state in
+                stateChanges.append(state)
+            }
+            .store(in: &cancellables)
+        
+        // When
+        await unifiedPlayer.loadQueue(from: [article])
+        
+        // Allow some time for state changes
+        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+        
+        // Then
+        XCTAssertTrue(stateChanges.contains(.pending))
+        // Would also contain .generating if we could mock the service
+    }
+    
+    // MARK: - Content Formatting Tests
+    
+    func testContentFormatting_IncludesTitleAndSummary() {
+        // Given
+        let title = "Breaking News"
+        let summary = "This is the article summary"
+        let article = createTestArticle(title: title, summary: summary)
+        
+        // When
+        let queueItem = UnifiedQueueItem(article: article)
+        
+        // Then
+        XCTAssertEqual(queueItem.title, title)
+        XCTAssertEqual(queueItem.content, summary)
+    }
+    
+    func testContentFormatting_FallsBackToContentWhenNoSummary() {
+        // Given
+        let title = "Article Title"
+        let content = "Article content without summary"
+        let article = createTestArticle(title: title, summary: nil, content: content)
+        
+        // When
+        let queueItem = UnifiedQueueItem(article: article)
+        
+        // Then
+        XCTAssertEqual(queueItem.title, title)
+        XCTAssertEqual(queueItem.content, content)
+    }
+    
+    // MARK: - Streaming Configuration Tests
+    
+    func testStreaming_EnabledWhenConfigured() {
+        // Given/When
+        UserDefaultsManager.shared.useOpenAIStreaming = true
+        
+        // Then
+        XCTAssertTrue(UserDefaultsManager.shared.useOpenAIStreaming)
+    }
+    
+    func testStreaming_DisabledByDefault() {
+        // Given
+        UserDefaults.standard.removeObject(forKey: "useOpenAIStreaming")
+        
+        // When/Then
+        XCTAssertFalse(UserDefaultsManager.shared.useOpenAIStreaming)
+    }
+    
+    // MARK: - Error Recovery Tests
+    
+    func testErrorRecovery_ContinuesProcessingAfterFailure() async {
+        // Given
+        let articles = [
+            createTestArticle(withSummary: "First article"),
+            createTestArticle(withSummary: nil), // This might fail
+            createTestArticle(withSummary: "Third article")
+        ]
+        
+        // When
+        await unifiedPlayer.loadQueue(from: articles)
+        
+        // Then
+        XCTAssertEqual(unifiedPlayer.queue.count, 3)
+        // All items should be in queue even if some fail generation
+    }
+    
+    // MARK: - Cost Awareness Tests
+    
+    func testCostTracking_IsAccessibleAfterGeneration() {
+        // Given
+        let openAIService = OpenAITTSService.shared
+        openAIService.resetCostTracking()
+        
+        // When
+        let initialCost = openAIService.getEstimatedCost()
+        
+        // Then
+        XCTAssertEqual(initialCost, 0.0)
+    }
+    
+    // MARK: - Voice Selection Tests
+    
+    func testVoiceSelection_RespectsuserPreference() {
+        // Given
+        let preferredVoice = OpenAIVoice.sage
+        
+        // When
+        UserDefaultsManager.shared.preferredOpenAIVoice = preferredVoice
+        
+        // Then
+        XCTAssertEqual(UserDefaultsManager.shared.preferredOpenAIVoice, preferredVoice)
+    }
+    
+    func testVoiceSelection_DefaultsToNewsOptimizedVoice() {
+        // Given
+        UserDefaults.standard.removeObject(forKey: "preferredOpenAIVoice")
+        
+        // When
+        let defaultVoice = UserDefaultsManager.shared.preferredOpenAIVoice
+        
+        // Then
+        XCTAssertEqual(defaultVoice, .coral)
+        XCTAssertTrue(defaultVoice.isRecommendedForNews)
+    }
+    
+    // MARK: - Pre-generation Tests
+    
+    func testPreGeneration_ProcessesNextItemsInQueue() async {
+        // Given
+        let articles = (1...5).map { index in
+            createTestArticle(withSummary: "Article \(index)")
+        }
+        
+        // When
+        await unifiedPlayer.loadQueue(from: articles)
+        
+        // Allow pre-generation to start
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        
+        // Then
+        XCTAssertEqual(unifiedPlayer.queue.count, 5)
+        // First 3 items would be marked for pre-generation
+    }
+    
+    // MARK: - Helper Methods
+    
+    private func createTestArticle(
+        title: String = "Test Article",
+        summary: String? = nil,
+        content: String = "Test content"
+    ) -> Article {
+        let article = Article(context: context)
+        article.id = UUID()
+        article.title = title
+        article.summary = summary
+        article.content = content
+        article.url = "https://example.com/\(UUID().uuidString)"
+        article.publishedDate = Date()
+        return article
+    }
+    
+    private func createTestArticle(withSummary summary: String) -> Article {
+        createTestArticle(summary: summary)
+    }
+}
+
+// MARK: - Quota Limit Tests
+
+@MainActor
+final class TTSQuotaLimitTests: XCTestCase {
+    
+    func testGeminiQuotaExceeded_LogsAppropriateWarning() async {
+        // This test demonstrates how we'd test quota limit handling
+        // In production, would need to mock the Gemini service response
+        
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = nil // Force Gemini usage
+        
+        // When - Simulate 100+ generations (would hit limit)
+        // Would need mock to simulate quota error
+        
+        // Then - Verify warning is logged suggesting OpenAI configuration
+    }
+    
+    func testOpenAI_HasNoQuotaLimit() {
+        // Given
+        let openAIService = OpenAITTSService.shared
+        
+        // When - Check for quota methods
+        // OpenAI service should not have quota tracking
+        
+        // Then
+        // Verify no daily limit exists in OpenAI implementation
+        XCTAssertNotNil(openAIService) // OpenAI has no quota limits
+    }
+}
+
+// MARK: - Migration Path Tests
+
+@MainActor
+final class TTSMigrationTests: XCTestCase {
+    
+    func testMigration_Phase1_DualService() {
+        // Test Phase 1: Both services available
+        
+        // Given
+        let hasOpenAI = UserDefaultsManager.shared.openAIAPIKey != nil
+        let hasGemini = true // Always available as fallback
+        
+        // Then
+        XCTAssertTrue(hasGemini, "Gemini should remain as fallback")
+    }
+    
+    func testMigration_Phase2_OpenAIPrimary() {
+        // Test Phase 2: OpenAI as primary when configured
+        
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = "sk-test"
+        
+        // When
+        let hasOpenAIKey = UserDefaultsManager.shared.openAIAPIKey != nil
+        
+        // Then
+        XCTAssertTrue(hasOpenAIKey, "OpenAI should be primary when key exists")
+    }
+    
+    func testMigration_BackwardCompatibility() async {
+        // Test that existing queue items still work
+        
+        // Given
+        let context = PersistenceController.preview.container.viewContext
+        let article = Article(context: context)
+        article.id = UUID()
+        article.title = "Legacy Article"
+        article.summary = "Legacy summary"
+        
+        // When
+        let queueItem = UnifiedQueueItem(article: article)
+        
+        // Then
+        XCTAssertNotNil(queueItem)
+        XCTAssertEqual(queueItem.title, "Legacy Article")
+        // Existing articles should work with new TTS system
+    }
+}

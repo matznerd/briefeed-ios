@@ -7,83 +7,51 @@
 
 import SwiftUI
 
+/// Simple playing indicator with smooth pulse animation
+/// Replaces the previous random waveform animation
 struct WaveformMiniView: View {
-    let numberOfBars: Int = 5
+    let numberOfBars: Int = 3
     let isPlaying: Bool
     let color: Color
-    
-    @State private var animationAmounts: [CGFloat]
-    
+
+    @State private var isPulsing: Bool = false
+
     init(isPlaying: Bool, color: Color = .accentColor) {
         self.isPlaying = isPlaying
         self.color = color
-        _animationAmounts = State(initialValue: Array(repeating: 0.3, count: 5))
     }
-    
+
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 3) {
             ForEach(0..<numberOfBars, id: \.self) { index in
-                RoundedRectangle(cornerRadius: 1)
+                RoundedRectangle(cornerRadius: 1.5)
                     .fill(color)
-                    .frame(width: 3)
-                    .scaleEffect(x: 1, y: animationAmounts[index], anchor: .bottom)
+                    .frame(width: 3, height: barHeight(for: index))
                     .animation(
-                        isPlaying ?
-                            Animation
-                                .easeInOut(duration: Double.random(in: 0.3...0.6))
-                                .repeatForever(autoreverses: true)
-                                .delay(Double(index) * 0.05)
-                        : .easeOut(duration: 0.2),
-                        value: animationAmounts[index]
+                        isPlaying ? .easeInOut(duration: 0.6).repeatForever(autoreverses: true).delay(Double(index) * 0.15) : .easeOut(duration: 0.2),
+                        value: isPulsing
                     )
             }
         }
         .frame(height: 16)
         .onAppear {
             if isPlaying {
-                startAnimating()
+                isPulsing = true
             }
         }
         .onChange(of: isPlaying) { newValue in
-            if newValue {
-                startAnimating()
-            } else {
-                stopAnimating()
-            }
+            isPulsing = newValue
         }
     }
-    
-    private func startAnimating() {
-        for index in 0..<numberOfBars {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * 0.05) {
-                withAnimation {
-                    animationAmounts[index] = CGFloat.random(in: 0.4...1.0)
-                }
-            }
-        }
-        
-        // Continue updating animation values
-        if isPlaying {
-            Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { timer in
-                if !isPlaying {
-                    timer.invalidate()
-                    return
-                }
-                
-                for index in 0..<numberOfBars {
-                    withAnimation(.easeInOut(duration: Double.random(in: 0.3...0.6))) {
-                        animationAmounts[index] = CGFloat.random(in: 0.4...1.0)
-                    }
-                }
-            }
-        }
-    }
-    
-    private func stopAnimating() {
-        for index in 0..<numberOfBars {
-            withAnimation(.easeOut(duration: 0.2)) {
-                animationAmounts[index] = 0.3
-            }
+
+    private func barHeight(for index: Int) -> CGFloat {
+        if isPulsing {
+            // Staggered heights when playing: short, tall, medium
+            let heights: [CGFloat] = [8, 14, 10]
+            return heights[index]
+        } else {
+            // All bars same height when paused
+            return 6
         }
     }
 }

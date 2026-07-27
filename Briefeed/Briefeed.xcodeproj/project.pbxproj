@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		8C0090FE2F383EE600405E04 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 8C0090FD2F383EE600405E04 /* FluidAudio */; };
+		8C3D090E2E48490400819F12 /* SwiftAudioEx in Frameworks */ = {isa = PBXBuildFile; productRef = 8C3D090D2E48490400819F12 /* SwiftAudioEx */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		8CA65EFB2E075E5F005E6FC0 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -24,14 +29,37 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		0DCC5A17337D9B600439CE10 /* SwipeInteractionUITests.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; lastKnownFileType = sourcecode.swift; name = SwipeInteractionUITests.swift; path = SwipeInteractionUITests.swift; sourceTree = "<group>"; };
+		3A6A9E39A0C2AE3A5F99065C /* ProcessingChamberTests.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; path = ProcessingChamberTests.swift; sourceTree = "<group>"; };
+		405748BBBA74F0E559FE568C /* TranscriptReaderView.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; path = TranscriptReaderView.swift; sourceTree = "<group>"; };
+		5FD6AF6E30600E3150F62BFE /* SwipeInteractionTests.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; lastKnownFileType = sourcecode.swift; name = SwipeInteractionTests.swift; path = SwipeInteractionTests.swift; sourceTree = "<group>"; };
 		8CA65EE52E075E5C005E6FC0 /* Briefeed.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Briefeed.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8CA65EFA2E075E5F005E6FC0 /* BriefeedTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BriefeedTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8CA65F042E075E5F005E6FC0 /* BriefeedUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BriefeedUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A44452AE8CBDB208474ABA63 /* AudioPipelineFlowTests.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; path = AudioPipelineFlowTests.swift; sourceTree = "<group>"; };
+		D8530265749561B679D23BFD /* FlingTransition.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; path = FlingTransition.swift; sourceTree = "<group>"; };
+		D9AFA415EBE268F49729A001 /* KokoroTTSIntegrationTests.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; path = KokoroTTSIntegrationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		8CC555A32E4A619600D7B3CB /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Core/Services/Audio/AudioStreamingService.swift.disabled,
+				Core/Services/Audio/OpenAITTSService.swift.backup,
+				Core/Services/Audio/OpenAITTSStreamingService.swift.backup2,
+				Info.plist,
+			);
+			target = 8CA65EE42E075E5C005E6FC0 /* Briefeed */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		8CA65EE72E075E5C005E6FC0 /* Briefeed */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				8CC555A32E4A619600D7B3CB /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
+			);
 			path = Briefeed;
 			sourceTree = "<group>";
 		};
@@ -52,6 +80,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8C0090FE2F383EE600405E04 /* FluidAudio in Frameworks */,
+				8C3D090E2E48490400819F12 /* SwiftAudioEx in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -72,6 +102,50 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		2006D082ADB86E6292880BFE /* TDD */ = {
+			isa = PBXGroup;
+			children = (
+				A44452AE8CBDB208474ABA63 /* AudioPipelineFlowTests.swift */,
+				3A6A9E39A0C2AE3A5F99065C /* ProcessingChamberTests.swift */,
+				D9AFA415EBE268F49729A001 /* KokoroTTSIntegrationTests.swift */,
+				5FD6AF6E30600E3150F62BFE /* SwipeInteractionTests.swift */,
+			);
+			path = TDD;
+			sourceTree = "<group>";
+		};
+		2AE9CC3D4C13812557A64030 /* Audio */ = {
+			isa = PBXGroup;
+			children = (
+				405748BBBA74F0E559FE568C /* TranscriptReaderView.swift */,
+			);
+			path = Audio;
+			sourceTree = "<group>";
+		};
+		34E0C7B34293832E4D4E90A5 /* BriefeedUITests */ = {
+			isa = PBXGroup;
+			children = (
+				0DCC5A17337D9B600439CE10 /* SwipeInteractionUITests.swift */,
+			);
+			name = BriefeedUITests;
+			path = BriefeedUITests;
+			sourceTree = "<group>";
+		};
+		3E2771A476EDA7B861BF9AC8 /* BriefeedTests */ = {
+			isa = PBXGroup;
+			children = (
+				2006D082ADB86E6292880BFE /* TDD */,
+			);
+			path = BriefeedTests;
+			sourceTree = "<group>";
+		};
+		49C20F016D254CB2CB183599 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				2AE9CC3D4C13812557A64030 /* Audio */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
 		8CA65EDC2E075E5C005E6FC0 = {
 			isa = PBXGroup;
 			children = (
@@ -79,6 +153,9 @@
 				8CA65EFD2E075E5F005E6FC0 /* BriefeedTests */,
 				8CA65F072E075E5F005E6FC0 /* BriefeedUITests */,
 				8CA65EE62E075E5C005E6FC0 /* Products */,
+				ACDB452CBE32D5648DF8C330 /* Briefeed */,
+				3E2771A476EDA7B861BF9AC8 /* BriefeedTests */,
+				34E0C7B34293832E4D4E90A5 /* BriefeedUITests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -92,6 +169,31 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		97D29B135B0BF82AC7784450 /* Utilities */ = {
+			isa = PBXGroup;
+			children = (
+				D8530265749561B679D23BFD /* FlingTransition.swift */,
+			);
+			path = Utilities;
+			sourceTree = "<group>";
+		};
+		ACDB452CBE32D5648DF8C330 /* Briefeed */ = {
+			isa = PBXGroup;
+			children = (
+				49C20F016D254CB2CB183599 /* Features */,
+				C8DF3399D96D2406538E8E18 /* Core */,
+			);
+			path = Briefeed;
+			sourceTree = "<group>";
+		};
+		C8DF3399D96D2406538E8E18 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				97D29B135B0BF82AC7784450 /* Utilities */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -99,6 +201,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 8CA65F0E2E075E5F005E6FC0 /* Build configuration list for PBXNativeTarget "Briefeed" */;
 			buildPhases = (
+				8CC555CF2E4D279400D7B3CB /* ShellScript */,
 				8CA65EE12E075E5C005E6FC0 /* Sources */,
 				8CA65EE22E075E5C005E6FC0 /* Frameworks */,
 				8CA65EE32E075E5C005E6FC0 /* Resources */,
@@ -112,6 +215,8 @@
 			);
 			name = Briefeed;
 			packageProductDependencies = (
+				8C3D090D2E48490400819F12 /* SwiftAudioEx */,
+				8C0090FD2F383EE600405E04 /* FluidAudio */,
 			);
 			productName = Briefeed;
 			productReference = 8CA65EE52E075E5C005E6FC0 /* Briefeed.app */;
@@ -195,6 +300,10 @@
 			);
 			mainGroup = 8CA65EDC2E075E5C005E6FC0;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				8C3D090C2E48490400819F12 /* XCRemoteSwiftPackageReference "SwiftAudioEx" */,
+				8C0090FC2F383EE600405E04 /* XCRemoteSwiftPackageReference "FluidAudio" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 8CA65EE62E075E5C005E6FC0 /* Products */;
 			projectDirPath = "";
@@ -230,6 +339,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		8CC555CF2E4D279400D7B3CB /* ShellScript */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 8;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+			shellPath = /bin/sh;
+			shellScript = "# Check critical functionality before build\n  if [ -f\n  \"${PROJECT_DIR}/Scripts/pre_build_checks.sh\" ];\n   then\n\n  \"${PROJECT_DIR}/Scripts/pre_build_checks.sh\"\n  else\n      echo \"Warning: Pre-build checks script not found\"\n  fi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		8CA65EE12E075E5C005E6FC0 /* Sources */ = {
@@ -399,6 +528,7 @@
 				DEVELOPMENT_TEAM = X273WR8MT2;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Briefeed/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -428,6 +558,7 @@
 				DEVELOPMENT_TEAM = X273WR8MT2;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Briefeed/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -558,6 +689,38 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		8C0090FC2F383EE600405E04 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.14.5;
+			};
+		};
+		8C3D090C2E48490400819F12 /* XCRemoteSwiftPackageReference "SwiftAudioEx" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/doublesymmetry/SwiftAudioEx";
+			requirement = {
+				kind = exactVersion;
+				version = 1.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		8C0090FD2F383EE600405E04 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8C0090FC2F383EE600405E04 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
+		8C3D090D2E48490400819F12 /* SwiftAudioEx */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8C3D090C2E48490400819F12 /* XCRemoteSwiftPackageReference "SwiftAudioEx" */;
+			productName = SwiftAudioEx;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 8CA65EDD2E075E5C005E6FC0 /* Project object */;
 }

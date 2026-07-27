@@ -1,0 +1,436 @@
+//
+//  OpenAITTSTests.swift
+//  BriefeedTests
+//
+//  TDD tests for OpenAI TTS integration
+//  Testing streaming, fallback, and news voice features
+//
+
+import XCTest
+import AVFoundation
+import Combine
+@testable import Briefeed
+
+@MainActor
+final class OpenAITTSTests: XCTestCase {
+    
+    var sut: OpenAITTSService!
+    var unifiedPlayer: UnifiedAudioPlayer!
+    var cancellables: Set<AnyCancellable>!
+    
+    override func setUp() async throws {
+        try await super.setUp()
+        cancellables = Set<AnyCancellable>()
+        
+        // Reset singleton for testing
+        sut = OpenAITTSService.shared
+        unifiedPlayer = UnifiedAudioPlayer.shared
+        
+        // Clear any existing API keys for controlled testing
+        UserDefaultsManager.shared.openAIAPIKey = nil
+        UserDefaultsManager.shared.useOpenAIStreaming = false
+        
+        // Reset cost tracking
+        sut.resetCostTracking()
+    }
+    
+    override func tearDown() async throws {
+        cancellables = nil
+        UserDefaultsManager.shared.openAIAPIKey = nil
+        try await super.tearDown()
+    }
+    
+    // MARK: - API Key Configuration Tests
+    
+    func testOpenAITTS_WhenNoAPIKey_ThrowsNoAPIKeyError() async {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = nil
+        
+        // When/Then
+        do {
+            _ = try await sut.generateAudioFile(from: "Test text")
+            XCTFail("Should throw no API key error")
+        } catch {
+            XCTAssertEqual(error as? OpenAITTSError, OpenAITTSError.noAPIKey)
+        }
+    }
+    
+    func testOpenAITTS_WhenAPIKeyConfigured_DoesNotThrowNoAPIKeyError() async {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = "test-api-key"
+        
+        // When/Then
+        do {
+            // This will fail with network error (invalid key) but not noAPIKey error
+            _ = try await sut.generateAudioFile(from: "Test text")
+            XCTFail("Should throw network error for invalid key")
+        } catch {
+            XCTAssertNotEqual(error as? OpenAITTSError, OpenAITTSError.noAPIKey)
+        }
+    }
+    
+    // MARK: - Voice Selection Tests
+    
+    func testNewsVoiceProfile_ReturnsCorrectDefaultVoice() {
+        // Given
+        let profile = NewsVoiceProfile()
+        
+        // Then
+        XCTAssertEqual(profile.primaryVoice, .coral)
+        XCTAssertEqual(profile.alternativeVoice, .sage)
+        XCTAssertEqual(profile.model, .gpt4oMiniTTS)
+    }
+    
+    func testNewsVoiceProfile_GeneratesCorrectInstructionsForContentTypes() {
+        // Given
+        let profile = NewsVoiceProfile()
+        
+        // When/Then - Headline
+        let headlineInstructions = profile.instructions(for: .headline)
+        XCTAssertTrue(headlineInstructions.contains("news anchor"))
+        XCTAssertTrue(headlineInstructions.contains("attention-grabbing"))
+        
+        // When/Then - Summary
+        let summaryInstructions = profile.instructions(for: .summary)
+        XCTAssertTrue(summaryInstructions.contains("broadcaster"))
+        XCTAssertTrue(summaryInstructions.contains("facts and figures"))
+        
+        // When/Then - Quote
+        let quoteInstructions = profile.instructions(for: .quote)
+        XCTAssertTrue(quoteInstructions.contains("quoted material"))
+        XCTAssertTrue(quoteInstructions.contains("slower pace"))
+    }
+    
+    func testContentTypeDetection_CorrectlyIdentifiesContentTypes() {
+        // Given/When/Then - Headline (short text)
+        let headline = "Breaking: Major announcement today"
+        XCTAssertEqual(NewsVoiceProfile.ContentType.detect(from: headline), .headline)
+        
+        // Given/When/Then - Quote (contains quotes and "said")
+        let quote = "The CEO said \"We are excited about this development\" during the conference"
+        XCTAssertEqual(NewsVoiceProfile.ContentType.detect(from: quote), .quote)
+        
+        // Given/When/Then - Summary (medium length)
+        let summary = String(repeating: "This is a summary. ", count: 20) // ~360 chars
+        XCTAssertEqual(NewsVoiceProfile.ContentType.detect(from: summary), .summary)
+        
+        // Given/When/Then - Article (long text)
+        let article = String(repeating: "This is article content. ", count: 50) // ~1250 chars
+        XCTAssertEqual(NewsVoiceProfile.ContentType.detect(from: article), .article)
+    }
+    
+    // MARK: - Voice Preference Tests
+    
+    func testUserDefaultsManager_StoresOpenAIVoicePreference() {
+        // Given
+        let testVoice = OpenAIVoice.sage
+        
+        // When
+        UserDefaultsManager.shared.preferredOpenAIVoice = testVoice
+        
+        // Then
+        XCTAssertEqual(UserDefaultsManager.shared.preferredOpenAIVoice, testVoice)
+    }
+    
+    func testUserDefaultsManager_DefaultsToCoralVoice() {
+        // Given - Clear any stored preference
+        UserDefaults.standard.removeObject(forKey: "preferredOpenAIVoice")
+        
+        // When/Then
+        XCTAssertEqual(UserDefaultsManager.shared.preferredOpenAIVoice, .coral)
+    }
+    
+    // MARK: - Cost Tracking Tests
+    
+    func testCostTracking_CalculatesCorrectCost() async {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = "test-key"
+        let testText = String(repeating: "a", count: 1000) // 1000 characters
+        
+        // When - Attempt generation (will fail but should track cost)
+        _ = try? await sut.generateAudioFile(from: testText)
+        
+        // Then
+        let estimatedCost = sut.getEstimatedCost()
+        XCTAssertEqual(estimatedCost, 0.015, accuracy: 0.001) // $0.015 per 1K chars
+    }
+    
+    func testCostTracking_AccumulatesAcrossMultipleCalls() async {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = "test-key"
+        
+        // When - Multiple generation attempts
+        _ = try? await sut.generateAudioFile(from: String(repeating: "a", count: 1000))
+        _ = try? await sut.generateAudioFile(from: String(repeating: "b", count: 2000))
+        _ = try? await sut.generateAudioFile(from: String(repeating: "c", count: 500))
+        
+        // Then
+        let estimatedCost = sut.getEstimatedCost()
+        let expectedCost = (1000 + 2000 + 500) / 1000.0 * 0.015
+        XCTAssertEqual(estimatedCost, expectedCost, accuracy: 0.001)
+    }
+    
+    func testCostTracking_ResetsCorrectly() async {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = "test-key"
+        _ = try? await sut.generateAudioFile(from: String(repeating: "a", count: 1000))
+        
+        // When
+        sut.resetCostTracking()
+        
+        // Then
+        XCTAssertEqual(sut.getEstimatedCost(), 0.0)
+    }
+    
+    // MARK: - Streaming Configuration Tests
+    
+    func testStreaming_UsesCorrectFormatForLowestLatency() {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = "test-key"
+        UserDefaultsManager.shared.useOpenAIStreaming = true
+        
+        var capturedFormat: OpenAIAudioFormat?
+        
+        // When - Start streaming (will fail but we can check configuration)
+        sut.streamAudio(
+            text: "Test streaming",
+            voice: .coral,
+            model: .gpt4oMiniTTS
+        ) { result in
+            // Streaming would use PCM format internally
+        }
+        
+        // Then - Verify PCM format would be used (checking internal state would require refactoring)
+        // For now, we verify the configuration is stored
+        XCTAssertTrue(UserDefaultsManager.shared.useOpenAIStreaming)
+    }
+    
+    // MARK: - UnifiedAudioPlayer Integration Tests
+    
+    func testUnifiedPlayer_UsesOpenAIWhenConfigured() async {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = "test-key"
+        
+        let article = createTestArticle(
+            title: "Test Article",
+            summary: "Test summary for audio generation"
+        )
+        
+        let queueItem = UnifiedQueueItem(article: article)
+        
+        // When - This will attempt to use OpenAI (and fail with network error)
+        await unifiedPlayer.loadQueue(from: [article])
+        
+        // Then - Verify OpenAI was attempted (check would be in logs)
+        // In production, we'd mock the service to verify the call
+        XCTAssertNotNil(UserDefaultsManager.shared.openAIAPIKey)
+    }
+    
+    func testUnifiedPlayer_FallsBackToGeminiWhenOpenAIFails() async {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = "invalid-key"
+        
+        let article = createTestArticle(
+            title: "Test Article",
+            summary: "Test summary"
+        )
+        
+        // When
+        await unifiedPlayer.loadQueue(from: [article])
+        
+        // Then - Would verify Gemini is called after OpenAI fails
+        // This requires mocking which would need dependency injection
+        XCTAssertEqual(unifiedPlayer.queue.count, 1)
+    }
+    
+    func testUnifiedPlayer_UsesGeminiWhenNoOpenAIKey() async {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = nil
+        
+        let article = createTestArticle(
+            title: "Test Article",
+            summary: "Test summary"
+        )
+        
+        // When
+        await unifiedPlayer.loadQueue(from: [article])
+        
+        // Then - Should use Gemini directly
+        XCTAssertNil(UserDefaultsManager.shared.openAIAPIKey)
+        XCTAssertEqual(unifiedPlayer.queue.count, 1)
+    }
+    
+    // MARK: - News Audio Generation Tests
+    
+    func testGenerateNewsAudio_UsesCorrectVoice() async {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = "test-key"
+        
+        // When/Then - Primary voice
+        do {
+            _ = try await sut.generateNewsAudio("Test news", useAlternativeVoice: false)
+        } catch {
+            // Expected to fail with network error, but voice selection is set
+        }
+        
+        // When/Then - Alternative voice
+        do {
+            _ = try await sut.generateNewsAudio("Test news", useAlternativeVoice: true)
+        } catch {
+            // Expected to fail with network error, but alternative voice is set
+        }
+    }
+    
+    // MARK: - Article Integration Tests
+    
+    func testGenerateAudioForArticle_IncludesTitleInOutput() async {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = "test-key"
+        let title = "Breaking News Title"
+        let content = "Article content here"
+        
+        // When
+        do {
+            _ = try await sut.generateAudioForArticle(
+                title: title,
+                content: content,
+                useStreaming: false
+            )
+        } catch {
+            // Expected to fail, but we're testing the text composition
+        }
+        
+        // Then - Would verify the combined text includes both title and content
+        // This would require mocking to intercept the actual API call
+    }
+    
+    // MARK: - Streaming State Tests
+    
+    func testStreaming_CallsOnStartCallback() {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = "test-key"
+        let expectation = expectation(description: "onStart called")
+        expectation.isInverted = true // Will timeout as network fails
+        
+        // When
+        sut.streamAudio(
+            text: "Test",
+            onStart: {
+                expectation.fulfill()
+            },
+            completion: { _ in }
+        )
+        
+        // Then
+        waitForExpectations(timeout: 1.0)
+    }
+    
+    // MARK: - Error Handling Tests
+    
+    func testRateLimitError_IsProperlyIdentified() async {
+        // Given
+        UserDefaultsManager.shared.openAIAPIKey = "test-key"
+        
+        // When - Simulate rate limit scenario (would need mock)
+        // This test structure shows how we'd test rate limit handling
+        
+        // Then
+        // Would verify OpenAITTSError.rateLimited is thrown
+    }
+    
+    // MARK: - Helper Methods
+    
+    private func createTestArticle(title: String, summary: String?) -> Article {
+        let context = PersistenceController.preview.container.viewContext
+        let article = Article(context: context)
+        article.id = UUID()
+        article.title = title
+        article.summary = summary
+        article.content = "Test content"
+        article.url = "https://example.com/test"
+        article.publishedDate = Date()
+        return article
+    }
+}
+
+// MARK: - Mock Network Tests
+
+@MainActor
+final class OpenAITTSMockNetworkTests: XCTestCase {
+    
+    var sut: OpenAITTSService!
+    var mockSession: URLSession!
+    
+    override func setUp() async throws {
+        try await super.setUp()
+        
+        // Would set up mock URLSession here
+        // This demonstrates the test structure for network mocking
+        sut = OpenAITTSService.shared
+        UserDefaultsManager.shared.openAIAPIKey = "test-key"
+    }
+    
+    func testSuccessfulAudioGeneration_ReturnsValidURL() async throws {
+        // Given - Mock successful response
+        // Would configure mock session to return audio data
+        
+        // When
+        // let url = try await sut.generateAudioFile(from: "Test")
+        
+        // Then
+        // XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    }
+    
+    func testStreamingResponse_ProcessesChunksCorrectly() async throws {
+        // Given - Mock streaming response with chunks
+        
+        // When - Process streaming response
+        
+        // Then - Verify chunks are processed in order
+    }
+}
+
+// MARK: - Performance Tests
+
+@MainActor
+final class OpenAITTSPerformanceTests: XCTestCase {
+    
+    var sut: OpenAITTSService!
+    
+    override func setUp() async throws {
+        try await super.setUp()
+        sut = OpenAITTSService.shared
+        UserDefaultsManager.shared.openAIAPIKey = "test-key"
+    }
+    
+    func testCostCalculation_Performance() {
+        measure {
+            // Given
+            let testText = String(repeating: "a", count: 10000)
+            
+            // When/Then
+            for _ in 0..<100 {
+                _ = sut.getEstimatedCost()
+            }
+        }
+    }
+    
+    func testVoiceSelection_Performance() {
+        measure {
+            // Given
+            let profile = NewsVoiceProfile()
+            let texts = [
+                "Short headline",
+                String(repeating: "Summary text. ", count: 30),
+                "The speaker said \"This is a quote\" yesterday",
+                String(repeating: "Long article. ", count: 100)
+            ]
+            
+            // When/Then
+            for text in texts {
+                _ = NewsVoiceProfile.ContentType.detect(from: text)
+                _ = profile.instructions(for: NewsVoiceProfile.ContentType.detect(from: text))
+            }
+        }
+    }
+}

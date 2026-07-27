@@ -47,4 +47,28 @@ extension String {
         }
         return nil
     }
+    
+    var extractedDomain: String? {
+        guard let url = URL(string: self),
+              let host = url.host else {
+            return nil
+        }
+        
+        // Remove www. prefix if present
+        if host.hasPrefix("www.") {
+            return String(host.dropFirst(4))
+        }
+        
+        // Remove mobile. prefix if present  
+        if host.hasPrefix("mobile.") {
+            return String(host.dropFirst(7))
+        }
+        
+        // Remove m. prefix if present (mobile sites)
+        if host.hasPrefix("m.") {
+            return String(host.dropFirst(2))
+        }
+        
+        return host
+    }
 }

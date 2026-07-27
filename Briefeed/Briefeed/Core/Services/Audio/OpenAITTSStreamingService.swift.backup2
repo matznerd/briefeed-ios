@@ -1,0 +1,336 @@
+//
+//  OpenAITTSStreamingService.swift
+//  Briefeed
+//
+//  Streaming implementation for OpenAI TTS with chunked transfer encoding
+//  Provides lower latency by processing audio chunks as they arrive
+//
+
+import Foundation
+import AVFoundation
+import Combine
+
+// MARK: - Streaming Delegate
+
+protocol OpenAITTSStreamingDelegate: AnyObject {
+    func streamingService(_ service: OpenAITTSStreamingService, didReceiveAudioChunk data: Data)
+    func streamingService(_ service: OpenAITTSStreamingService, didCompleteWithURL url: URL)
+    func streamingService(_ service: OpenAITTSStreamingService, didFailWithError error: Error)
+}
+
+// MARK: - Streaming Service
+
+@MainActor
+final class OpenAITTSStreamingService: NSObject {
+    
+    // MARK: - Properties
+    
+    weak var delegate: OpenAITTSStreamingDelegate?
+    
+    private var audioEngine: AVAudioEngine?
+    private var audioPlayerNode: AVAudioPlayerNode?
+    private var audioFormat: AVAudioFormat?
+    private var audioFile: AVAudioFile?
+    private var audioBuffer: AVAudioPCMBuffer?
+    
+    private var dataTask: URLSessionDataTask?
+    private var session: URLSession!
+    private var receivedData = Data()
+    private var tempFileURL: URL?
+    
+    private let apiKey: String
+    private let baseURL = "https://api.openai.com/v1/audio/speech"
+    
+    // Streaming configuration
+    private let chunkSize = 4096 // 4KB chunks
+    private let pcmSampleRate: Double = 24000 // 24kHz for PCM
+    
+    // MARK: - Initialization
+    
+    override init() {
+        self.apiKey = UserDefaultsManager.shared.openAIAPIKey ?? ""
+        super.init()
+        
+        // Configure URLSession for streaming
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 60
+        configuration.timeoutIntervalForResource = 300
+        self.session = URLSession(configuration: configuration, delegate: self, delegateQueue: .main)
+        
+        setupAudioEngine()
+    }
+    
+    // MARK: - Audio Engine Setup
+    
+    private func setupAudioEngine() {
+        audioEngine = AVAudioEngine()
+        audioPlayerNode = AVAudioPlayerNode()
+        
+        guard let engine = audioEngine,
+              let playerNode = audioPlayerNode else { return }
+        
+        engine.attach(playerNode)
+        
+        // PCM format for lowest latency
+        audioFormat = AVAudioFormat(
+            commonFormat: .pcmFormatInt16,
+            sampleRate: pcmSampleRate,
+            channels: 1,
+            interleaved: false
+        )
+        
+        if let format = audioFormat {
+            engine.connect(playerNode, to: engine.mainMixerNode, format: format)
+        }
+        
+        do {
+            try engine.start()
+        } catch {
+            print("[OpenAITTSStreaming] Failed to start audio engine: \(error)")
+        }
+    }
+    
+    // MARK: - Streaming Methods
+    
+    func streamAudio(
+        from text: String,
+        voice: OpenAIVoice = .coral,
+        model: OpenAITTSModel = .tts1
+    ) {
+        guard !apiKey.isEmpty else {
+            delegate?.streamingService(self, didFailWithError: OpenAITTSError.noAPIKey)
+            return
+        }
+        
+        // Cancel any existing stream
+        cancelStreaming()
+        
+        // Reset data
+        receivedData = Data()
+        tempFileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).pcm")
+        
+        // Create request
+        var request = URLRequest(url: URL(string: baseURL)!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Request PCM format for streaming
+        let body: [String: Any] = [
+            "model": model.rawValue,
+            "input": text,
+            "voice": voice.rawValue,
+            "response_format": "pcm"  // PCM for lowest latency
+        ]
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            delegate?.streamingService(self, didFailWithError: error)
+            return
+        }
+        
+        // Start streaming
+        dataTask = session.dataTask(with: request)
+        dataTask?.resume()
+        
+        print("[OpenAITTSStreaming] Started streaming for \(text.count) characters")
+    }
+    
+    func cancelStreaming() {
+        dataTask?.cancel()
+        dataTask = nil
+        audioPlayerNode?.stop()
+        receivedData = Data()
+    }
+    
+    // MARK: - Audio Processing
+    
+    private func processAudioChunk(_ data: Data) {
+        // Append to received data
+        receivedData.append(data)
+        
+        // Notify delegate of chunk
+        delegate?.streamingService(self, didReceiveAudioChunk: data)
+        
+        // Process audio in chunks for playback
+        if receivedData.count >= chunkSize {
+            playAudioChunk(receivedData)
+            receivedData = Data() // Clear after playing
+        }
+    }
+    
+    private func playAudioChunk(_ data: Data) {
+        guard let format = audioFormat,
+              let playerNode = audioPlayerNode else { return }
+        
+        // Convert Data to PCM buffer
+        let frameCount = UInt32(data.count) / format.streamDescription.pointee.mBytesPerFrame
+        
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+            print("[OpenAITTSStreaming] Failed to create audio buffer")
+            return
+        }
+        
+        buffer.frameLength = frameCount
+        
+        // Copy data to buffer
+        data.withUnsafeBytes { bytes in
+            let audioBufferList = buffer.mutableAudioBufferList
+            audioBufferList.pointee.mBuffers.mData?.copyMemory(
+                from: bytes.baseAddress!,
+                byteCount: Int(data.count)
+            )
+        }
+        
+        // Schedule and play buffer
+        playerNode.scheduleBuffer(buffer, completionHandler: nil)
+        
+        if !playerNode.isPlaying {
+            playerNode.play()
+        }
+    }
+    
+    private func finalizeAudio() {
+        // Process any remaining data
+        if !receivedData.isEmpty {
+            playAudioChunk(receivedData)
+        }
+        
+        // Save complete audio to file if needed
+        if let url = tempFileURL {
+            do {
+                try receivedData.write(to: url)
+                delegate?.streamingService(self, didCompleteWithURL: url)
+            } catch {
+                delegate?.streamingService(self, didFailWithError: error)
+            }
+        }
+    }
+}
+
+// MARK: - URLSession Delegate
+
+extension OpenAITTSStreamingService: URLSessionDataDelegate {
+    
+    nonisolated func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        Task { @MainActor in
+            // Process incoming audio chunks
+            processAudioChunk(data)
+        }
+    }
+    
+    nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        Task { @MainActor in
+            if let error = error {
+                delegate?.streamingService(self, didFailWithError: error)
+            } else {
+                finalizeAudio()
+            }
+        }
+    }
+    
+    nonisolated func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            completionHandler(.cancel)
+            Task { @MainActor in
+                delegate?.streamingService(self, didFailWithError: OpenAITTSError.invalidResponse)
+            }
+            return
+        }
+        
+        if httpResponse.statusCode == 200 {
+            print("[OpenAITTSStreaming] Started receiving stream")
+            completionHandler(.allow)
+        } else if httpResponse.statusCode == 429 {
+            completionHandler(.cancel)
+            Task { @MainActor in
+                delegate?.streamingService(self, didFailWithError: OpenAITTSError.rateLimited)
+            }
+        } else {
+            completionHandler(.cancel)
+            Task { @MainActor in
+                delegate?.streamingService(self, didFailWithError: 
+                    OpenAITTSError.networkError("HTTP \(httpResponse.statusCode)"))
+            }
+        }
+    }
+}
+
+// MARK: - Enhanced Audio Player Integration
+
+extension UnifiedAudioPlayer {
+    
+    private var streamingService: OpenAITTSStreamingService {
+        OpenAITTSStreamingService()
+    }
+    
+    /// Generate audio with streaming support
+    func generateStreamingAudio(for item: UnifiedQueueItem) async {
+        guard UserDefaultsManager.shared.useOpenAIStreaming,
+              UserDefaultsManager.shared.openAIAPIKey != nil else {
+            // Fall back to non-streaming
+            await processQueueItem(item)
+            return
+        }
+        
+        let streaming = streamingService
+        streaming.delegate = self
+        
+        // Get text content
+        let text = item.title + ". " + (item.content ?? "")
+        
+        // Start streaming
+        await MainActor.run {
+            streaming.streamAudio(
+                from: text,
+                voice: UserDefaultsManager.shared.preferredOpenAIVoice
+            )
+        }
+    }
+}
+
+// MARK: - Streaming Delegate Implementation
+
+extension UnifiedAudioPlayer: OpenAITTSStreamingDelegate {
+    
+    nonisolated func streamingService(_ service: OpenAITTSStreamingService, didReceiveAudioChunk data: Data) {
+        // Update UI to show streaming progress
+        Task { @MainActor in
+            if let currentItem = currentItem {
+                currentItem.generationState = .generating
+            }
+        }
+    }
+    
+    nonisolated func streamingService(_ service: OpenAITTSStreamingService, didCompleteWithURL url: URL) {
+        Task { @MainActor in
+            if let currentItem = currentItem {
+                currentItem.cachedAudioURL = url
+                currentItem.generationState = .ready
+                
+                // Start playback if needed
+                if autoPlayOnLoad {
+                    play()
+                }
+            }
+        }
+    }
+    
+    nonisolated func streamingService(_ service: OpenAITTSStreamingService, didFailWithError error: Error) {
+        Task { @MainActor in
+            if let currentItem = currentItem {
+                currentItem.generationState = .failed(error)
+                
+                // Try fallback to non-streaming or Gemini
+                await processQueueItem(currentItem)
+            }
+        }
+    }
+}

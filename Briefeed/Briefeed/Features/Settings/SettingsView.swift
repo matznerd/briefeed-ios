@@ -20,6 +20,7 @@ struct SettingsView: View {
                 // MARK: - Appearance Section
                 Section {
                     Toggle("Dark Mode", isOn: $viewModel.userDefaultsManager.isDarkMode)
+                        .accessibilityIdentifier(AccessibilityID.Settings.darkMode)
                         .onChange(of: viewModel.userDefaultsManager.isDarkMode) { _, newValue in
                             updateColorScheme(isDark: newValue)
                         }
@@ -38,6 +39,7 @@ struct SettingsView: View {
                                 in: 12...24,
                                 step: 1
                             )
+                            .accessibilityIdentifier(AccessibilityID.Settings.textSize)
                             
                             Text("A")
                                 .font(.system(size: 20))
@@ -58,6 +60,7 @@ struct SettingsView: View {
                             Text(length.rawValue).tag(length)
                         }
                     }
+                    .accessibilityIdentifier(AccessibilityID.Settings.summaryLength)
                     
                     Picker("Reading Font", selection: $viewModel.userDefaultsManager.preferredReadingFont) {
                         ForEach(viewModel.availableFonts, id: \.self) { font in
@@ -86,6 +89,10 @@ struct SettingsView: View {
                     
                     if viewModel.userDefaultsManager.audioEnabled {
                         Toggle("Auto-play Audio", isOn: $viewModel.userDefaultsManager.autoPlayAudio)
+
+                        Toggle("Auto-play Live News on Open", isOn: $viewModel.userDefaultsManager.autoPlayLiveNewsOnOpen)
+
+                        Toggle("Refresh Live News on Open", isOn: $viewModel.userDefaultsManager.autoRefreshLiveNewsOnOpen)
                         
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Speech Rate")
@@ -118,6 +125,36 @@ struct SettingsView: View {
                 // MARK: - API Keys Section
                 Section {
                     APIKeyRow(
+                        service: .openAI,
+                        apiKey: $viewModel.tempOpenAIKey,
+                        isValidating: viewModel.isValidatingOpenAIKey,
+                        isValid: viewModel.openAIKeyValid,
+                        onSave: { viewModel.saveAPIKey(for: .openAI) },
+                        onRemove: { viewModel.removeAPIKey(for: .openAI) }
+                    )
+                    
+                    // Advanced OpenAI Settings
+                    NavigationLink(destination: OpenAISettingsView()) {
+                        HStack {
+                            Label("OpenAI TTS Settings", systemImage: "waveform")
+                            Spacer()
+                            Text("Voice & Cost")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    NavigationLink(destination: OnDeviceTTSSettingsView()) {
+                        HStack {
+                            Label("On-Device TTS", systemImage: "brain")
+                            Spacer()
+                            Text(FluidAudioTTSService.shared.isModelReady ? "Ready" : "Setup")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    APIKeyRow(
                         service: .gemini,
                         apiKey: $viewModel.tempGeminiKey,
                         isValidating: viewModel.isValidatingGeminiKey,
@@ -137,7 +174,7 @@ struct SettingsView: View {
                 } header: {
                     Label("API Keys", systemImage: "key")
                 } footer: {
-                    Text("API keys are stored securely on your device and never shared.")
+                    Text("API keys are stored securely on your device and never shared.\nOpenAI: Unlimited TTS generation ($0.015/1K chars)\nGemini: Free but limited to 100 TTS/day")
                         .font(.caption)
                 }
                 

@@ -19,23 +19,20 @@ echo "📡 Testing Firecrawl with URL: $TEST_URL"
 echo "🔑 Using API key: ${FIRECRAWL_API_KEY:0:10}..."
 
 # Make the request
-RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://api.firecrawl.dev/v0/scrape \
+RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://api.firecrawl.dev/v2/scrape \
   -H "Authorization: Bearer $FIRECRAWL_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "url": "'"$TEST_URL"'",
     "formats": ["markdown", "html"],
     "onlyMainContent": true,
-    "includeHtml": true,
-    "includeMarkdown": true,
-    "waitFor": 5000,
-    "screenshot": false
+    "waitFor": 5000
   }')
 
 # Extract HTTP status code (last line)
-HTTP_STATUS=$(echo "$RESPONSE" | tail -n 1)
+HTTP_STATUS=$(printf "%s\n" "$RESPONSE" | tail -n 1)
 # Extract JSON response (all but last line)
-JSON_RESPONSE=$(echo "$RESPONSE" | head -n -1)
+JSON_RESPONSE=$(printf "%s\n" "$RESPONSE" | sed '$d')
 
 echo "📊 HTTP Status: $HTTP_STATUS"
 
@@ -77,7 +74,7 @@ echo ""
 echo "📡 Testing with a Reddit URL..."
 REDDIT_URL="https://www.reddit.com/r/technology/comments/1234567/example"
 
-REDDIT_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://api.firecrawl.dev/v0/scrape \
+REDDIT_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://api.firecrawl.dev/v2/scrape \
   -H "Authorization: Bearer $FIRECRAWL_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -95,7 +92,7 @@ echo ""
 echo "⏱️  Measuring API response time..."
 curl -s -o /dev/null -w "Response time: %{time_total}s\n" \
   --max-time 10 \
-  -X POST https://api.firecrawl.dev/v0/scrape \
+  -X POST https://api.firecrawl.dev/v2/scrape \
   -H "Authorization: Bearer $FIRECRAWL_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{

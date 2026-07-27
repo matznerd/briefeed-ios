@@ -23,7 +23,7 @@ class ArticleStateManager: ObservableObject {
     
     // MARK: - Private Properties
     private var cancellables = Set<AnyCancellable>()
-    private let audioService = AudioService.shared
+    // Audio service removed - now handled through AppViewModel
     private let archivedService = ArchivedArticlesService.shared
     
     // MARK: - Initialization
@@ -33,29 +33,11 @@ class ArticleStateManager: ObservableObject {
     
     // MARK: - Setup
     private func setupObservers() {
-        // Observe audio service for currently playing article
-        audioService.$currentArticle
-            .map { $0?.id }
-            .assign(to: &$currentlyPlayingArticleID)
-        
-        // Observe audio service for queue
-        audioService.$queue
-            .map { articles in
-                articles.compactMap { $0.id }
-            }
-            .assign(to: &$queuedArticleIDs)
+        // Audio observers removed - now handled through AppViewModel
         
         // Observe archived articles service
         archivedService.$archivedArticleIDs
             .assign(to: &$archivedArticleIDs)
-        
-        // Observe audio state changes
-        audioService.state
-            .sink { [weak self] state in
-                // Force UI update when state changes
-                self?.objectWillChange.send()
-            }
-            .store(in: &cancellables)
     }
     
     // MARK: - Public Methods
@@ -68,8 +50,8 @@ class ArticleStateManager: ObservableObject {
     
     /// Checks if an article is currently playing with a specific state
     func isPlaying(_ article: Article, withState state: AudioPlayerState) -> Bool {
-        guard isPlaying(article) else { return false }
-        return audioService.state.value == state
+        // Audio state checks now handled through AppViewModel
+        return false
     }
     
     /// Checks if an article is archived
@@ -92,37 +74,31 @@ class ArticleStateManager: ObservableObject {
     
     /// Checks if audio is currently playing
     var isAudioPlaying: Bool {
-        audioService.state.value == .playing
+        // Audio state now handled through AppViewModel
+        return false
     }
     
     /// Checks if audio is currently paused
     var isAudioPaused: Bool {
-        audioService.state.value == .paused
+        // Audio state now handled through AppViewModel
+        return false
     }
     
     /// Checks if audio is currently loading
     var isAudioLoading: Bool {
-        audioService.state.value == .loading
+        // Audio state now handled through AppViewModel
+        return false
     }
     
     /// Gets the current audio state
     var audioState: AudioPlayerState {
-        audioService.state.value
+        // Audio state now handled through AppViewModel
+        return .idle
     }
     
     /// Updates an article's playing state
     func updatePlayingState(for article: Article) async throws {
-        if isPlaying(article) {
-            // If playing, pause or stop
-            if isAudioPlaying {
-                audioService.pause()
-            } else {
-                audioService.play()
-            }
-        } else {
-            // Start playing this article
-            try await audioService.playArticle(article)
-        }
+        // Audio playback now handled through AppViewModel
     }
     
     /// Toggles an article's archived state
@@ -132,17 +108,17 @@ class ArticleStateManager: ObservableObject {
     
     /// Adds an article to the queue
     func addToQueue(_ article: Article) {
-        audioService.addToQueue(article)
+        // Queue management now handled through AppViewModel
     }
     
     /// Removes an article from the queue
     func removeFromQueue(at index: Int) {
-        audioService.removeFromQueue(at: index)
+        // Queue management now handled through AppViewModel
     }
     
     /// Clears all states (useful for logout/reset)
     func reset() {
-        audioService.clearQueue()
+        // Queue clearing now handled through AppViewModel
         currentlyPlayingArticleID = nil
         // Note: archived articles are managed by ArchivedArticlesService
     }
