@@ -501,6 +501,37 @@ private actor RadioTranscriptDownloadPermitPool {
     }
 }
 
+enum RadioTranscriptDownloadSecurity {
+    static func securedURL(for url: URL) -> URL {
+        guard url.scheme?.caseInsensitiveCompare("http") ==
+                .orderedSame,
+              var components = URLComponents(
+                url: url,
+                resolvingAgainstBaseURL: false
+              ) else {
+            return url
+        }
+        components.scheme = "https"
+        if components.host?.caseInsensitiveCompare(
+            "open.live.bbc.co.uk"
+        ) == .orderedSame {
+            components.percentEncodedPath = components.percentEncodedPath
+                .replacingOccurrences(
+                    of: "/proto/http/",
+                    with: "/proto/https/"
+                )
+        }
+        return components.url ?? url
+    }
+
+    static func securedRequest(_ request: URLRequest) -> URLRequest {
+        guard let url = request.url else { return request }
+        var secured = request
+        secured.url = securedURL(for: url)
+        return secured
+    }
+}
+
 final class RadioTranscriptBackgroundDownloader:
     NSObject,
     RadioTranscriptDownloading,
@@ -559,7 +590,11 @@ final class RadioTranscriptBackgroundDownloader:
     ) async throws -> RadioTranscriptDownloadResult {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                var urlRequest = URLRequest(url: request.remoteURL)
+                var urlRequest = URLRequest(
+                    url: RadioTranscriptDownloadSecurity.securedURL(
+                        for: request.remoteURL
+                    )
+                )
                 urlRequest.cachePolicy = .reloadIgnoringLocalCacheData
                 let task = session.downloadTask(with: urlRequest)
                 if let metadata = try? JSONEncoder().encode(request) {
@@ -592,6 +627,18 @@ final class RadioTranscriptBackgroundDownloader:
         lock.withLock {
             orphanCompletionHandler = completionHandler
         }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(
+            RadioTranscriptDownloadSecurity.securedRequest(request)
+        )
     }
 
     func urlSession(

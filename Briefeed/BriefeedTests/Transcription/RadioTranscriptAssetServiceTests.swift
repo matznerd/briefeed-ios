@@ -5,6 +5,41 @@ import Testing
 
 @Suite("Radio transcript asset service")
 struct RadioTranscriptAssetServiceTests {
+    @Test func bbcMediaSelectorURLIsUpgradedForSecureTranscriptDownload() throws {
+        let original = try #require(URL(string:
+            "http://open.live.bbc.co.uk/mediaselector/6/redir/version/2.0/" +
+            "mediaset/audio-nondrm-download-rss-low/proto/http/" +
+            "vpid/p0p10b4s.mp3"
+        ))
+
+        let secured = RadioTranscriptDownloadSecurity.securedURL(for: original)
+
+        #expect(secured.absoluteString ==
+            "https://open.live.bbc.co.uk/mediaselector/6/redir/version/2.0/" +
+            "mediaset/audio-nondrm-download-rss-low/proto/https/" +
+            "vpid/p0p10b4s.mp3")
+    }
+
+    @Test func insecureRedirectIsUpgradedWithoutChangingItsQuery() throws {
+        let original = try #require(URL(string:
+            "http://bbc.pdn.tritondigital.com/file.mp3?dist=bbc&token=a%2Fb"
+        ))
+
+        let secured = RadioTranscriptDownloadSecurity.securedURL(for: original)
+
+        #expect(secured.absoluteString ==
+            "https://bbc.pdn.tritondigital.com/file.mp3?dist=bbc&token=a%2Fb")
+    }
+
+    @Test func existingSecureDownloadURLIsUnchanged() throws {
+        let original = try #require(URL(string:
+            "https://cdn.example.com/audio.mp3?signature=abc"
+        ))
+
+        #expect(RadioTranscriptDownloadSecurity.securedURL(for: original) ==
+                original)
+    }
+
     @Test func acquisitionFingerprintsAndIndexesExactDownloadedBytes() async throws {
         let harness = try AssetHarness()
         defer { harness.cleanup() }

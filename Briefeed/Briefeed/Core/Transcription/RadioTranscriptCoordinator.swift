@@ -279,7 +279,11 @@ final class RadioTranscriptCoordinator:
     }
 
     func retryCurrent() {
-        guard currentCandidate != nil else { return }
+        guard let currentCandidate else { return }
+        presentation = RadioTranscriptPresentation(
+            episodeKey: currentCandidate.key,
+            state: .queued
+        )
         reconcileDesired(automaticAllowed: isActive)
     }
 

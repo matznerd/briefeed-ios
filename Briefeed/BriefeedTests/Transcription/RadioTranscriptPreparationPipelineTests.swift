@@ -4,6 +4,16 @@ import Testing
 
 @Suite("Radio transcript preparation pipeline")
 struct RadioTranscriptPreparationPipelineTests {
+    @Test func transportSecurityFailureUsesProductLanguage() {
+        let message = RadioTranscriptPreparationPipeline.errorMessage(
+            URLError(.appTransportSecurityRequiresSecureConnection)
+        )
+
+        #expect(message ==
+                "This source's audio could not be downloaded securely.")
+        #expect(!message.localizedCaseInsensitiveContains("App Transport"))
+    }
+
     @Test func currentAndNextTwoRunBeforeRemainingExplicitBatch() async throws {
         let harness = try PipelineHarness()
         defer { harness.cleanup() }

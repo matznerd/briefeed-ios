@@ -130,6 +130,44 @@ struct RadioTranscriptCoordinatorTests {
         #expect(harness.coordinator.presentation.isReady)
     }
 
+    @Test func retryImmediatelyLeavesTheFailedStateAndStartsFreshWork() async throws {
+        let harness = try CoordinatorHarness()
+        defer { harness.cleanup() }
+        let current = harness.candidate("current")
+        harness.coordinator.updateCurrent(current, next: [])
+        let failedReconciliation =
+            try await harness.pipeline.waitForReconciliation()
+
+        await harness.pipeline.emit(.preparation(
+            episodeKey: current.key,
+            generation: failedReconciliation.generation,
+            state: .failed(
+                message: "This source's audio could not be downloaded securely.",
+                canRetry: true
+            )
+        ))
+        try await harness.waitUntilPresentationState(
+            .failed(
+                message: "This source's audio could not be downloaded securely.",
+                canRetry: true
+            )
+        )
+
+        harness.coordinator.retryCurrent()
+
+        #expect(harness.coordinator.presentation == RadioTranscriptPresentation(
+            episodeKey: current.key,
+            state: .queued
+        ))
+        let retriedReconciliation =
+            try await harness.pipeline.waitForReconciliation()
+        #expect(retriedReconciliation.generation >
+                failedReconciliation.generation)
+        #expect(retriedReconciliation.interactive.map(\.episodeKey) == [
+            current.key
+        ])
+    }
+
     @Test func persistedBatchReturnsAsStoppedAfterVisibleSnapshotRestores() async throws {
         let harness = try CoordinatorHarness()
         defer { harness.cleanup() }
@@ -686,6 +724,17 @@ private final class CoordinatorHarness: @unchecked Sendable {
             try await Task.sleep(for: .milliseconds(10))
         }
         Issue.record("Timed out waiting for ready presentation")
+    }
+
+    @MainActor
+    func waitUntilPresentationState(
+        _ state: RadioTranscriptPreparationState
+    ) async throws {
+        for _ in 0..<100 {
+            if coordinator.presentation.state == state { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("Timed out waiting for presentation state \(state)")
     }
 
     @MainActor

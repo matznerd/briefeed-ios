@@ -380,7 +380,7 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
         }
     }
 
-    private static func errorMessage(_ error: Error) -> String {
+    static func errorMessage(_ error: Error) -> String {
         if let engineError = error as? TimedTranscriptEngineError {
             switch engineError {
             case .unsupportedOS:
@@ -410,6 +410,12 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
             case .unsupportedIndexSchema:
                 return "The transcript audio cache needs to be rebuilt."
             }
+        }
+        let networkError = error as NSError
+        if networkError.domain == NSURLErrorDomain,
+           networkError.code ==
+            NSURLErrorAppTransportSecurityRequiresSecureConnection {
+            return "This source's audio could not be downloaded securely."
         }
         return error.localizedDescription
     }
