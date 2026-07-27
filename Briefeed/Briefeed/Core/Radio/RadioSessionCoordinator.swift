@@ -305,6 +305,12 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         } catch {
             return handleReadFailure(error)
         }
+        let insertedKeys = Set(result.results.flatMap { item -> [RadioEpisodeKey] in
+            guard case .success(let episodeIDs) = item.outcome else { return [] }
+            return episodeIDs.map {
+                RadioEpisodeKey(feedID: item.feedID, episodeID: $0)
+            }
+        })
         setCandidates(candidates)
         var session = currentSession()
         let refreshedSources = Set(result.results.compactMap { item -> String? in
@@ -325,7 +331,19 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
                     ?? session.entries.first(where: { $0.disposition == .deferred })?.key
             }
         }
-        let reconciled = RadioQueueBuilder(now: now()).reconcile(snapshot: session, candidates: candidates)
+        var reconciled = RadioQueueBuilder(now: now()).reconcile(
+            snapshot: session,
+            candidates: candidates
+        )
+        if isInitialColdLaunchRefresh,
+           hasPendingColdLaunchAutoplay,
+           let deadline = coldLaunchAutoplayDeadline,
+           now() < deadline {
+            reconciled = promotingOpeningInsertion(
+                in: reconciled,
+                insertedKeys: insertedKeys
+            )
+        }
         let previousCurrentKey = currentKey
         let previousState = state
         if previousCurrentKey != reconciled.currentKey { cancelPendingRequest() }
@@ -357,12 +375,6 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
             return nil
         }
 
-        let insertedKeys = Set(result.results.flatMap { item -> [RadioEpisodeKey] in
-            guard case .success(let episodeIDs) = item.outcome else { return [] }
-            return episodeIDs.map {
-                RadioEpisodeKey(feedID: item.feedID, episodeID: $0)
-            }
-        })
         guard autoplayWhenIdle,
               previousState != .pausedByUser,
               !hasActivePlaybackState,
@@ -373,6 +385,48 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         cancelPendingColdLaunchAutoplay()
         state = .loading
         return .play(request)
+    }
+
+    private func promotingOpeningInsertion(
+        in session: PersistedRadioSession,
+        insertedKeys: Set<RadioEpisodeKey>
+    ) -> PersistedRadioSession {
+        guard var promoted = session.entries.first(where: {
+            insertedKeys.contains($0.key)
+                && $0.disposition != .failedThisSession
+                && $0.disposition != .retired
+        }), promoted.key != session.currentKey else {
+            return session
+        }
+
+        let previousCurrent = session.currentKey.flatMap { key in
+            session.entries.first(where: { $0.key == key })
+        }
+        let remaining = session.entries.filter {
+            $0.key != promoted.key && $0.key != previousCurrent?.key
+        }
+        var pending = remaining.filter { $0.disposition == .pending }
+        var deferred = remaining.filter { $0.disposition == .deferred }
+        let retired = remaining.filter { $0.disposition == .retired }
+        let failed = remaining.filter { $0.disposition == .failedThisSession }
+
+        if var previousCurrent {
+            if previousCurrent.positionSeconds > 0 {
+                previousCurrent.disposition = .deferred
+                deferred.append(previousCurrent)
+            } else {
+                previousCurrent.disposition = .pending
+                pending.insert(previousCurrent, at: 0)
+            }
+        }
+        promoted.disposition = .pending
+
+        return PersistedRadioSession(
+            schemaVersion: PersistedRadioSession.schemaVersion,
+            entries: [promoted] + pending + deferred + retired + failed,
+            currentKey: promoted.key,
+            savedAt: now()
+        )
     }
 
     func beginCurrent() -> RadioPlaybackIntent? {

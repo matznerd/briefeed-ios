@@ -209,6 +209,45 @@ struct RadioSessionCoordinatorRestoreTests {
         #expect(!expired.hasPendingColdLaunchAutoplay)
     }
 
+    @Test func initialRefreshPromotesFreshlyInsertedEpisodeOverRestoredCurrent() async {
+        let restoredBBC = candidate(
+            "bbc",
+            "previous",
+            date: now.addingTimeInterval(-1_800)
+        )
+        let freshNPR = candidate("npr", "latest", date: now)
+        let repository = FakeRadioEpisodeRepository(candidates: [restoredBBC])
+        let coordinator = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(snapshot: session(
+                [entry(restoredBBC.key, position: 23)],
+                current: restoredBBC.key
+            )),
+            repository: repository,
+            now: { now },
+            connectivityStatus: { .online }
+        )
+
+        #expect(await coordinator.restore(autoplayEnabled: true) == nil)
+        repository.values = [restoredBBC, freshNPR]
+        coordinator.refreshStarted(enabledSourceCount: 2)
+        let refresh = RSSRefreshBatchResult(results: [
+            .init(
+                feedID: freshNPR.key.feedID,
+                outcome: .success(insertedEpisodeIDs: [freshNPR.key.episodeID])
+            )
+        ])
+
+        #expect(
+            coordinator.applyInitialRefresh(refresh)
+                == .play(request(for: freshNPR, position: 0))
+        )
+        #expect(coordinator.currentKey == freshNPR.key)
+        #expect(
+            coordinator.entries.first(where: { $0.key == restoredBBC.key })
+                == entry(restoredBBC.key, position: 23, disposition: .deferred)
+        )
+    }
+
     @Test func manualPlaybackCancelsDeferredColdLaunchOpportunity() async {
         let repository = FakeRadioEpisodeRepository(candidates: [])
         let coordinator = RadioSessionCoordinator(store: FakeRadioSessionStore(), repository: repository, now: { now }, connectivityStatus: { .online })
