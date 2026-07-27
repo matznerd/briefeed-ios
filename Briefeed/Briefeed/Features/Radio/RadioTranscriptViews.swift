@@ -333,6 +333,7 @@ enum RadioTranscriptUIPresentation {
 struct RadioTranscriptViewer: View {
     let presentation: RadioTranscriptPresentation
     let currentTime: TimeInterval
+    let playbackRate: Double
     let playbackSyncState: RadioTranscriptPlaybackSyncState
     let onOpen: () -> Void
     let onRetry: () -> Void
@@ -484,6 +485,20 @@ struct RadioTranscriptViewer: View {
                 }
             }
             .frame(maxHeight: .infinity, alignment: .center)
+
+            #if DEBUG
+            if !dynamicTypeSize.isAccessibilitySize,
+               let wordsPerMinute = debugWordsPerMinute {
+                HStack {
+                    Spacer()
+                    Text("~\(wordsPerMinute) WPM")
+                        .font(.caption2.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
+                .frame(height: 12)
+            }
+            #endif
         }
         .padding(.vertical, 10)
         .contentShape(Rectangle())
@@ -495,6 +510,20 @@ struct RadioTranscriptViewer: View {
             })?.text ?? ""
         )
     }
+
+    #if DEBUG
+    private var debugWordsPerMinute: Int? {
+        guard playbackSyncState == .synchronized,
+              let transcript = presentation.transcript else {
+            return nil
+        }
+        return TimedTranscriptPace.estimatedEffectiveWordsPerMinute(
+            transcript: transcript,
+            mediaTime: currentTime,
+            playbackRate: playbackRate
+        )
+    }
+    #endif
 
     private func statusContent(
         _ content: RadioTranscriptCompactContent

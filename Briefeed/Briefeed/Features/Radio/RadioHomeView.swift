@@ -200,6 +200,8 @@ struct RadioHomeView: View {
                             presentation:
                                 audioPlayerViewModel.radioTranscriptPresentation,
                             currentTime: audioPlayerViewModel.currentTime,
+                            playbackRate:
+                                Double(audioPlayerViewModel.playbackSpeed),
                             playbackSyncState:
                                 audioPlayerViewModel
                                     .radioTranscriptPlaybackSyncState,

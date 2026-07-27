@@ -64,6 +64,60 @@ struct TimedTranscriptProjectionTests {
         #expect(projection.lines.allSatisfy { !$0.text.isEmpty })
     }
 
+    @Test func estimatesEffectiveWordsPerMinuteAtTheCurrentPlaybackRate() throws {
+        let transcript = try makePacedTranscript(
+            wordCount: 50,
+            duration: 20
+        )
+
+        let estimate = TimedTranscriptPace.estimatedEffectiveWordsPerMinute(
+            transcript: transcript,
+            mediaTime: 10,
+            playbackRate: 2,
+            windowDuration: 20
+        )
+
+        #expect(estimate == 300)
+    }
+
+    @Test func paceEstimateCountsWordsInsidePhraseUnits() throws {
+        let units = [
+            TimedTranscriptUnit(
+                text: "one two three",
+                startSeconds: 0,
+                endSeconds: 1,
+                confidence: 0.9,
+                granularity: .phrase
+            ),
+            TimedTranscriptUnit(
+                text: "four five six",
+                startSeconds: 1,
+                endSeconds: 2,
+                confidence: 0.9,
+                granularity: .phrase
+            )
+        ]
+        let transcript = try TimedTranscript(
+            assetFingerprint: "phrase-pace",
+            engineIdentifier: "test",
+            engineVersion: "1",
+            localeIdentifier: "en-US",
+            recognizedText: units.map(\.text).joined(separator: " "),
+            audioDurationSeconds: 2,
+            processingDurationSeconds: 0,
+            units: units
+        )
+
+        let estimate = TimedTranscriptPace.estimatedEffectiveWordsPerMinute(
+            transcript: transcript,
+            mediaTime: 1,
+            playbackRate: 1.5,
+            windowDuration: 20
+        )
+
+        #expect(estimate == 270)
+    }
+
     private func makeTranscript() throws -> TimedTranscript {
         let words = [
             "Good", "morning.", "This", "is", "the", "latest",
@@ -86,6 +140,32 @@ struct TimedTranscriptProjectionTests {
             recognizedText: words.joined(separator: " "),
             audioDurationSeconds: 4.5,
             processingDurationSeconds: 0.1,
+            units: units
+        )
+    }
+
+    private func makePacedTranscript(
+        wordCount: Int,
+        duration: TimeInterval
+    ) throws -> TimedTranscript {
+        let unitDuration = duration / Double(wordCount)
+        let units = (0..<wordCount).map { index in
+            TimedTranscriptUnit(
+                text: "word\(index)",
+                startSeconds: Double(index) * unitDuration,
+                endSeconds: Double(index + 1) * unitDuration,
+                confidence: 0.9,
+                granularity: .word
+            )
+        }
+        return try TimedTranscript(
+            assetFingerprint: "paced",
+            engineIdentifier: "test",
+            engineVersion: "1",
+            localeIdentifier: "en-US",
+            recognizedText: units.map(\.text).joined(separator: " "),
+            audioDurationSeconds: duration,
+            processingDurationSeconds: 0,
             units: units
         )
     }

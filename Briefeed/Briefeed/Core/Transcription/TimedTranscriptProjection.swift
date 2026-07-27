@@ -126,3 +126,50 @@ struct TimedTranscriptProjection: Sendable {
         return ".!?;:".contains(last)
     }
 }
+
+#if DEBUG
+enum TimedTranscriptPace {
+    static let defaultWindowDuration: TimeInterval = 20
+
+    static func estimatedEffectiveWordsPerMinute(
+        transcript: TimedTranscript,
+        mediaTime: TimeInterval,
+        playbackRate: Double,
+        windowDuration: TimeInterval = defaultWindowDuration
+    ) -> Int? {
+        guard mediaTime.isFinite,
+              playbackRate.isFinite,
+              playbackRate > 0,
+              windowDuration.isFinite,
+              windowDuration > 0 else {
+            return nil
+        }
+
+        let duration = transcript.audioDurationSeconds
+        let observedDuration = min(windowDuration, duration)
+        let clampedTime = min(max(mediaTime, 0), duration)
+        let maximumStart = max(duration - observedDuration, 0)
+        let windowStart = min(
+            max(clampedTime - observedDuration / 2, 0),
+            maximumStart
+        )
+        let windowEnd = windowStart + observedDuration
+        let wordCount = transcript.units.reduce(into: 0) { count, unit in
+            let midpoint = unit.startSeconds
+                + (unit.endSeconds - unit.startSeconds) / 2
+            guard midpoint >= windowStart, midpoint < windowEnd else {
+                return
+            }
+            count += max(
+                unit.text.split(whereSeparator: \.isWhitespace).count,
+                1
+            )
+        }
+        guard wordCount > 0 else { return nil }
+
+        let sourceWordsPerMinute =
+            Double(wordCount) / observedDuration * 60
+        return Int((sourceWordsPerMinute * playbackRate).rounded())
+    }
+}
+#endif
