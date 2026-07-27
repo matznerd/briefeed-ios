@@ -89,6 +89,10 @@ struct SettingsView: View {
                     
                     if viewModel.userDefaultsManager.audioEnabled {
                         Toggle("Auto-play Audio", isOn: $viewModel.userDefaultsManager.autoPlayAudio)
+
+                        Toggle("Auto-play Live News on Open", isOn: $viewModel.userDefaultsManager.autoPlayLiveNewsOnOpen)
+
+                        Toggle("Refresh Live News on Open", isOn: $viewModel.userDefaultsManager.autoRefreshLiveNewsOnOpen)
                         
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Speech Rate")

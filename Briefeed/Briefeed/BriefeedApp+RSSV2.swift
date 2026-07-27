@@ -13,44 +13,25 @@ extension BriefeedApp {
     
     /// Initialize RSS features on app launch
     func initializeRSSFeatures() {
-        do {
-            print("📡 Initializing RSS features...")
-            
-            // Register RSS defaults
-            UserDefaultsManager.shared.registerRSSDefaults()
-            UserDefaultsManager.shared.loadRSSSettings()
-            
-            print("✅ RSS settings loaded")
-            
-            // Initialize RSS feeds and auto-play
-            Task {
-                do {
-                    // Initialize default RSS feeds if needed
-                    await RSSAudioService.shared.initializeDefaultFeedsIfNeeded()
-                    print("✅ RSS feeds initialized")
-                    
-                    // Handle auto-play if enabled
-                    if UserDefaultsManager.shared.autoPlayLiveNewsOnOpen {
-                        // Wait a moment for UI to be ready
-                        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-                        
-                        // Refresh feeds if needed
-                        await RSSAudioService.shared.refreshAllFeeds()
-                        
-                        // Play live news like a radio
-                        await playLiveNewsRadio()
-                    }
-                } catch {
-                    print("❌ Error in RSS initialization: \(error)")
-                }
-            }
-            
-            // Schedule periodic cleanup (handled by new cache manager)
-            scheduleRSSRefresh()
-            
-        } catch {
-            print("❌ Fatal error initializing RSS features: \(error)")
+        print("📡 Initializing RSS features...")
+
+        // Register RSS defaults
+        UserDefaultsManager.shared.registerRSSDefaults()
+        UserDefaultsManager.shared.loadRSSSettings()
+
+        print("✅ RSS settings loaded")
+
+        // Initialize RSS feeds and auto-play
+        Task {
+            // Initialize default RSS feeds if needed
+            let refreshedDuringFeedSetup = await RSSAudioService.shared.initializeDefaultFeedsIfNeeded()
+            print("✅ RSS feeds initialized")
+
+            await handleLaunchLiveNewsAutoplayIfNeeded(refreshedDuringFeedSetup: refreshedDuringFeedSetup)
         }
+
+        // Schedule periodic cleanup (handled by new cache manager)
+        scheduleRSSRefresh()
     }
     
     /// Schedule periodic feed refresh
@@ -63,8 +44,26 @@ extension BriefeedApp {
         }
     }
     
+    /// If launch autoplay is enabled, keep the one launch opportunity pending
+    /// through the refresh so a newly fetched NPR/BBC/etc. episode can start.
+    private func handleLaunchLiveNewsAutoplayIfNeeded(refreshedDuringFeedSetup: Bool) async {
+        guard UserDefaultsManager.shared.autoPlayLiveNewsOnOpen else { return }
+
+        if !refreshedDuringFeedSetup {
+            await RSSAudioService.shared.refreshAllFeeds()
+        }
+
+        _ = await playLiveNewsRadioIfIdle()
+    }
+
     /// Play live news like a radio - automatically queue and play latest episodes
-    private func playLiveNewsRadio() async {
+    @discardableResult
+    private func playLiveNewsRadioIfIdle() async -> Bool {
+        guard !UnifiedAudioPlayer.shared.isPlaying,
+              UnifiedAudioPlayer.shared.currentItem == nil else {
+            return false
+        }
+
         let viewContext = PersistenceController.shared.container.viewContext
         let fetchRequest: NSFetchRequest<RSSFeed> = RSSFeed.fetchRequest()
         fetchRequest.predicate = NSPredicate(format: "isEnabled == YES")
@@ -92,9 +91,12 @@ extension BriefeedApp {
             // Play all episodes through the shared player so the app-wide mini player updates.
             if !episodesToPlay.isEmpty {
                 await UnifiedAudioPlayer.shared.playLiveNewsStream(episodes: episodesToPlay)
+                return UnifiedAudioPlayer.shared.isPlaying || UnifiedAudioPlayer.shared.currentItem != nil
             }
         } catch {
             print("❌ Error playing live news radio: \(error)")
         }
+
+        return false
     }
 }

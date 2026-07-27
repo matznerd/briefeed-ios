@@ -510,10 +510,6 @@ final class UnifiedAudioPlayer: ObservableObject {
                 try await audioPlayer.play(url: audioURL, title: item.title, artist: artist)
                 isPlaying = true
 
-                // Mark episode as listened
-                if let episode = item.episode {
-                    await markEpisodeAsListened(episode)
-                }
             } catch {
                 print("[UnifiedPlayer] Failed to play Live News stream: \(error)")
                 // Try next episode
@@ -687,6 +683,12 @@ final class UnifiedAudioPlayer: ObservableObject {
     private func handleTrackFinished() async {
         // In Live News streaming mode, just advance
         if isStreamingLiveNews {
+            if liveNewsStreamIndex >= 0,
+               liveNewsStreamIndex < liveNewsStreamQueue.count,
+               let episode = liveNewsStreamQueue[liveNewsStreamIndex].episode {
+                await markEpisodeAsListened(episode)
+            }
+
             await playNextLiveNewsStreamItem()
             return
         }
