@@ -219,12 +219,12 @@ struct RadioHomeView: View {
                 }
 
                 if !playlistItems.isEmpty {
-                    Section("Your radio brief") {
+                    Section {
                         ForEach(playlistItems) { item in
                             playlistRow(item)
                         }
-
-                        RadioTranscriptPrepareAllRow(
+                    } header: {
+                        RadioTranscriptPlaylistHeader(
                             content: prepareAllContent,
                             onPrepare: {
                                 updateVisibleTranscriptSnapshot()
@@ -237,7 +237,6 @@ struct RadioHomeView: View {
                             }
                         )
                     }
-                    .accessibilityIdentifier(AccessibilityID.Radio.playlist)
                 }
 
                 if showsStateMessage {
@@ -274,6 +273,8 @@ struct RadioHomeView: View {
                     playbackSyncState:
                         audioPlayerViewModel
                             .radioTranscriptPlaybackSyncState,
+                    playbackRate:
+                        Double(audioPlayerViewModel.playbackSpeed),
                     isPlaying: audioPlayerViewModel.isPlaying,
                     canPlayNext: audioPlayerViewModel.canPlayNext,
                     onSeek: audioPlayerViewModel.seek(to:),

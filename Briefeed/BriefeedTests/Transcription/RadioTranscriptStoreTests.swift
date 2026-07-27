@@ -4,6 +4,33 @@ import Testing
 
 @Suite("Radio transcript store")
 struct RadioTranscriptStoreTests {
+    @Test func progressiveCheckpointSurvivesRelaunchAndIsRemovedAfterCommit() async throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = makeCacheKey(episodeID: "progressive")
+        let transcript = try makeTranscript(key: key)
+        let progress = TimedTranscriptProgress(
+            transcript: transcript,
+            finalizedThroughSeconds: 1
+        )
+        let writer = try RadioTranscriptStore(rootDirectory: root)
+
+        try await writer.saveCheckpoint(progress, for: key)
+
+        let restored = try RadioTranscriptStore(rootDirectory: root)
+        #expect(try await restored.loadCheckpoint(for: key) == progress)
+
+        try await restored.save(
+            transcript: transcript,
+            record: makeRecord(
+                key: key,
+                relativePath: "artifacts/progressive.json"
+            )
+        )
+        try await restored.removeCheckpoint(for: key)
+        #expect(try await restored.loadCheckpoint(for: key) == nil)
+    }
+
     @Test func transcriptIsReadableOnlyAfterArtifactAndIndexCommit() async throws {
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }

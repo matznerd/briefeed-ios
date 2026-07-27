@@ -21,6 +21,29 @@ struct TranscriptAttributedRun: Equatable, Sendable {
     let confidence: Double?
 }
 
+struct TimedTranscriptProgress: Codable, Equatable, Sendable {
+    let transcript: TimedTranscript
+    let finalizedThroughSeconds: TimeInterval
+
+    init(
+        transcript: TimedTranscript,
+        finalizedThroughSeconds: TimeInterval
+    ) {
+        let finiteCoverage = finalizedThroughSeconds.isFinite
+            ? finalizedThroughSeconds
+            : 0
+        let lastUnitEnd = transcript.units.last?.endSeconds ?? 0
+        self.transcript = transcript
+        self.finalizedThroughSeconds = min(
+            max(finiteCoverage, lastUnitEnd),
+            transcript.audioDurationSeconds
+        )
+    }
+}
+
+typealias TimedTranscriptProgressHandler =
+    @Sendable (TimedTranscriptProgress) async -> Void
+
 protocol TimedTranscriptEngine: Sendable {
     func transcribe(
         fileURL: URL,
@@ -28,6 +51,31 @@ protocol TimedTranscriptEngine: Sendable {
         locale: Locale,
         assetPolicy: SpeechAssetPolicy
     ) async throws -> TimedTranscript
+
+    func transcribe(
+        fileURL: URL,
+        assetFingerprint: String,
+        locale: Locale,
+        assetPolicy: SpeechAssetPolicy,
+        onProgress: @escaping TimedTranscriptProgressHandler
+    ) async throws -> TimedTranscript
+}
+
+extension TimedTranscriptEngine {
+    func transcribe(
+        fileURL: URL,
+        assetFingerprint: String,
+        locale: Locale,
+        assetPolicy: SpeechAssetPolicy,
+        onProgress: @escaping TimedTranscriptProgressHandler
+    ) async throws -> TimedTranscript {
+        try await transcribe(
+            fileURL: fileURL,
+            assetFingerprint: assetFingerprint,
+            locale: locale,
+            assetPolicy: assetPolicy
+        )
+    }
 }
 
 enum TimedTranscriptNormalizer {

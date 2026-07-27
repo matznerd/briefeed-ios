@@ -11,6 +11,22 @@ actor AppleSpeechAnalyzerEngine: TimedTranscriptEngine {
         locale: Locale,
         assetPolicy: SpeechAssetPolicy
     ) async throws -> TimedTranscript {
+        try await transcribe(
+            fileURL: fileURL,
+            assetFingerprint: assetFingerprint,
+            locale: locale,
+            assetPolicy: assetPolicy,
+            onProgress: { _ in }
+        )
+    }
+
+    func transcribe(
+        fileURL: URL,
+        assetFingerprint: String,
+        locale: Locale,
+        assetPolicy: SpeechAssetPolicy,
+        onProgress: @escaping TimedTranscriptProgressHandler
+    ) async throws -> TimedTranscript {
         try Task.checkCancellation()
         guard SpeechTranscriber.isAvailable else {
             throw TimedTranscriptEngineError.engineUnavailable
@@ -52,12 +68,28 @@ actor AppleSpeechAnalyzerEngine: TimedTranscriptEngine {
         let duration = TimeInterval(audioFile.length) / sampleRate
         let started = ProcessInfo.processInfo.systemUptime
         let analyzer = SpeechAnalyzer(modules: modules)
-        let resultTask = Task<[AttributedString], Error> {
-            var finalized: [AttributedString] = []
+        let engineVersion =
+            ProcessInfo.processInfo.operatingSystemVersionString
+        let resultTask = Task<AppleTranscriptAccumulator, Error> {
+            var accumulator = AppleTranscriptAccumulator()
             for try await result in transcriber.results where result.isFinal {
-                finalized.append(result.text)
+                accumulator.append(
+                    text: result.text,
+                    finalizedThroughSeconds:
+                        CMTimeGetSeconds(result.resultsFinalizationTime)
+                )
+                if let progress = try accumulator.progress(
+                    assetFingerprint: assetFingerprint,
+                    engineVersion: engineVersion,
+                    localeIdentifier: supportedLocale.identifier,
+                    audioDurationSeconds: duration,
+                    processingDurationSeconds:
+                        ProcessInfo.processInfo.systemUptime - started
+                ) {
+                    await onProgress(progress)
+                }
             }
-            return finalized
+            return accumulator
         }
 
         do {
@@ -68,53 +100,17 @@ actor AppleSpeechAnalyzerEngine: TimedTranscriptEngine {
             }
             try Task.checkCancellation()
 
-            let attributedResults = try await resultTask.value
-            var recognizedParts: [String] = []
-            var snapshots: [TranscriptAttributedRun] = []
-            for attributed in attributedResults {
-                recognizedParts.append(String(attributed.characters))
-                for run in attributed.runs {
-                    let text = String(attributed[run.range].characters)
-                    guard let audioRange = run.audioTimeRange else {
-                        snapshots.append(
-                            TranscriptAttributedRun(
-                                text: text,
-                                startSeconds: nil,
-                                endSeconds: nil,
-                                confidence: run.transcriptionConfidence
-                            )
-                        )
-                        continue
-                    }
-
-                    snapshots.append(
-                        TranscriptAttributedRun(
-                            text: text,
-                            startSeconds: CMTimeGetSeconds(audioRange.start),
-                            endSeconds: CMTimeGetSeconds(CMTimeRangeGetEnd(audioRange)),
-                            confidence: run.transcriptionConfidence
-                        )
-                    )
-                }
-            }
-
-            let recognizedText = recognizedParts
-                .joined(separator: " ")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let units = try TimedTranscriptNormalizer.normalize(runs: snapshots)
-            guard !recognizedText.isEmpty, !units.isEmpty else {
+            let accumulator = try await resultTask.value
+            guard let transcript = try accumulator.transcript(
+                assetFingerprint: assetFingerprint,
+                engineVersion: engineVersion,
+                localeIdentifier: supportedLocale.identifier,
+                audioDurationSeconds: duration,
+                processingDurationSeconds:
+                    ProcessInfo.processInfo.systemUptime - started
+            ) else {
                 throw TimedTranscriptEngineError.emptyTranscript
             }
-            let transcript = try TimedTranscript(
-                assetFingerprint: assetFingerprint,
-                engineIdentifier: "apple-speech-analyzer",
-                engineVersion: ProcessInfo.processInfo.operatingSystemVersionString,
-                localeIdentifier: supportedLocale.identifier,
-                recognizedText: recognizedText,
-                audioDurationSeconds: duration,
-                processingDurationSeconds: ProcessInfo.processInfo.systemUptime - started,
-                units: units
-            )
             await SpeechModels.endRetention()
             return transcript
         } catch {
@@ -123,5 +119,87 @@ actor AppleSpeechAnalyzerEngine: TimedTranscriptEngine {
             await SpeechModels.endRetention()
             throw error
         }
+    }
+}
+
+@available(iOS 26.0, *)
+private struct AppleTranscriptAccumulator: Sendable {
+    private(set) var recognizedParts: [String] = []
+    private(set) var runs: [TranscriptAttributedRun] = []
+    private(set) var finalizedThroughSeconds: TimeInterval = 0
+
+    mutating func append(
+        text attributed: AttributedString,
+        finalizedThroughSeconds: TimeInterval
+    ) {
+        recognizedParts.append(String(attributed.characters))
+        if finalizedThroughSeconds.isFinite {
+            self.finalizedThroughSeconds = max(
+                self.finalizedThroughSeconds,
+                finalizedThroughSeconds
+            )
+        }
+        for run in attributed.runs {
+            let text = String(attributed[run.range].characters)
+            let audioRange = run.audioTimeRange
+            runs.append(
+                TranscriptAttributedRun(
+                    text: text,
+                    startSeconds: audioRange.map {
+                        CMTimeGetSeconds($0.start)
+                    },
+                    endSeconds: audioRange.map {
+                        CMTimeGetSeconds(CMTimeRangeGetEnd($0))
+                    },
+                    confidence: run.transcriptionConfidence
+                )
+            )
+        }
+    }
+
+    func progress(
+        assetFingerprint: String,
+        engineVersion: String,
+        localeIdentifier: String,
+        audioDurationSeconds: TimeInterval,
+        processingDurationSeconds: TimeInterval
+    ) throws -> TimedTranscriptProgress? {
+        guard let transcript = try transcript(
+            assetFingerprint: assetFingerprint,
+            engineVersion: engineVersion,
+            localeIdentifier: localeIdentifier,
+            audioDurationSeconds: audioDurationSeconds,
+            processingDurationSeconds: processingDurationSeconds
+        ) else {
+            return nil
+        }
+        return TimedTranscriptProgress(
+            transcript: transcript,
+            finalizedThroughSeconds: finalizedThroughSeconds
+        )
+    }
+
+    func transcript(
+        assetFingerprint: String,
+        engineVersion: String,
+        localeIdentifier: String,
+        audioDurationSeconds: TimeInterval,
+        processingDurationSeconds: TimeInterval
+    ) throws -> TimedTranscript? {
+        let recognizedText = recognizedParts
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let units = try TimedTranscriptNormalizer.normalize(runs: runs)
+        guard !recognizedText.isEmpty, !units.isEmpty else { return nil }
+        return try TimedTranscript(
+            assetFingerprint: assetFingerprint,
+            engineIdentifier: "apple-speech-analyzer",
+            engineVersion: engineVersion,
+            localeIdentifier: localeIdentifier,
+            recognizedText: recognizedText,
+            audioDurationSeconds: audioDurationSeconds,
+            processingDurationSeconds: processingDurationSeconds,
+            units: units
+        )
     }
 }

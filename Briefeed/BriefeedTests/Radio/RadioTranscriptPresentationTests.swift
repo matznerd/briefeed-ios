@@ -4,6 +4,55 @@ import Testing
 
 @Suite("Radio transcript presentation")
 struct RadioTranscriptPresentationTests {
+    @Test func partialCoverageUsesHysteresisAroundThePlaybackHead() {
+        #expect(TimedTranscriptCoveragePolicy.shouldDisplay(
+            finalizedThroughSeconds: 15,
+            mediaTime: 10,
+            wasDisplaying: false
+        ))
+        #expect(!TimedTranscriptCoveragePolicy.shouldDisplay(
+            finalizedThroughSeconds: 10.5,
+            mediaTime: 10,
+            wasDisplaying: false
+        ))
+        #expect(TimedTranscriptCoveragePolicy.shouldDisplay(
+            finalizedThroughSeconds: 11.1,
+            mediaTime: 10,
+            wasDisplaying: true
+        ))
+        #expect(!TimedTranscriptCoveragePolicy.shouldDisplay(
+            finalizedThroughSeconds: 10.9,
+            mediaTime: 10,
+            wasDisplaying: true
+        ))
+    }
+
+    @Test func highPlaybackRatesUseBoundedFasterSamplingAndWiderHighlightRanges() {
+        #expect(
+            TimedTranscriptSamplingPolicy.timerInterval(playbackRate: 1) ==
+                0.1
+        )
+        #expect(
+            TimedTranscriptSamplingPolicy.timerInterval(playbackRate: 4) ==
+                1.0 / 30.0
+        )
+        #expect(
+            TimedTranscriptSamplingPolicy.highlightedSourceWindow(
+                playbackRate: 4
+            ) == 0.4
+        )
+        #expect(!TimedTranscriptSamplingPolicy.usesRangeHighlight(
+            playbackRate: 1.5
+        ))
+        #expect(TimedTranscriptSamplingPolicy.usesRangeHighlight(
+            playbackRate: 2
+        ))
+        #expect(!TimedTranscriptSamplingPolicy.isSamePresentationFrame(
+            0.03,
+            0.04
+        ))
+    }
+
     @Test func preparationStatesKeepOneCompactHeightAndUseActionableCopy() {
         let episodeKey = RadioEpisodeKey(feedID: "npr", episodeID: "hour")
         let states: [(RadioTranscriptPreparationState, String)] = [
@@ -56,9 +105,26 @@ struct RadioTranscriptPresentationTests {
 
         #expect(early.visibleLines.map(\.id) == later.visibleLines.map(\.id))
         #expect(early.activeLineID == later.activeLineID)
-        #expect(early.activeUnitIndex == 2)
-        #expect(later.activeUnitIndex == 3)
+        #expect(early.activeUnitIndexes == [2])
+        #expect(later.activeUnitIndexes == [3])
         #expect(early.visibleLines.count == 3)
+    }
+
+    @Test func highRateContentHighlightsEveryRecentlyCrossedWord() throws {
+        let transcript = try makeTranscript()
+        let presentation = RadioTranscriptPresentation(
+            episodeKey: .init(feedID: "npr", episodeID: "hour"),
+            state: .ready(transcript)
+        )
+
+        let content = RadioTranscriptUIPresentation.compactContent(
+            presentation: presentation,
+            mediaTime: 1.1,
+            accessibilityTextSize: false,
+            playbackRate: 4
+        )
+
+        #expect(content.activeUnitIndexes == [1, 2])
     }
 
     @Test func expandedTranscriptKeepsShortFourWordReadingSpans() throws {

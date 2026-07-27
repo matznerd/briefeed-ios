@@ -34,4 +34,41 @@ struct TimedTranscriptIndex: Sendable {
         }
         return candidateIndex
     }
+
+    func unitIndexes(
+        intersecting mediaRange: ClosedRange<TimeInterval>
+    ) -> [Int] {
+        guard mediaRange.lowerBound.isFinite,
+              mediaRange.upperBound.isFinite,
+              mediaRange.upperBound >= 0,
+              mediaRange.lowerBound <= mediaRange.upperBound,
+              !units.isEmpty else {
+            return []
+        }
+        let lowerBound = max(mediaRange.lowerBound, 0)
+        var lower = 0
+        var upper = units.count
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if units[middle].endSeconds < lowerBound {
+                lower = middle + 1
+            } else {
+                upper = middle
+            }
+        }
+        let first = lower
+
+        lower = first
+        upper = units.count
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if units[middle].startSeconds <= mediaRange.upperBound {
+                lower = middle + 1
+            } else {
+                upper = middle
+            }
+        }
+        guard first < lower else { return [] }
+        return Array(first..<lower)
+    }
 }

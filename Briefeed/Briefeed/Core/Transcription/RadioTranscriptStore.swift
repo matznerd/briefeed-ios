@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 actor RadioTranscriptStore {
@@ -24,8 +25,17 @@ actor RadioTranscriptStore {
         let transcript: TimedTranscript
     }
 
+    private struct CheckpointArtifact: Codable {
+        static let currentSchemaVersion = 1
+
+        let schemaVersion: Int
+        let key: RadioTranscriptCacheKey
+        let progress: TimedTranscriptProgress
+    }
+
     private let rootDirectory: URL
     private let artifactsDirectory: URL
+    private let checkpointsDirectory: URL
     private let indexURL: URL
     private let batchURL: URL
     private let fileManager: FileManager
@@ -41,6 +51,10 @@ actor RadioTranscriptStore {
         let resolvedRoot = try rootDirectory ?? Self.defaultRootDirectory(fileManager: fileManager)
         self.rootDirectory = resolvedRoot
         artifactsDirectory = resolvedRoot.appendingPathComponent("artifacts", isDirectory: true)
+        checkpointsDirectory = resolvedRoot.appendingPathComponent(
+            "checkpoints",
+            isDirectory: true
+        )
         indexURL = resolvedRoot.appendingPathComponent("index-v1.json")
         batchURL = resolvedRoot.appendingPathComponent("batch-v1.json")
         encoder = JSONEncoder()
@@ -48,6 +62,10 @@ actor RadioTranscriptStore {
 
         try fileManager.createDirectory(
             at: artifactsDirectory,
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
+            at: checkpointsDirectory,
             withIntermediateDirectories: true
         )
         Self.excludeFromBackup(resolvedRoot)
@@ -117,6 +135,50 @@ actor RadioTranscriptStore {
             key: key,
             relativePath: record.transcriptRelativePath
         )
+    }
+
+    func saveCheckpoint(
+        _ progress: TimedTranscriptProgress,
+        for key: RadioTranscriptCacheKey
+    ) throws {
+        try validateCheckpoint(progress, for: key)
+        let url = checkpointURL(for: key)
+        let artifact = CheckpointArtifact(
+            schemaVersion: CheckpointArtifact.currentSchemaVersion,
+            key: key,
+            progress: progress
+        )
+        try encoder.encode(artifact).write(to: url, options: .atomic)
+        Self.excludeFromBackup(url)
+    }
+
+    func loadCheckpoint(
+        for key: RadioTranscriptCacheKey
+    ) throws -> TimedTranscriptProgress? {
+        let url = checkpointURL(for: key)
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        do {
+            let artifact = try decoder.decode(
+                CheckpointArtifact.self,
+                from: Data(contentsOf: url)
+            )
+            guard artifact.schemaVersion ==
+                    CheckpointArtifact.currentSchemaVersion,
+                  artifact.key == key else {
+                throw StoreError.invalidTranscriptIdentity
+            }
+            try validateCheckpoint(artifact.progress, for: key)
+            return artifact.progress
+        } catch {
+            try? fileManager.removeItem(at: url)
+            return nil
+        }
+    }
+
+    func removeCheckpoint(for key: RadioTranscriptCacheKey) throws {
+        let url = checkpointURL(for: key)
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        try fileManager.removeItem(at: url)
     }
 
     func saveBatch(_ manifest: RadioTranscriptBatchManifest) throws {
@@ -289,6 +351,42 @@ actor RadioTranscriptStore {
             throw StoreError.invalidTranscriptIdentity
         }
         try validate(record: artifact.record, transcript: artifact.transcript)
+    }
+
+    private func validateCheckpoint(
+        _ progress: TimedTranscriptProgress,
+        for key: RadioTranscriptCacheKey
+    ) throws {
+        let transcript = progress.transcript
+        guard key.assetFingerprint == transcript.assetFingerprint,
+              key.engineIdentifier == transcript.engineIdentifier,
+              key.engineVersion == transcript.engineVersion,
+              key.localeIdentifier == transcript.localeIdentifier,
+              progress.finalizedThroughSeconds >=
+                (transcript.units.last?.endSeconds ?? 0),
+              progress.finalizedThroughSeconds <=
+                transcript.audioDurationSeconds else {
+            throw StoreError.invalidTranscriptIdentity
+        }
+    }
+
+    private func checkpointURL(
+        for key: RadioTranscriptCacheKey
+    ) -> URL {
+        let identity = [
+            key.episodeKey.feedID,
+            key.episodeKey.episodeID,
+            key.assetFingerprint,
+            key.engineIdentifier,
+            key.engineVersion,
+            key.localeIdentifier
+        ].joined(separator: "\u{1f}")
+        let digest = SHA256.hash(data: Data(identity.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return checkpointsDirectory
+            .appendingPathComponent(digest)
+            .appendingPathExtension("json")
     }
 
     private func validate(

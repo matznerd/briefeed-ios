@@ -127,18 +127,19 @@ interactions stay independent.
 
 ### Prepare All Command
 
-A **Prepare All** command appears after the final item in "Your radio brief,"
+A **Prepare All** command appears in the "Your radio brief" section header so
+it is discoverable without scrolling to the end of the playlist. It remains
 inside the scroll content and above the safe-area inset reserved for the
 floating navigation and mini-player. It is not added to the already dense
 mini-player transport row.
 
-The row shows:
+The header action shows:
 
-- a familiar download/preparation icon;
+- a familiar waveform/preparation icon;
 - `Prepare all` as the command;
-- the number of remaining eligible episodes;
-- a short local-processing label;
-- completed and total counts while work is active.
+- the eligible count as an accessibility hint;
+- completed and total counts plus a stop action while work is active;
+- a ready state after the visible snapshot is complete.
 
 Examples:
 
@@ -681,13 +682,19 @@ Checkpoint behavior:
 - Each successfully validated transcript is saved immediately.
 - The batch manifest is saved after each durable stage and each completed
   episode.
-- If expiration occurs during speech analysis, that episode returns to
-  `audioReady`. Apple SpeechAnalyzer analysis restarts from the already cached
-  audio next time; previously completed episodes are not repeated.
+- Finalized SpeechAnalyzer passages are atomically checkpointed against the
+  full cache identity: episode key, exact audio fingerprint, engine, engine
+  version, and locale.
+- If expiration occurs during speech analysis, the latest durable passage is
+  restored immediately on the next attempt while analysis restarts against the
+  already cached exact audio. Previously completed episodes are not repeated.
 - If expiration occurs during a download, resumable URLSession state is used
   when available. Otherwise only that incomplete download restarts.
-- The SpeechAnalyzer result is all-or-nothing in V1. Briefeed does not persist
-  or display a partial transcript as if it were complete.
+- Partial text is never presented as complete. The compact reader shows it
+  only while finalized coverage remains safely ahead of playback, entering at
+  five seconds of lead and hiding below one second of lead.
+- The complete transcript replaces and removes its checkpoint only after the
+  final artifact and index commit succeed.
 
 ## Exact-Asset and Dynamic-Ad Safety
 
@@ -723,6 +730,9 @@ V1 uses these safeguards:
 9. A transport that exposes final URL, response validators, positive content
    length, and duration may validate the active remote response directly
    instead of performing the local promotion.
+10. A finalized partial transcript follows the same exact-asset rules as a
+    complete transcript. It may trigger same-position local promotion, but
+    text remains hidden for an unverified or mismatched stream.
 
 For an uncached episode, the first play may incur a bounded download-only
 startup delay. This is the smallest reliable implementation with the current
@@ -844,8 +854,9 @@ shows material data use.
   entries to their last durable state.
 - An interrupted `audioReady` episode resumes transcription without
   redownloading.
-- An interrupted transcript operation restarts only that transcript; it does
-  not repeat completed batch entries.
+- An interrupted transcript operation restores its last finalized checkpoint,
+  restarts only that transcript against the cached exact audio, and does not
+  repeat completed batch entries.
 - Selecting an earlier source episode starts audio immediately and prepares
   only that selected episode on demand.
 

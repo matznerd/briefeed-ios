@@ -209,9 +209,10 @@ final class AudioPlayerViewModelV2: ObservableObject {
         _ previous: TimeInterval,
         _ next: TimeInterval
     ) -> Bool {
-        guard previous.isFinite, next.isFinite else { return previous == next }
-        return Int((previous * 10).rounded(.down)) ==
-            Int((next * 10).rounded(.down))
+        TimedTranscriptSamplingPolicy.isSamePresentationFrame(
+            previous,
+            next
+        )
     }
 
     private func validateTranscriptPlayback() {

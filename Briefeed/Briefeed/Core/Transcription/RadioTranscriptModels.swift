@@ -96,9 +96,65 @@ enum RadioTranscriptPreparationState: Equatable, Sendable {
     case queued
     case downloading(progress: Double?)
     case transcribing
+    case partial(TimedTranscriptProgress)
     case ready(TimedTranscript)
     case deferred
     case failed(message: String, canRetry: Bool)
+}
+
+enum TimedTranscriptCoveragePolicy {
+    static let enterLeadSeconds: TimeInterval = 5
+    static let exitLeadSeconds: TimeInterval = 1
+
+    static func shouldDisplay(
+        finalizedThroughSeconds: TimeInterval,
+        mediaTime: TimeInterval,
+        wasDisplaying: Bool
+    ) -> Bool {
+        guard finalizedThroughSeconds.isFinite, mediaTime.isFinite else {
+            return false
+        }
+        let requiredLead = wasDisplaying
+            ? exitLeadSeconds
+            : enterLeadSeconds
+        return finalizedThroughSeconds - mediaTime >= requiredLead
+    }
+}
+
+enum TimedTranscriptSamplingPolicy {
+    static let maximumFramesPerSecond = 30.0
+    static let rangeHighlightMinimumRate = 1.5
+
+    static func timerInterval(playbackRate: Double) -> TimeInterval {
+        let rate = playbackRate.isFinite ? max(playbackRate, 0.5) : 1
+        return max(1.0 / maximumFramesPerSecond, 0.1 / rate)
+    }
+
+    static func highlightedSourceWindow(
+        playbackRate: Double
+    ) -> TimeInterval {
+        let rate = playbackRate.isFinite ? max(playbackRate, 0.5) : 1
+        return min(max(0.1 * rate, 0.1), 0.5)
+    }
+
+    static func usesRangeHighlight(playbackRate: Double) -> Bool {
+        playbackRate.isFinite &&
+            playbackRate > rangeHighlightMinimumRate
+    }
+
+    static func isSamePresentationFrame(
+        _ previous: TimeInterval,
+        _ next: TimeInterval
+    ) -> Bool {
+        guard previous.isFinite, next.isFinite else {
+            return previous == next
+        }
+        return Int(
+            (previous * maximumFramesPerSecond).rounded(.down)
+        ) == Int(
+            (next * maximumFramesPerSecond).rounded(.down)
+        )
+    }
 }
 
 enum RadioTranscriptPlaybackSyncState: Equatable, Sendable {

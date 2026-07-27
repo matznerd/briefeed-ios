@@ -286,6 +286,23 @@ struct RadioTranscriptCoordinatorTests {
                 )
             ]
         )
+        await harness.assets.cache(
+            RadioTranscriptAudioAsset(
+                schemaVersion: RadioTranscriptAudioAsset.currentSchemaVersion,
+                episodeKey: second.key,
+                originalURL: second.originalPlaybackURL,
+                finalURL: second.originalPlaybackURL,
+                etag: nil,
+                lastModified: nil,
+                responseContentLength: nil,
+                audioDurationSeconds: second.durationSeconds ?? 60,
+                assetFingerprint: "second-audio",
+                localFileURL: harness.root.appendingPathComponent("second.mp3"),
+                completedAt: .now,
+                lastAccessedAt: .now,
+                isTranscriptReady: false
+            )
+        )
         try await harness.store.saveBatch(oldManifest)
         harness.coordinator.updateVisibleSnapshot([first, second])
         try await harness.waitUntilBatchState(.stopped)
@@ -821,6 +838,14 @@ private enum CoordinatorTestError: Error {
 }
 
 private actor CoordinatorAssetProvider: RadioTranscriptAssetProviding {
+    private var cachedAssets: [
+        RadioEpisodeKey: RadioTranscriptAudioAsset
+    ] = [:]
+
+    func cache(_ asset: RadioTranscriptAudioAsset) {
+        cachedAssets[asset.episodeKey] = asset
+    }
+
     func acquire(
         _ request: RadioTranscriptAudioRequest
     ) async throws -> RadioTranscriptAudioAsset {
@@ -830,7 +855,7 @@ private actor CoordinatorAssetProvider: RadioTranscriptAssetProviding {
     func cachedAsset(
         for episodeKey: RadioEpisodeKey
     ) async throws -> RadioTranscriptAudioAsset? {
-        nil
+        cachedAssets[episodeKey]
     }
 
     func preparedPlaybackURL(for episodeKey: RadioEpisodeKey) async -> URL? {

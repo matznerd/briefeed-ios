@@ -32,6 +32,12 @@ struct TimedTranscriptProjection: Sendable {
         index.activeUnitIndex(at: mediaTime)
     }
 
+    func unitIndexes(
+        intersecting mediaRange: ClosedRange<TimeInterval>
+    ) -> [Int] {
+        index.unitIndexes(intersecting: mediaRange)
+    }
+
     func activeLineIndex(at mediaTime: TimeInterval) -> Int? {
         guard let unitIndex = activeUnitIndex(at: mediaTime) else { return nil }
         return lines.firstIndex { $0.unitIndexes.contains(unitIndex) }

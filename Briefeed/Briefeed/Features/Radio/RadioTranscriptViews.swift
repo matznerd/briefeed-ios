@@ -15,7 +15,7 @@ struct RadioTranscriptCompactContent: Equatable {
     let transcript: TimedTranscript?
     let visibleLines: [TimedTranscriptLine]
     let activeLineID: Int?
-    let activeUnitIndex: Int?
+    let activeUnitIndexes: Set<Int>
 
     var isReady: Bool { transcript != nil }
 }
@@ -38,9 +38,17 @@ enum RadioTranscriptUIPresentation {
         presentation: RadioTranscriptPresentation,
         mediaTime: TimeInterval,
         accessibilityTextSize: Bool,
-        playbackSyncState: RadioTranscriptPlaybackSyncState = .synchronized
+        playbackSyncState: RadioTranscriptPlaybackSyncState = .synchronized,
+        playbackRate: Double = 1,
+        allowsPartialText: Bool = true
     ) -> RadioTranscriptCompactContent {
-        guard case .ready(let transcript) = presentation.state else {
+        guard let transcript = presentation.transcript else {
+            return statusContent(
+                state: presentation.state,
+                accessibilityTextSize: accessibilityTextSize
+            )
+        }
+        if !presentation.isComplete, !allowsPartialText {
             return statusContent(
                 state: presentation.state,
                 accessibilityTextSize: accessibilityTextSize
@@ -58,7 +66,7 @@ enum RadioTranscriptUIPresentation {
                 transcript: nil,
                 visibleLines: [],
                 activeLineID: nil,
-                activeUnitIndex: nil
+                activeUnitIndexes: []
             )
         }
         let projection = TimedTranscriptProjection(
@@ -70,7 +78,8 @@ enum RadioTranscriptUIPresentation {
             transcript: transcript,
             projection: projection,
             mediaTime: mediaTime,
-            accessibilityTextSize: accessibilityTextSize
+            accessibilityTextSize: accessibilityTextSize,
+            playbackRate: playbackRate
         )
     }
 
@@ -97,13 +106,24 @@ enum RadioTranscriptUIPresentation {
         transcript: TimedTranscript,
         projection: TimedTranscriptProjection,
         mediaTime: TimeInterval,
-        accessibilityTextSize: Bool
+        accessibilityTextSize: Bool,
+        playbackRate: Double = 1
     ) -> RadioTranscriptCompactContent {
-        let activeLineIndex = projection.activeLineIndex(at: mediaTime)
+        let boundedMediaTime = mediaTime.isFinite
+            ? max(mediaTime, 0)
+            : 0
+        let activeLineIndex = projection.activeLineIndex(
+            at: boundedMediaTime
+        )
         let visibleLines = visibleLines(
             projection: projection,
             activeLineIndex: activeLineIndex,
             maximumCount: accessibilityTextSize ? 2 : 3
+        )
+        let activeUnitIndexes = highlightedUnitIndexes(
+            projection: projection,
+            mediaTime: boundedMediaTime,
+            playbackRate: playbackRate
         )
         return RadioTranscriptCompactContent(
             title: "Live transcript",
@@ -114,7 +134,35 @@ enum RadioTranscriptUIPresentation {
             transcript: transcript,
             visibleLines: visibleLines,
             activeLineID: activeLineIndex.map { projection.lines[$0].id },
-            activeUnitIndex: projection.activeUnitIndex(at: mediaTime)
+            activeUnitIndexes: activeUnitIndexes
+        )
+    }
+
+    static func highlightedUnitIndexes(
+        projection: TimedTranscriptProjection,
+        mediaTime: TimeInterval,
+        playbackRate: Double
+    ) -> Set<Int> {
+        let boundedMediaTime = mediaTime.isFinite
+            ? max(mediaTime, 0)
+            : 0
+        guard TimedTranscriptSamplingPolicy.usesRangeHighlight(
+            playbackRate: playbackRate
+        ) else {
+            return projection.activeUnitIndex(at: boundedMediaTime)
+                .map { [$0] } ?? []
+        }
+        let sourceWindow =
+            TimedTranscriptSamplingPolicy.highlightedSourceWindow(
+                playbackRate: playbackRate
+            )
+        return Set(
+            projection.unitIndexes(
+                intersecting: max(
+                    boundedMediaTime - sourceWindow,
+                    0
+                )...boundedMediaTime
+            )
         )
     }
 
@@ -275,6 +323,15 @@ enum RadioTranscriptUIPresentation {
             detail = "Audio keeps playing"
             progress = nil
             canRetry = false
+        case .partial(let partial):
+            title = "Catching up to the current audio"
+            let elapsed = PlayerPresentationFormat.elapsed(
+                partial.finalizedThroughSeconds
+            )
+            detail = "\(elapsed) transcribed"
+            progress = partial.finalizedThroughSeconds /
+                max(partial.transcript.audioDurationSeconds, 1)
+            canRetry = false
         case .deferred:
             title = "Transcript will continue when Briefeed is active"
             detail = nil
@@ -298,7 +355,7 @@ enum RadioTranscriptUIPresentation {
             transcript: nil,
             visibleLines: [],
             activeLineID: nil,
-            activeUnitIndex: nil
+            activeUnitIndexes: []
         )
     }
 
@@ -353,11 +410,19 @@ struct RadioTranscriptViewer: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var cachedProjection: CachedProjection?
+    @State private var displaysPartialText = false
+    @State private var displayedPartialEpisodeKey: RadioEpisodeKey?
 
     private struct CachedProjection {
         let identity: String
         let transcript: TimedTranscript
         let projection: TimedTranscriptProjection
+    }
+
+    private struct CoverageIdentity: Equatable {
+        let episodeKey: RadioEpisodeKey?
+        let finalizedThroughSeconds: TimeInterval?
+        let mediaTime: TimeInterval
     }
 
     var body: some View {
@@ -384,6 +449,9 @@ struct RadioTranscriptViewer: View {
         .task(id: projectionIdentity) {
             rebuildProjection()
         }
+        .onChange(of: coverageIdentity, initial: true) {
+            updatePartialVisibility()
+        }
     }
 
     private var transcriptIdentity: String? {
@@ -394,7 +462,9 @@ struct RadioTranscriptViewer: View {
             transcript.assetFingerprint,
             transcript.engineIdentifier,
             transcript.engineVersion,
-            transcript.localeIdentifier
+            transcript.localeIdentifier,
+            String(transcript.units.count),
+            String(transcript.units.last?.endSeconds ?? 0)
         ].joined(separator: "|")
     }
 
@@ -408,13 +478,16 @@ struct RadioTranscriptViewer: View {
     }
 
     private var compactContent: RadioTranscriptCompactContent {
-        guard playbackSyncState == .synchronized else {
+        guard playbackSyncState == .synchronized,
+              presentation.isComplete || allowsPartialText else {
             return RadioTranscriptUIPresentation.compactContent(
                 presentation: presentation,
                 mediaTime: currentTime,
                 accessibilityTextSize:
                     dynamicTypeSize.isAccessibilitySize,
-                playbackSyncState: playbackSyncState
+                playbackSyncState: playbackSyncState,
+                playbackRate: playbackRate,
+                allowsPartialText: allowsPartialText
             )
         }
         if let cachedProjection,
@@ -423,15 +496,64 @@ struct RadioTranscriptViewer: View {
                 transcript: cachedProjection.transcript,
                 projection: cachedProjection.projection,
                 mediaTime: currentTime,
-                accessibilityTextSize: dynamicTypeSize.isAccessibilitySize
+                accessibilityTextSize: dynamicTypeSize.isAccessibilitySize,
+                playbackRate: playbackRate
             )
         }
         return RadioTranscriptUIPresentation.compactContent(
             presentation: presentation,
             mediaTime: currentTime,
             accessibilityTextSize: dynamicTypeSize.isAccessibilitySize,
-            playbackSyncState: playbackSyncState
+            playbackSyncState: playbackSyncState,
+            playbackRate: playbackRate,
+            allowsPartialText: allowsPartialText
         )
+    }
+
+    private var allowsPartialText: Bool {
+        if presentation.isComplete { return true }
+        guard let coverage = presentation.finalizedThroughSeconds else {
+            return false
+        }
+        return TimedTranscriptCoveragePolicy.shouldDisplay(
+            finalizedThroughSeconds: coverage,
+            mediaTime: currentTime,
+            wasDisplaying:
+                displaysPartialText &&
+                displayedPartialEpisodeKey == presentation.episodeKey
+        )
+    }
+
+    private var coverageIdentity: CoverageIdentity {
+        CoverageIdentity(
+            episodeKey: presentation.episodeKey,
+            finalizedThroughSeconds:
+                presentation.finalizedThroughSeconds,
+            mediaTime: currentTime
+        )
+    }
+
+    private func updatePartialVisibility() {
+        guard !presentation.isComplete,
+              let coverage = presentation.finalizedThroughSeconds else {
+            displaysPartialText = false
+            displayedPartialEpisodeKey = nil
+            return
+        }
+        let sameEpisode =
+            displayedPartialEpisodeKey == presentation.episodeKey
+        let nextVisibility =
+            TimedTranscriptCoveragePolicy.shouldDisplay(
+                finalizedThroughSeconds: coverage,
+                mediaTime: currentTime,
+                wasDisplaying: displaysPartialText && sameEpisode
+            )
+        if displaysPartialText != nextVisibility {
+            displaysPartialText = nextVisibility
+        }
+        if displayedPartialEpisodeKey != presentation.episodeKey {
+            displayedPartialEpisodeKey = presentation.episodeKey
+        }
     }
 
     private func rebuildProjection() {
@@ -475,7 +597,7 @@ struct RadioTranscriptViewer: View {
                         line,
                         transcript: content.transcript,
                         activeLineID: content.activeLineID,
-                        activeUnitIndex: content.activeUnitIndex
+                        activeUnitIndexes: content.activeUnitIndexes
                     )
                     .font(
                         line.id == content.activeLineID
@@ -589,7 +711,8 @@ struct RadioTranscriptViewer: View {
             "captions.bubble"
         case .deferred:
             "pause.circle"
-        case .assetRequired, .queued, .downloading, .transcribing, .ready:
+        case .assetRequired, .queued, .downloading, .transcribing, .partial,
+             .ready:
             "waveform.badge.magnifyingglass"
         }
     }
@@ -599,6 +722,7 @@ struct RadioExpandedTranscriptView: View {
     let presentation: RadioTranscriptPresentation
     let currentTime: TimeInterval
     let playbackSyncState: RadioTranscriptPlaybackSyncState
+    let playbackRate: Double
     let isPlaying: Bool
     let canPlayNext: Bool
     let onSeek: (TimeInterval) -> Void
@@ -612,20 +736,28 @@ struct RadioExpandedTranscriptView: View {
     @State private var followsPlayback = true
     @State private var projection: TimedTranscriptProjection?
     @State private var projectionIdentity: String?
+    @State private var displaysPartialText = false
+    @State private var displayedPartialEpisodeKey: RadioEpisodeKey?
+
+    private struct CoverageIdentity: Equatable {
+        let episodeKey: RadioEpisodeKey?
+        let finalizedThroughSeconds: TimeInterval?
+        let mediaTime: TimeInterval
+    }
 
     var body: some View {
         NavigationStack {
             Group {
                 if playbackSyncState == .synchronized,
                    let transcript = presentation.transcript,
-                   let projection {
+                   let projection,
+                   allowsPartialText {
                     transcriptScroll(
                         transcript: transcript,
                         projection: projection
                     )
                 } else if presentation.transcript != nil {
-                    let status = RadioTranscriptUIPresentation
-                        .playbackSyncStatus(playbackSyncState)
+                    let status = expandedStatus
                     ContentUnavailableView(
                         status.title,
                         systemImage: "captions.bubble",
@@ -654,8 +786,68 @@ struct RadioExpandedTranscriptView: View {
             .task(id: transcriptIdentity) {
                 rebuildProjection()
             }
+            .onChange(of: coverageIdentity, initial: true) {
+                updatePartialVisibility()
+            }
         }
         .accessibilityIdentifier(AccessibilityID.Radio.transcriptExpanded)
+    }
+
+    private var expandedStatus: (title: String, detail: String) {
+        if playbackSyncState != .synchronized {
+            return RadioTranscriptUIPresentation
+                .playbackSyncStatus(playbackSyncState)
+        }
+        return (
+            "Catching up to the current audio",
+            "More finalized text will appear as it is prepared."
+        )
+    }
+
+    private var allowsPartialText: Bool {
+        if presentation.isComplete { return true }
+        guard let coverage = presentation.finalizedThroughSeconds else {
+            return false
+        }
+        return TimedTranscriptCoveragePolicy.shouldDisplay(
+            finalizedThroughSeconds: coverage,
+            mediaTime: currentTime,
+            wasDisplaying:
+                displaysPartialText &&
+                displayedPartialEpisodeKey == presentation.episodeKey
+        )
+    }
+
+    private var coverageIdentity: CoverageIdentity {
+        CoverageIdentity(
+            episodeKey: presentation.episodeKey,
+            finalizedThroughSeconds:
+                presentation.finalizedThroughSeconds,
+            mediaTime: currentTime
+        )
+    }
+
+    private func updatePartialVisibility() {
+        guard !presentation.isComplete,
+              let coverage = presentation.finalizedThroughSeconds else {
+            displaysPartialText = false
+            displayedPartialEpisodeKey = nil
+            return
+        }
+        let sameEpisode =
+            displayedPartialEpisodeKey == presentation.episodeKey
+        let nextVisibility =
+            TimedTranscriptCoveragePolicy.shouldDisplay(
+                finalizedThroughSeconds: coverage,
+                mediaTime: currentTime,
+                wasDisplaying: displaysPartialText && sameEpisode
+            )
+        if displaysPartialText != nextVisibility {
+            displaysPartialText = nextVisibility
+        }
+        if displayedPartialEpisodeKey != presentation.episodeKey {
+            displayedPartialEpisodeKey = presentation.episodeKey
+        }
     }
 
     private var transcriptIdentity: String? {
@@ -665,7 +857,9 @@ struct RadioExpandedTranscriptView: View {
             presentation.episodeKey?.episodeID ?? "",
             transcript.assetFingerprint,
             transcript.engineVersion,
-            transcript.localeIdentifier
+            transcript.localeIdentifier,
+            String(transcript.units.count),
+            String(transcript.units.last?.endSeconds ?? 0)
         ].joined(separator: "|")
     }
 
@@ -704,8 +898,13 @@ struct RadioExpandedTranscriptView: View {
                                 line,
                                 transcript: transcript,
                                 activeLineID: activeLineID,
-                                activeUnitIndex:
-                                    projection.activeUnitIndex(at: currentTime)
+                                activeUnitIndexes:
+                                    RadioTranscriptUIPresentation
+                                    .highlightedUnitIndexes(
+                                        projection: projection,
+                                        mediaTime: currentTime,
+                                        playbackRate: playbackRate
+                                    )
                             )
                             .font(
                                 line.id == activeLineID
@@ -836,75 +1035,81 @@ struct RadioExpandedTranscriptView: View {
     }
 }
 
-struct RadioTranscriptPrepareAllRow: View {
+struct RadioTranscriptPlaylistHeader: View {
     let content: RadioTranscriptPrepareAllContent
     let onPrepare: () -> Void
     let onStop: () -> Void
 
     var body: some View {
+        HStack(spacing: 12) {
+            Text("Your radio brief")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .textCase(nil)
+                .accessibilityIdentifier(AccessibilityID.Radio.playlist)
+            Spacer(minLength: 8)
+            action
+        }
+        .frame(minHeight: 44)
+    }
+
+    @ViewBuilder
+    private var action: some View {
         switch content.action {
         case .prepare:
             Button(action: onPrepare) {
-                rowContent(actionSymbol: "arrow.down.circle")
+                Label(content.title, systemImage: "waveform.badge.plus")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .frame(minHeight: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .foregroundStyle(Color.briefeedRed)
             .disabled(!content.isEnabled)
-            .accessibilityIdentifier(AccessibilityID.Radio.transcriptPrepareAll)
+            .accessibilityHint(content.detail)
+            .accessibilityIdentifier(
+                AccessibilityID.Radio.transcriptPrepareAll
+            )
 
         case .stop:
-            HStack(spacing: 12) {
-                rowContent(actionSymbol: "waveform.badge.magnifyingglass")
-                Button(action: onStop) {
+            Button(action: onStop) {
+                HStack(spacing: 6) {
+                    if let progress = content.progress {
+                        ProgressView(value: min(max(progress, 0), 1))
+                            .frame(width: 28)
+                            .tint(.briefeedRed)
+                            .accessibilityIdentifier(
+                                AccessibilityID.Radio
+                                    .transcriptPrepareProgress
+                            )
+                    }
                     Image(systemName: "stop.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(Color.briefeedRed)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
+                    Text(content.title)
+                        .lineLimit(1)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Stop transcript preparation")
-                .accessibilityIdentifier(AccessibilityID.Radio.transcriptStop)
+                .font(.subheadline.weight(.semibold))
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
             }
-            .accessibilityIdentifier(AccessibilityID.Radio.transcriptPrepareAll)
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.briefeedRed)
+            .accessibilityLabel("Stop transcript preparation")
+            .accessibilityValue(content.detail)
+            .accessibilityIdentifier(
+                AccessibilityID.Radio.transcriptPrepareAll
+            )
 
         case .none:
-            rowContent(actionSymbol: "checkmark.circle")
+            Label(content.title, systemImage: "checkmark.circle")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(minHeight: 44)
                 .accessibilityIdentifier(
                     AccessibilityID.Radio.transcriptPrepareAll
                 )
         }
-    }
-
-    private func rowContent(actionSymbol: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: actionSymbol)
-                .font(.title3)
-                .foregroundStyle(
-                    content.action == .none
-                        ? Color.secondary
-                        : Color.briefeedRed
-                )
-                .frame(width: 44, height: 44)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(content.title)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                Text(content.detail)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                if let progress = content.progress {
-                    ProgressView(value: min(max(progress, 0), 1))
-                        .tint(.briefeedRed)
-                        .accessibilityIdentifier(
-                            AccessibilityID.Radio.transcriptPrepareProgress
-                        )
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
     }
 }
 
@@ -912,7 +1117,7 @@ private func transcriptLine(
     _ line: TimedTranscriptLine,
     transcript: TimedTranscript?,
     activeLineID: Int?,
-    activeUnitIndex: Int?
+    activeUnitIndexes: Set<Int>
 ) -> Text {
     guard let transcript else { return Text(line.text) }
     var result = Text("")
@@ -921,7 +1126,7 @@ private func transcriptLine(
         let unit = transcript.units[unitIndex]
         let prefix = offset == 0 ? "" : " "
         var segment = Text(prefix + unit.text)
-        if unitIndex == activeUnitIndex {
+        if activeUnitIndexes.contains(unitIndex) {
             segment = segment
                 .fontWeight(.semibold)
                 .foregroundColor(Color(uiColor: .systemRed))

@@ -207,6 +207,66 @@ struct RadioTranscriptPlaybackTests {
         #expect(player.radioTranscriptPlaybackIsValidated)
     }
 
+    @Test func aPartialTranscriptPromotesOnlyToItsExactLocalAudio() async throws {
+        let candidate = makeCandidate("partial-promoted")
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "partial-promoted-\(UUID().uuidString).mp3"
+            )
+        try Data([0]).write(to: localURL)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+
+        let transcript = try makeTranscript(
+            fingerprint: "partial-promoted-fingerprint",
+            duration: 60
+        )
+        let asset = makeAsset(
+            candidate: candidate,
+            fingerprint: transcript.assetFingerprint,
+            duration: transcript.audioDurationSeconds,
+            localURL: localURL,
+            isTranscriptReady: false
+        )
+        let assets = PlaybackTranscriptAssetProvider()
+        let (player, transport) = await makePlayer(
+            candidates: [candidate],
+            current: candidate.key,
+            assets: assets
+        )
+        await player.playRadio()
+        let remotePlaybackID = try #require(transport.lastPlaybackID)
+        player.audioStateChanged(
+            id: remotePlaybackID,
+            to: .playing,
+            from: .loading
+        )
+        transport.currentTime = 18
+        transport.duration = 60
+        await assets.setCached(asset, for: candidate.key)
+
+        await player.validateActiveRadioTranscript(
+            RadioTranscriptPresentation(
+                episodeKey: candidate.key,
+                state: .partial(
+                    TimedTranscriptProgress(
+                        transcript: transcript,
+                        finalizedThroughSeconds: 12
+                    )
+                )
+            )
+        )
+
+        let localPlaybackID = try #require(transport.lastPlaybackID)
+        #expect(localPlaybackID != remotePlaybackID)
+        #expect(transport.loads.map(\.1) == [
+            candidate.originalPlaybackURL,
+            localURL
+        ])
+        player.audioItemReady(id: localPlaybackID, duration: 60)
+        #expect(transport.seeks == [18])
+        #expect(player.radioTranscriptPlaybackIsValidated)
+    }
+
     @Test func resumingAPausedEpisodePromotesItsPreparedTranscriptAudio() async throws {
         let candidate = makeCandidate("resume-promoted")
         let localURL = FileManager.default.temporaryDirectory

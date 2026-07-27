@@ -4,6 +4,123 @@ import Testing
 
 @Suite("Radio transcript preparation pipeline")
 struct RadioTranscriptPreparationPipelineTests {
+    @Test func finalizedPassageIsPublishedBeforeTheFullTranscriptCompletes() async throws {
+        let harness = try PipelineHarness(
+            progressDelay: .milliseconds(150)
+        )
+        defer { harness.cleanup() }
+        let events = await harness.pipeline.events()
+        let job = harness.job("progressive", priority: .current)
+
+        await harness.pipeline.reconcile(
+            interactive: [job],
+            batch: [],
+            generation: 1
+        )
+
+        var states: [RadioTranscriptPreparationState] = []
+        for await event in events {
+            guard case .preparation(let key, _, let state) = event,
+                  key == job.episodeKey else {
+                continue
+            }
+            states.append(state)
+            if case .ready = state { break }
+        }
+
+        let partialIndex = try #require(states.firstIndex {
+            if case .partial = $0 { return true }
+            return false
+        })
+        let readyIndex = try #require(states.firstIndex {
+            if case .ready = $0 { return true }
+            return false
+        })
+        #expect(partialIndex < readyIndex)
+        guard case .partial(let progress) = states[partialIndex] else {
+            Issue.record("Expected progressive transcript state")
+            return
+        }
+        #expect(progress.finalizedThroughSeconds == 1)
+        #expect(progress.transcript.recognizedText == "Latest news")
+        #expect(progress.transcript.assetFingerprint == "fingerprint-progressive")
+        #expect(
+            try await harness.store.loadCheckpoint(
+                for: harness.cacheKey(for: job)
+            ) == nil
+        )
+    }
+
+    @Test func cancellationFlushesTheLatestFinalizedPassage() async throws {
+        let harness = try PipelineHarness(
+            progressDelay: .seconds(5)
+        )
+        defer { harness.cleanup() }
+        let events = await harness.pipeline.events()
+        let job = harness.job("checkpoint", priority: .current)
+
+        await harness.pipeline.reconcile(
+            interactive: [job],
+            batch: [],
+            generation: 1
+        )
+
+        for await event in events {
+            guard case .preparation(let key, _, let state) = event,
+                  key == job.episodeKey else {
+                continue
+            }
+            if case .partial = state { break }
+        }
+        await harness.pipeline.cancelAll()
+
+        let checkpoint = try await harness.store.loadCheckpoint(
+            for: harness.cacheKey(for: job)
+        )
+        #expect(checkpoint?.finalizedThroughSeconds == 1)
+        #expect(checkpoint?.transcript.recognizedText == "Latest news")
+    }
+
+    @Test func restoredCheckpointRemainsTheLatestVisibleState() async throws {
+        let harness = try PipelineHarness(
+            delay: .milliseconds(250)
+        )
+        defer { harness.cleanup() }
+        let job = harness.job("restored", priority: .current)
+        try await harness.store.saveCheckpoint(
+            try harness.progress(for: job),
+            for: harness.cacheKey(for: job)
+        )
+        let events = await harness.pipeline.events()
+
+        await harness.pipeline.reconcile(
+            interactive: [job],
+            batch: [],
+            generation: 1
+        )
+
+        var states: [RadioTranscriptPreparationState] = []
+        for await event in events {
+            guard case .preparation(let key, _, let state) = event,
+                  key == job.episodeKey else {
+                continue
+            }
+            states.append(state)
+            if case .partial = state { break }
+        }
+
+        let transcribingIndex = try #require(states.firstIndex {
+            if case .transcribing = $0 { return true }
+            return false
+        })
+        let partialIndex = try #require(states.firstIndex {
+            if case .partial = $0 { return true }
+            return false
+        })
+        #expect(transcribingIndex < partialIndex)
+        await harness.pipeline.cancelAll()
+    }
+
     @Test func transportSecurityFailureUsesProductLanguage() {
         let message = RadioTranscriptPreparationPipeline.errorMessage(
             URLError(.appTransportSecurityRequiresSecureConnection)
@@ -190,14 +307,20 @@ private final class PipelineHarness: @unchecked Sendable {
     let recorder: PipelineEngineRecorder
     let pipeline: RadioTranscriptPreparationPipeline
 
-    init(delay: Duration = .zero) throws {
+    init(
+        delay: Duration = .zero,
+        progressDelay: Duration? = nil
+    ) throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("RadioTranscriptPipelineTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         store = try RadioTranscriptStore(
             rootDirectory: root.appendingPathComponent("transcripts")
         )
-        recorder = PipelineEngineRecorder(delay: delay)
+        recorder = PipelineEngineRecorder(
+            delay: delay,
+            progressDelay: progressDelay
+        )
         pipeline = RadioTranscriptPreparationPipeline(
             assetProvider: PipelineAssetProvider(root: root.appendingPathComponent("assets")),
             store: store,
@@ -216,6 +339,53 @@ private final class PipelineHarness: @unchecked Sendable {
             expectedDurationSeconds: 30,
             languageTag: "en-US",
             priority: priority
+        )
+    }
+
+    func cacheKey(
+        for job: RadioTranscriptJob
+    ) -> RadioTranscriptCacheKey {
+        RadioTranscriptCacheKey(
+            episodeKey: job.episodeKey,
+            assetFingerprint:
+                "fingerprint-\(job.episodeKey.episodeID)",
+            engineIdentifier: "test-engine",
+            engineVersion: "1",
+            localeIdentifier: "en-US"
+        )
+    }
+
+    func progress(
+        for job: RadioTranscriptJob
+    ) throws -> TimedTranscriptProgress {
+        let key = cacheKey(for: job)
+        return TimedTranscriptProgress(
+            transcript: try TimedTranscript(
+                assetFingerprint: key.assetFingerprint,
+                engineIdentifier: key.engineIdentifier,
+                engineVersion: key.engineVersion,
+                localeIdentifier: key.localeIdentifier,
+                recognizedText: "Latest news",
+                audioDurationSeconds: 30,
+                processingDurationSeconds: 0.1,
+                units: [
+                    .init(
+                        text: "Latest",
+                        startSeconds: 0,
+                        endSeconds: 0.5,
+                        confidence: 1,
+                        granularity: .word
+                    ),
+                    .init(
+                        text: "news",
+                        startSeconds: 0.5,
+                        endSeconds: 1,
+                        confidence: 1,
+                        granularity: .word
+                    )
+                ]
+            ),
+            finalizedThroughSeconds: 1
         )
     }
 
@@ -323,16 +493,33 @@ private struct PipelineTimedTranscriptEngine: TimedTranscriptEngine {
             locale: locale
         )
     }
+
+    func transcribe(
+        fileURL: URL,
+        assetFingerprint: String,
+        locale: Locale,
+        assetPolicy: SpeechAssetPolicy,
+        onProgress: @escaping TimedTranscriptProgressHandler
+    ) async throws -> TimedTranscript {
+        try await recorder.transcribe(
+            fileURL: fileURL,
+            assetFingerprint: assetFingerprint,
+            locale: locale,
+            onProgress: onProgress
+        )
+    }
 }
 
 private actor PipelineEngineRecorder {
     let delay: Duration
+    let progressDelay: Duration?
     private(set) var calls: [String] = []
     private(set) var maximumActiveCount = 0
     private var activeCount = 0
 
-    init(delay: Duration) {
+    init(delay: Duration, progressDelay: Duration?) {
         self.delay = delay
+        self.progressDelay = progressDelay
     }
 
     func transcribe(
@@ -373,5 +560,27 @@ private actor PipelineEngineRecorder {
                 )
             ]
         )
+    }
+
+    func transcribe(
+        fileURL: URL,
+        assetFingerprint: String,
+        locale: Locale,
+        onProgress: @escaping TimedTranscriptProgressHandler
+    ) async throws -> TimedTranscript {
+        let transcript = try await transcribe(
+            fileURL: fileURL,
+            assetFingerprint: assetFingerprint,
+            locale: locale
+        )
+        guard let progressDelay else { return transcript }
+        await onProgress(
+            TimedTranscriptProgress(
+                transcript: transcript,
+                finalizedThroughSeconds: 1
+            )
+        )
+        try await Task.sleep(for: progressDelay)
+        return transcript
     }
 }

@@ -1139,7 +1139,7 @@ final class UnifiedAudioPlayer: ObservableObject {
         let validationURL = activeRadioPlaybackURL
 
         guard let presentationKey = presentation.episodeKey,
-              case .ready(let transcript) = presentation.state else {
+              let transcript = presentation.transcript else {
             radioTranscriptPlaybackSyncState = .waiting
             return
         }
@@ -1164,8 +1164,8 @@ final class UnifiedAudioPlayer: ObservableObject {
             }
             radioTranscriptPlaybackSyncState =
                 radioCoordinator.currentKey == presentationKey &&
-                asset?.isTranscriptReady == true &&
-                asset?.assetFingerprint == transcript.assetFingerprint
+                asset?.assetFingerprint == transcript.assetFingerprint &&
+                asset?.localFileURL == activeRadioPlaybackURL
                     ? .synchronized
                     : .waiting
             return
@@ -1194,7 +1194,6 @@ final class UnifiedAudioPlayer: ObservableObject {
         }
         let remoteIdentity = audioPlayer.activeRemotePlaybackIdentity
         if let asset,
-           asset.isTranscriptReady,
            asset.episodeKey == key,
            asset.assetFingerprint == transcript.assetFingerprint,
            isPlaying,
@@ -1230,7 +1229,6 @@ final class UnifiedAudioPlayer: ObservableObject {
             observedDuration = finiteNonnegative(audioPlayer.duration)
         }
         if let asset,
-           asset.isTranscriptReady,
            asset.episodeKey == key,
            asset.assetFingerprint == transcript.assetFingerprint,
            observedDuration > 0,
@@ -1257,7 +1255,6 @@ final class UnifiedAudioPlayer: ObservableObject {
               remoteIdentity.playbackID == activePlaybackID,
               remoteIdentity.requestedURL == activeRadioPlaybackURL,
               let asset,
-              asset.isTranscriptReady,
               asset.episodeKey == key,
               asset.assetFingerprint == transcript.assetFingerprint,
               asset.originalURL == remoteIdentity.requestedURL,
@@ -1315,7 +1312,6 @@ final class UnifiedAudioPlayer: ObservableObject {
               activePlaybackID == expectedPlaybackID,
               let originalURL = activeRadioPlaybackURL,
               originalURL != asset.localFileURL,
-              asset.isTranscriptReady,
               transportDuration == 0 ||
                   Self.durationsMatch(
                       transportDuration,

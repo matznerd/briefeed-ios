@@ -273,6 +273,9 @@ final class SwiftAudioExService: NSObject, AudioPlaybackTransporting {
 
     func setRate(_ rate: Float) {
         player?.rate = PlaybackSpeedPolicy.normalize(rate)
+        if state == .playing {
+            startProgressTimer()
+        }
         updateNowPlayingInfo()
     }
 
@@ -392,7 +395,10 @@ final class SwiftAudioExService: NSObject, AudioPlaybackTransporting {
 
     private func startProgressTimer() {
         progressTimer?.invalidate()
-        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        let interval = TimedTranscriptSamplingPolicy.timerInterval(
+            playbackRate: Double(player?.rate ?? 1)
+        )
+        progressTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.publishProgress() }
         }
     }

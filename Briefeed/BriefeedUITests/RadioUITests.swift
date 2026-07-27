@@ -263,11 +263,11 @@ final class RadioUITests: XCTestCase {
         app.launch()
 
         let prepare = app.buttons["radio.transcript.prepareAll"]
-        for _ in 0..<5 where !prepare.isHittable {
-            app.swipeUp()
-        }
         XCTAssertTrue(prepare.waitForExistence(timeout: 5))
-        XCTAssertTrue(prepare.isHittable)
+        XCTAssertTrue(
+            prepare.isHittable,
+            "Prepare All belongs in the visible radio-brief section header"
+        )
 
         let rail = app.otherElements["navigation.rail"]
         XCTAssertTrue(rail.waitForExistence(timeout: 3))
@@ -584,7 +584,7 @@ final class RadioUITests: XCTestCase {
     @MainActor
     func testHeadlessRadioSmoke() throws {
         app = launchFixture("partial", reset: true)
-        XCTAssertTrue(app.otherElements["radio.playlist"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["radio.playlist"].waitForExistence(timeout: 15))
         let scrubber = app.otherElements["miniPlayer.scrubber"]
         XCTAssertTrue(scrubber.waitForExistence(timeout: 5))
         let initial = try elapsedSeconds(in: scrubber)

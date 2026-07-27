@@ -140,3 +140,38 @@ background processing. Before distribution, test a supported iOS 26 device:
    confirm only unfinished work resumes without losing completed artifacts.
 5. Exercise thermal, Low Power Mode, offline, failed-source, low-storage, and
    empty-eligible-queue states.
+
+## July 27 Progressive Transcript Verification
+
+The progressive follow-up now publishes only finalized SpeechAnalyzer passages
+while the rest of the exact fingerprinted local asset is still being analyzed.
+Partial transcripts are checkpointed atomically, restored after cancellation or
+relaunch, and displayed only while finalized coverage remains safely ahead of
+the playback clock. Coverage uses a 5-second entry lead and 1-second exit lead
+to avoid flashing the reader on and off near the analyzer frontier.
+
+Playback sampling is capped at 30 Hz and scales with playback rate. At rates
+above 1.5x the projection highlights the range of words crossed by the latest
+media-time sample, rather than pretending every short word can receive a
+separate visual frame. The Prepare All action is now in the visible
+`Your radio brief` section header and starts the user-initiated continued
+processing path directly.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Focused progressive transcript unit suites | PASS | 84 tests passed across timed transcript, projection, presentation, preparation pipeline, store, exact playback, coordinator, models, and continued-background driver suites |
+| Prepare All UI regression | PASS | `RadioUITests.testPrepareAllUsesVisibleRowsAndClearsBottomChrome` verified the header action is visible, hittable, unobscured by bottom chrome, and reaches the ready state |
+| Generic simulator compile | PASS | `make radio-compile` completed with `** TEST BUILD SUCCEEDED **` for the app, unit-test target, and UI-test target |
+| Managed-fleet smoke | PASS | `RadioUITests.testHeadlessRadioSmoke` verified playlist, playback, seek controls, Next, terminate/relaunch, and current-title restoration on the owned iPhone 15 Pro / iOS 18.6 simulator |
+| Smoke visual inspection | PASS | The headless screenshot shows finalized partial text, media-time highlighting, WPM, the Prepare All header action, playlist rows, rail, and mini-player without overlap |
+
+Current smoke receipt:
+`/tmp/briefeed-radio-progressive-transcript-red-derived-data/RadioSmokeEvidence/20260727T115720Z/receipt.txt`.
+The associated screenshot is
+`/tmp/briefeed-radio-progressive-transcript-red-derived-data/RadioSmokeEvidence/20260727T115720Z/radio-partial.png`.
+
+The iOS 18.6 simulator uses a deterministic transcript fixture and cannot prove
+the iOS 26 SpeechAnalyzer runtime or `BGContinuedProcessingTask`. The physical
+iOS 26 gate above therefore remains required for real partial-result latency,
+coverage behavior at 0.5x through 4x, interruption restore, and continued
+background processing.

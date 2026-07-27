@@ -58,4 +58,26 @@ struct TimedTranscriptTests {
         let selections = simulatedPlaybackRates.map { _ in index.activeUnit(at: 1.25)?.text }
         #expect(selections == Array(repeating: "California", count: simulatedPlaybackRates.count))
     }
+
+    @Test func crossedRangeReturnsEveryUnitTouchedAtHighPlaybackRates() throws {
+        let transcript = try TimedTranscript(
+            assetFingerprint: "a",
+            engineIdentifier: "e",
+            engineVersion: "1",
+            localeIdentifier: "en-US",
+            recognizedText: "one two three four",
+            audioDurationSeconds: 2,
+            processingDurationSeconds: 1,
+            units: [
+                .init(text: "one", startSeconds: 0, endSeconds: 0.25, confidence: 1, granularity: .word),
+                .init(text: "two", startSeconds: 0.25, endSeconds: 0.5, confidence: 1, granularity: .word),
+                .init(text: "three", startSeconds: 0.5, endSeconds: 0.75, confidence: 1, granularity: .word),
+                .init(text: "four", startSeconds: 0.75, endSeconds: 1, confidence: 1, granularity: .word)
+            ]
+        )
+        let index = TimedTranscriptIndex(transcript: transcript)
+
+        #expect(index.unitIndexes(intersecting: 0.2...0.8) == [0, 1, 2, 3])
+        #expect(index.unitIndexes(intersecting: 1.1...1.4).isEmpty)
+    }
 }

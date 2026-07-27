@@ -13,13 +13,34 @@ struct RadioTranscriptPresentation: Equatable, Sendable {
     )
 
     var isReady: Bool {
-        if case .ready = state { return true }
-        return false
+        isComplete
     }
 
     var transcript: TimedTranscript? {
-        guard case .ready(let transcript) = state else { return nil }
-        return transcript
+        switch state {
+        case .partial(let progress):
+            return progress.transcript
+        case .ready(let transcript):
+            return transcript
+        default:
+            return nil
+        }
+    }
+
+    var finalizedThroughSeconds: TimeInterval? {
+        switch state {
+        case .partial(let progress):
+            return progress.finalizedThroughSeconds
+        case .ready(let transcript):
+            return transcript.audioDurationSeconds
+        default:
+            return nil
+        }
+    }
+
+    var isComplete: Bool {
+        if case .ready = state { return true }
+        return false
     }
 }
 

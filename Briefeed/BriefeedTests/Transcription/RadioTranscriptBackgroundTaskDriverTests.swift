@@ -9,7 +9,8 @@ struct RadioTranscriptBackgroundTaskDriverTests {
         let scheduler = TestContinuedProcessingScheduler()
         let driver = RadioTranscriptBackgroundTaskDriver(
             scheduler: scheduler,
-            bundleIdentifier: "com.example.Briefeed"
+            bundleIdentifier: "com.example.Briefeed",
+            availability: { true }
         )
         let batchID = UUID()
 
@@ -43,7 +44,8 @@ struct RadioTranscriptBackgroundTaskDriverTests {
         let scheduler = TestContinuedProcessingScheduler()
         let driver = RadioTranscriptBackgroundTaskDriver(
             scheduler: scheduler,
-            bundleIdentifier: "com.example.Briefeed"
+            bundleIdentifier: "com.example.Briefeed",
+            availability: { true }
         )
         _ = driver.submit(batchID: UUID(), total: 4, onExpiration: {})
         let task = scheduler.launchLatest()
@@ -66,7 +68,8 @@ struct RadioTranscriptBackgroundTaskDriverTests {
         let scheduler = TestContinuedProcessingScheduler()
         let driver = RadioTranscriptBackgroundTaskDriver(
             scheduler: scheduler,
-            bundleIdentifier: "com.example.Briefeed"
+            bundleIdentifier: "com.example.Briefeed",
+            availability: { true }
         )
         var expirationCount = 0
         _ = driver.submit(batchID: UUID(), total: 2) {
@@ -85,7 +88,8 @@ struct RadioTranscriptBackgroundTaskDriverTests {
         scheduler.submissionError = TestSchedulerError.rejected
         let driver = RadioTranscriptBackgroundTaskDriver(
             scheduler: scheduler,
-            bundleIdentifier: "com.example.Briefeed"
+            bundleIdentifier: "com.example.Briefeed",
+            availability: { true }
         )
         var expirationCount = 0
 
@@ -106,7 +110,8 @@ struct RadioTranscriptBackgroundTaskDriverTests {
         let scheduler = TestContinuedProcessingScheduler()
         let driver = RadioTranscriptBackgroundTaskDriver(
             scheduler: scheduler,
-            bundleIdentifier: "com.example.Briefeed"
+            bundleIdentifier: "com.example.Briefeed",
+            availability: { true }
         )
         _ = driver.submit(batchID: UUID(), total: 1, onExpiration: {})
         let task = scheduler.launchLatest()

@@ -106,6 +106,10 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
     private let now: @Sendable () -> Date
     private var worker: Task<Void, Never>?
     private var activeGeneration = 0
+    private var latestCheckpoints:
+        [RadioTranscriptCacheKey: TimedTranscriptProgress] = [:]
+    private var persistedCheckpointCoverage:
+        [RadioTranscriptCacheKey: TimeInterval] = [:]
     private var eventContinuation: AsyncStream<RadioTranscriptPipelineEvent>
         .Continuation?
 
@@ -138,14 +142,24 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
         interactive: [RadioTranscriptJob],
         batch: [RadioTranscriptJob],
         generation: Int
-    ) {
+    ) async {
         let previousWorker = worker
         previousWorker?.cancel()
+        worker = nil
+        await previousWorker?.value
+        await flushCheckpoints()
         activeGeneration = generation
 
         var seen = Set<RadioEpisodeKey>()
         let automatic = interactive
-            .sorted(by: Self.jobPrecedes)
+            .enumerated()
+            .sorted { lhs, rhs in
+                if lhs.element.priority != rhs.element.priority {
+                    return lhs.element.priority < rhs.element.priority
+                }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
             .filter { seen.insert($0.episodeKey).inserted }
             .prefix(3)
         let remainingBatch = batch
@@ -154,7 +168,6 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
         let batchKeys = Set(batch.map(\.episodeKey))
 
         worker = Task {
-            await previousWorker?.value
             for job in jobs {
                 guard !Task.isCancelled,
                       generation == self.activeGeneration else {
@@ -169,9 +182,12 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
         }
     }
 
-    func cancelAll() {
-        worker?.cancel()
+    func cancelAll() async {
+        let previousWorker = worker
+        previousWorker?.cancel()
         worker = nil
+        await previousWorker?.value
+        await flushCheckpoints()
     }
 
     private func process(
@@ -238,6 +254,18 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
                 generation: generation,
                 state: .transcribing
             ))
+            if let checkpoint = try await store.loadCheckpoint(
+                for: expectedKey
+            ) {
+                latestCheckpoints[expectedKey] = checkpoint
+                persistedCheckpointCoverage[expectedKey] =
+                    checkpoint.finalizedThroughSeconds
+                emitProgress(
+                    checkpoint,
+                    episodeKey: job.episodeKey,
+                    generation: generation
+                )
+            }
             let transcript = try await resolved.engine.transcribe(
                 fileURL: asset.localFileURL,
                 assetFingerprint: asset.assetFingerprint,
@@ -245,7 +273,16 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
                 assetPolicy: job.priority == .nextOne ||
                     job.priority == .nextTwo
                     ? .installedOnly
-                    : .allowDownload
+                    : .allowDownload,
+                onProgress: { [weak self] progress in
+                    guard let self else { return }
+                    await self.acceptProgress(
+                        progress,
+                        cacheKey: expectedKey,
+                        episodeKey: job.episodeKey,
+                        generation: generation
+                    )
+                }
             )
             try ensureCurrent(generation)
 
@@ -256,6 +293,9 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
                 engineVersion: transcript.engineVersion,
                 localeIdentifier: transcript.localeIdentifier
             )
+            guard actualKey == expectedKey else {
+                throw RadioTranscriptStore.StoreError.invalidTranscriptIdentity
+            }
             let preparedAt = now()
             let record = RadioTranscriptRecord(
                 schemaVersion: RadioTranscriptRecord.currentSchemaVersion,
@@ -271,22 +311,27 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
             try await store.save(transcript: transcript, record: record)
             do {
                 try ensureCurrent(generation)
+                try await assetProvider.markTranscriptReady(asset)
+                try ensureCurrent(generation)
+                if tracksBatchEntry {
+                    try await updateBatch(
+                        job.episodeKey,
+                        state: .transcriptReady(cacheKey: actualKey)
+                    )
+                    try ensureCurrent(generation)
+                }
+                try? await store.removeCheckpoint(for: actualKey)
+                latestCheckpoints.removeValue(forKey: actualKey)
+                persistedCheckpointCoverage.removeValue(forKey: actualKey)
+                emitReady(
+                    transcript,
+                    episodeKey: job.episodeKey,
+                    generation: generation
+                )
             } catch {
                 try? await store.removeTranscript(for: actualKey)
                 throw error
             }
-            try await assetProvider.markTranscriptReady(asset)
-            if tracksBatchEntry {
-                try await updateBatch(
-                    job.episodeKey,
-                    state: .transcriptReady(cacheKey: actualKey)
-                )
-            }
-            emitReady(
-                transcript,
-                episodeKey: job.episodeKey,
-                generation: generation
-            )
         } catch is CancellationError {
             return
         } catch {
@@ -337,21 +382,77 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
         ))
     }
 
-    private func emit(_ event: RadioTranscriptPipelineEvent) {
-        eventContinuation?.yield(event)
+    private func emitProgress(
+        _ progress: TimedTranscriptProgress,
+        episodeKey: RadioEpisodeKey,
+        generation: Int
+    ) {
+        guard !Task.isCancelled,
+              generation == activeGeneration else {
+            return
+        }
+        emit(.preparation(
+            episodeKey: episodeKey,
+            generation: generation,
+            state: .partial(progress)
+        ))
     }
 
-    private static func jobPrecedes(
-        _ lhs: RadioTranscriptJob,
-        _ rhs: RadioTranscriptJob
-    ) -> Bool {
-        if lhs.priority != rhs.priority {
-            return lhs.priority < rhs.priority
+    private func acceptProgress(
+        _ progress: TimedTranscriptProgress,
+        cacheKey: RadioTranscriptCacheKey,
+        episodeKey: RadioEpisodeKey,
+        generation: Int
+    ) async {
+        guard !Task.isCancelled,
+              generation == activeGeneration,
+              progress.transcript.assetFingerprint ==
+                cacheKey.assetFingerprint,
+              progress.transcript.engineIdentifier ==
+                cacheKey.engineIdentifier,
+              progress.transcript.engineVersion == cacheKey.engineVersion,
+              progress.transcript.localeIdentifier ==
+                cacheKey.localeIdentifier else {
+            return
         }
-        if lhs.episodeKey.feedID != rhs.episodeKey.feedID {
-            return lhs.episodeKey.feedID < rhs.episodeKey.feedID
+        if let latest = latestCheckpoints[cacheKey],
+           progress.finalizedThroughSeconds <=
+            latest.finalizedThroughSeconds {
+            return
         }
-        return lhs.episodeKey.episodeID < rhs.episodeKey.episodeID
+        latestCheckpoints[cacheKey] = progress
+        let persisted = persistedCheckpointCoverage[cacheKey]
+        if persisted == nil ||
+            progress.finalizedThroughSeconds - (persisted ?? 0) >= 15 {
+            do {
+                try await store.saveCheckpoint(progress, for: cacheKey)
+                persistedCheckpointCoverage[cacheKey] =
+                    progress.finalizedThroughSeconds
+            } catch {
+                // A transient checkpoint failure must not stop transcription.
+            }
+        }
+        emitProgress(
+            progress,
+            episodeKey: episodeKey,
+            generation: generation
+        )
+    }
+
+    private func flushCheckpoints() async {
+        for (key, progress) in latestCheckpoints {
+            do {
+                try await store.saveCheckpoint(progress, for: key)
+                persistedCheckpointCoverage[key] =
+                    progress.finalizedThroughSeconds
+            } catch {
+                // The worker can safely reanalyze if a flush cannot commit.
+            }
+        }
+    }
+
+    private func emit(_ event: RadioTranscriptPipelineEvent) {
+        eventContinuation?.yield(event)
     }
 
     private static func hash(url: URL) -> String {
