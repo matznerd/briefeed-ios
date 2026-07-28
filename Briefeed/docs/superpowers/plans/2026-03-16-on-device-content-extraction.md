@@ -1,5 +1,9 @@
 # On-Device Content Extraction Cascade — Implementation Plan
 
+> **Superseded:** Use
+> `2026-07-27-local-article-audio-radio-continuation.md`. The newer plan ports
+> the proven DeciphVR approach without adding Jina Reader or a new package.
+
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace Firecrawl as the primary article content fetcher with a free, on-device WKWebView + Readability.js pipeline that bypasses anti-bot systems, then cascade to Jina Reader and Firecrawl as fallbacks.

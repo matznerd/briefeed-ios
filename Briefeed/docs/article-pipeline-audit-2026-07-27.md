@@ -4,7 +4,10 @@ Date: 2026-07-27
 
 Branch: `codex/article-pipeline-audit`
 
-Baseline: `ea259c8` (the working Live Radio build now on `origin/master`)
+Baseline: `2176f0f` (the working Live Radio build now on `origin/master`)
+
+Implementation plan:
+`docs/superpowers/plans/2026-07-27-local-article-audio-radio-continuation.md`
 
 ## Executive decision
 
