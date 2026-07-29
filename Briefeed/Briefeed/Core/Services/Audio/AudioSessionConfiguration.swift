@@ -1,9 +1,9 @@
 import AVFoundation
 
 enum AudioSessionConfiguration {
-    // Keep spoken news playing while the user browses apps that activate their
-    // own audio session. The playback category provides output routing itself.
-    static let playbackOptions: AVAudioSession.CategoryOptions = [.mixWithOthers]
+    // The legacy MediaPlayer integration only becomes the system Now Playing
+    // app when playback starts from a nonmixable audio session.
+    static let playbackOptions: AVAudioSession.CategoryOptions = []
 
     static func activatePlayback(on session: AVAudioSession = .sharedInstance()) throws {
         try session.setCategory(
