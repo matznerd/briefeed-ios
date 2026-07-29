@@ -5,6 +5,8 @@ import Testing
 @Suite("Audio session configuration")
 struct AudioSessionConfigurationTests {
     @Test func playbackRemainsNonmixableForSystemNowPlayingEligibility() {
+        // A mixable session can still produce sound, which makes this regression
+        // deceptively easy to miss without explicitly checking the category.
         let options = AudioSessionConfiguration.playbackOptions
 
         #expect(!options.contains(.mixWithOthers))

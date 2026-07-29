@@ -49,6 +49,23 @@ final class RadioUITests: XCTestCase {
     }
 
     @MainActor
+    func testOnlyCurrentRadioRowIsExposedAsSelected() throws {
+        app.launch()
+
+        let current = app.descendants(matching: .any)[
+            "radio.episode.fixture-npr.fixture-partial"
+        ]
+        let next = app.descendants(matching: .any)[
+            "radio.episode.fixture-bbc.fixture-fresh"
+        ]
+
+        XCTAssertTrue(current.waitForExistence(timeout: 5))
+        XCTAssertTrue(next.waitForExistence(timeout: 5))
+        XCTAssertTrue(current.isSelected)
+        XCTAssertFalse(next.isSelected)
+    }
+
+    @MainActor
     func testRailControlsAreAccessibleAndMeetMinimumHitSize() throws {
         app.launch()
 

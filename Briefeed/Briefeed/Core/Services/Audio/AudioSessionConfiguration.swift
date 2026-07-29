@@ -1,8 +1,10 @@
 import AVFoundation
 
 enum AudioSessionConfiguration {
-    // The legacy MediaPlayer integration only becomes the system Now Playing
-    // app when playback starts from a nonmixable audio session.
+    // Do not add .mixWithOthers here. Briefeed's MPNowPlayingInfoCenter and
+    // MPRemoteCommandCenter integration is promoted to system Now Playing only
+    // when playback starts from a nonmixable session. The regression test locks
+    // this down because audio can keep playing while lock-screen controls vanish.
     static let playbackOptions: AVAudioSession.CategoryOptions = []
 
     static func activatePlayback(on session: AVAudioSession = .sharedInstance()) throws {

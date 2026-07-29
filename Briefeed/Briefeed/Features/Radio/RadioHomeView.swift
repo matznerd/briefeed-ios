@@ -42,6 +42,11 @@ enum RadioRowPrimaryAction: Equatable {
     }
 }
 
+enum RadioRowEmphasis: Equatable {
+    case standard
+    case nowPlaying
+}
+
 struct RadioPlaylistItem: Identifiable, Equatable {
     var id: RadioEpisodeKey { candidate.key }
     let candidate: RadioEpisodeCandidate
@@ -156,6 +161,15 @@ enum RadioHomePresentation {
         case .failed: return .retry
         case .upNext, .latest: return .play
         }
+    }
+
+    /// Keep the selected Radio story visually anchored while paused, but never
+    /// imply it is active when Brief playback owns the shared transport.
+    static func rowEmphasis(
+        for item: RadioPlaylistItem,
+        activeMode: ActivePlaybackMode
+    ) -> RadioRowEmphasis {
+        item.isCurrent && activeMode == .radio ? .nowPlaying : .standard
     }
 
     static func failureRecovery(for failure: RadioFailure) -> RadioFailureRecoveryAction {
@@ -358,6 +372,10 @@ struct RadioHomeView: View {
             activeMode: audioPlayerViewModel.activeMode,
             isPlaying: audioPlayerViewModel.isPlaying
         )
+        let emphasis = RadioHomePresentation.rowEmphasis(
+            for: item,
+            activeMode: audioPlayerViewModel.activeMode
+        )
         return HStack(spacing: 0) {
             Button {
                 perform(action, for: item)
@@ -395,6 +413,7 @@ struct RadioHomeView: View {
             .accessibilityLabel("\(action.accessibilityVerb) \(RadioHomePresentation.displayTitle(for: item.candidate))")
             .accessibilityValue(playlistStatusText(for: item))
             .accessibilityIdentifier(AccessibilityID.Radio.episode(item.candidate.key))
+            .accessibilityAddTraits(emphasis == .nowPlaying ? .isSelected : [])
 
             Button {
                 selectedSourceRoute = SourceRoute(
@@ -413,6 +432,7 @@ struct RadioHomeView: View {
             .accessibilityIdentifier(AccessibilityID.Radio.sourceEpisodes(item.candidate.key.feedID))
         }
         .padding(.vertical, 5)
+        .listRowBackground(playlistRowBackground(for: emphasis))
     }
 
     private func perform(_ action: RadioRowPrimaryAction, for item: RadioPlaylistItem) {
@@ -456,6 +476,21 @@ struct RadioHomeView: View {
         case .listened: .secondary
         case .failed: .orange
         case .upNext, .latest, .inProgress: item.isCurrent ? .briefeedRed : .secondary
+        }
+    }
+
+    @ViewBuilder
+    private func playlistRowBackground(for emphasis: RadioRowEmphasis) -> some View {
+        if emphasis == .nowPlaying {
+            ZStack(alignment: .leading) {
+                Color.briefeedRed.opacity(0.12)
+
+                Rectangle()
+                    .fill(Color.briefeedRed)
+                    .frame(width: 4)
+            }
+        } else {
+            Color.clear
         }
     }
 

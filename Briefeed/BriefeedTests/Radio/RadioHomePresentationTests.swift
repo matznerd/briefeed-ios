@@ -57,6 +57,38 @@ struct RadioHomePresentationTests {
         #expect(RadioRowPrimaryAction.replay.accessibilityVerb == "Replay")
     }
 
+    @Test func onlyCurrentRadioOwnedRowReceivesNowPlayingEmphasis() {
+        let episode = candidate(
+            feedID: "source",
+            episodeID: "latest",
+            title: "Latest",
+            publishedAt: Date(),
+            priority: 0
+        )
+        func item(current: Bool) -> RadioPlaylistItem {
+            RadioPlaylistItem(
+                candidate: episode,
+                entry: nil,
+                isCurrent: current,
+                status: .inProgress(fraction: 0.4),
+                earlierEpisodeCount: 0
+            )
+        }
+
+        #expect(RadioHomePresentation.rowEmphasis(
+            for: item(current: true),
+            activeMode: .radio
+        ) == .nowPlaying)
+        #expect(RadioHomePresentation.rowEmphasis(
+            for: item(current: false),
+            activeMode: .radio
+        ) == .standard)
+        #expect(RadioHomePresentation.rowEmphasis(
+            for: item(current: true),
+            activeMode: .brief
+        ) == .standard)
+    }
+
     @Test func allSourceFailureRefreshesSourcesWhileTransportFailuresRetryPlayback() {
         #expect(RadioHomePresentation.failureRecovery(for: .allSourcesUnavailable) == .refreshSources)
         #expect(RadioHomePresentation.failureRecovery(for: .playback("failed")) == .retryPlayback)
