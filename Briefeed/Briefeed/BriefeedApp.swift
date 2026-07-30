@@ -96,6 +96,9 @@ struct BriefeedApp: App {
 
                     await appViewModel.connect()
 
+                    audioPlayerViewModel.setProgressPresentationActive(
+                        scenePhase != .background
+                    )
                     handleScenePhase(scenePhase)
                     if RadioStartupPolicy.shouldStartServices(for: scenePhase) {
                         await startRadioServices()
@@ -116,6 +119,9 @@ struct BriefeedApp: App {
                 }
                 .onChange(of: scenePhase) {
                     let newPhase = scenePhase
+                    audioPlayerViewModel.setProgressPresentationActive(
+                        newPhase != .background
+                    )
                     let transcriptCoordinator =
                         RadioServiceContainer.shared.transcriptCoordinator
                     #if DEBUG

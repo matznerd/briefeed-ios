@@ -80,6 +80,7 @@ final class AudioPlayerViewModelV2: ObservableObject {
     private let rssService: RSSAudioService
     private var cancellables = Set<AnyCancellable>()
     private var isApplyingPlaybackSpeed = false
+    private var progressPresentationIsActive = true
     private var transcriptValidationTask: Task<Void, Never>?
     
     // MARK: - Initialization
@@ -122,8 +123,14 @@ final class AudioPlayerViewModelV2: ObservableObject {
             .assign(to: &$isPlaying)
         
         unifiedPlayer.$currentTime
-            .removeDuplicates(by: Self.isSameTranscriptFrame)
-            .assign(to: &$currentTime)
+            .removeDuplicates(by: Self.isSameDisplayedSecond)
+            .sink { [weak self] currentTime in
+                guard let self, self.progressPresentationIsActive else {
+                    return
+                }
+                self.currentTime = currentTime
+            }
+            .store(in: &cancellables)
         
         unifiedPlayer.$duration
             .removeDuplicates()
@@ -205,14 +212,37 @@ final class AudioPlayerViewModelV2: ObservableObject {
             .assign(to: &$progress)
     }
 
-    private static func isSameTranscriptFrame(
+    /// This is the app-wide player model, so every publication invalidates all
+    /// screens that observe it. Do not use the transcript renderer's frame-rate
+    /// sampling policy here; that previously rebuilt the full retained Radio
+    /// source projection often enough for iOS to CPU-kill locked playback.
+    private static func isSameDisplayedSecond(
         _ previous: TimeInterval,
         _ next: TimeInterval
     ) -> Bool {
-        TimedTranscriptSamplingPolicy.isSamePresentationFrame(
-            previous,
-            next
-        )
+        guard previous.isFinite, next.isFinite else {
+            return previous == next
+        }
+        return Int(previous.rounded(.down)) ==
+            Int(next.rounded(.down))
+    }
+
+    /// Audio transport progress must continue while the phone is locked so
+    /// playback, persistence, and Now Playing remain accurate. Publishing those
+    /// frame-rate ticks into SwiftUI while the scene is backgrounded is
+    /// different: it redraws the hidden player hierarchy and can trigger iOS's
+    /// background CPU watchdog. This gate suppresses only presentation updates.
+    func setProgressPresentationActive(_ isActive: Bool) {
+        guard progressPresentationIsActive != isActive else { return }
+        progressPresentationIsActive = isActive
+        guard isActive,
+              !Self.isSameDisplayedSecond(
+                  currentTime,
+                  unifiedPlayer.currentTime
+              ) else {
+            return
+        }
+        currentTime = unifiedPlayer.currentTime
     }
 
     private func validateTranscriptPlayback() {

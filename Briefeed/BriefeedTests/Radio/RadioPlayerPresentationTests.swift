@@ -38,6 +38,44 @@ struct RadioPlayerPresentationTests {
         withExtendedLifetime(cancellable) {}
     }
 
+    @Test func lockedPlaybackPersistsProgressWithoutPublishingHiddenUIFrames() async throws {
+        let setup = await makeRestoredPlayer()
+        await setup.viewModel.play()
+        let playbackID = try #require(setup.transport.lastPlaybackID)
+        setup.player.audioProgressUpdated(
+            id: playbackID,
+            progress: 5 / 300,
+            currentTime: 5,
+            duration: 300
+        )
+        #expect(setup.viewModel.currentTime == 5)
+
+        setup.viewModel.setProgressPresentationActive(false)
+        var hiddenPublishedTimes: [TimeInterval] = []
+        let cancellable = setup.viewModel.$currentTime
+            .dropFirst()
+            .sink { hiddenPublishedTimes.append($0) }
+
+        for time in [10.0, 15.0, 20.0] {
+            setup.player.audioProgressUpdated(
+                id: playbackID,
+                progress: Float(time / 300),
+                currentTime: time,
+                duration: 300
+            )
+        }
+
+        #expect(hiddenPublishedTimes.isEmpty)
+        #expect(setup.viewModel.currentTime == 5)
+        #expect(setup.radio.entries.first?.positionSeconds == 20)
+
+        setup.viewModel.setProgressPresentationActive(true)
+
+        #expect(hiddenPublishedTimes == [20])
+        #expect(setup.viewModel.currentTime == 20)
+        withExtendedLifetime(cancellable) {}
+    }
+
     @Test func speedMenuUsesCanonicalOptionsAndPersistsSelection() {
         #expect(PlayerPresentationPolicy.speedOptions == PlaybackSpeedPolicy.supported)
         #expect(PlayerPresentationPolicy.speedOptions == [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 3.5, 4])

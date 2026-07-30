@@ -1990,10 +1990,17 @@ final class UnifiedAudioPlayer: ObservableObject {
     // MARK: - Background Handling
     
     func handleAppBackground() {
+        // SwiftAudioEx keeps its transport timer alive for Now Playing and
+        // durable progress. Stop this second UI-facing polling timer while the
+        // scene is hidden; it is restored on foreground without pausing audio.
+        playbackProgressTimer?.invalidate()
+        playbackProgressTimer = nil
         saveAppLifecycleState(isTermination: false)
     }
 
     func handleAppTermination() {
+        playbackProgressTimer?.invalidate()
+        playbackProgressTimer = nil
         saveAppLifecycleState(isTermination: true)
     }
 
