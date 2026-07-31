@@ -56,7 +56,7 @@ struct RadioTranscriptPlaybackTests {
         )
     }
 
-    @Test func anUnpreparedEpisodePlaysTheSameAssetPreparedForItsTranscript() async {
+    @Test func anUnpreparedEpisodeStartsRemotePlaybackWithoutWaitingForTranscript() async {
         let candidate = makeCandidate("remote")
         let localURL = URL(fileURLWithPath: "/tmp/remote-owned.mp3")
         let asset = makeAsset(
@@ -77,15 +77,10 @@ struct RadioTranscriptPlaybackTests {
 
         await player.playRadio()
 
-        #expect(transport.loads.map(\.1) == [localURL])
-        #expect(await assets.recordedAcquisitionRequests() == [
-            RadioTranscriptAudioRequest(
-                episodeKey: candidate.key,
-                remoteURL: candidate.originalPlaybackURL,
-                expectedDurationSeconds: candidate.durationSeconds,
-                purpose: .current
-            )
+        #expect(transport.loads.map(\.1) == [
+            candidate.originalPlaybackURL
         ])
+        #expect(await assets.recordedAcquisitionRequests().isEmpty)
         #expect(!player.radioTranscriptPlaybackIsValidated)
         #expect(player.radioTranscriptPlaybackSyncState == .waiting)
     }

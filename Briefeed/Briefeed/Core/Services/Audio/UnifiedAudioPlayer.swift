@@ -1031,28 +1031,17 @@ final class UnifiedAudioPlayer: ObservableObject {
             updateRemoteAvailability()
 
             do {
+                // Playback must never wait for transcript preparation. The
+                // transcript coordinator already acquires the current asset in
+                // parallel; use it only when it is cached before this load,
+                // otherwise start the remote stream immediately.
                 let playbackAsset: RadioTranscriptAudioAsset?
                 if prefersOwnedTranscriptPlayback,
                    let radioTranscriptAssetProvider {
-                    let cachedAsset = try? await
+                    playbackAsset = try? await
                         radioTranscriptAssetProvider.cachedAsset(
                             for: request.key
                         )
-                    if let cachedAsset {
-                        playbackAsset = cachedAsset
-                    } else {
-                        playbackAsset = try? await
-                            radioTranscriptAssetProvider.acquire(
-                                RadioTranscriptAudioRequest(
-                                    episodeKey: request.key,
-                                    remoteURL: request.url,
-                                    expectedDurationSeconds:
-                                        radioCoordinator.currentEpisode?
-                                            .durationSeconds,
-                                    purpose: .current
-                                )
-                            )
-                    }
                 } else {
                     playbackAsset = nil
                 }
