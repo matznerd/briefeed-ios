@@ -1050,9 +1050,27 @@ final class UnifiedAudioPlayer: ObservableObject {
                     return
                 }
                 await setActiveTranscriptAsset(playbackAsset)
-                let url = playbackAsset?.localFileURL ??
-                    preferredRadioURL(for: request.key) ??
-                    request.url
+                let fallbackURL =
+                    preferredRadioURL(for: request.key) ?? request.url
+                let url: URL
+                if let playbackAsset {
+                    url = playbackAsset.localFileURL
+                } else if fallbackURL.isFileURL {
+                    url = fallbackURL
+                } else if let radioTranscriptAssetProvider {
+                    // Resolving redirects is a short metadata request, not
+                    // transcript preparation. The transcript downloader uses
+                    // this same resolved URL so dynamic ad insertion cannot
+                    // produce two timelines for one episode.
+                    url = await radioTranscriptAssetProvider
+                        .resolvedPlaybackURL(for: fallbackURL)
+                } else {
+                    url = fallbackURL
+                }
+                guard playbackID == activePlaybackID,
+                      request.key == activeRadioKey else {
+                    return
+                }
                 activeRadioPlaybackURL = url
                 radioTranscriptPlaybackSyncState = .waiting
                 try await audioPlayer.play(

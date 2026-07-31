@@ -40,6 +40,25 @@ struct RadioTranscriptAssetServiceTests {
                 original)
     }
 
+    @Test func backgroundRequestFromBeforeURLPinningStillDecodes() throws {
+        let originalURL = URL(string: "https://example.com/legacy.mp3")!
+        let legacy = LegacyRadioTranscriptAudioRequest(
+            episodeKey: .init(feedID: "feed", episodeID: "legacy"),
+            remoteURL: originalURL,
+            expectedDurationSeconds: 30,
+            purpose: .current
+        )
+
+        let decoded = try JSONDecoder().decode(
+            RadioTranscriptAudioRequest.self,
+            from: JSONEncoder().encode(legacy)
+        )
+
+        #expect(decoded.remoteURL == originalURL)
+        #expect(decoded.resolvedRemoteURL == nil)
+        #expect(decoded.downloadURL == originalURL)
+    }
+
     @Test func acquisitionFingerprintsAndIndexesExactDownloadedBytes() async throws {
         let harness = try AssetHarness()
         defer { harness.cleanup() }
@@ -82,6 +101,54 @@ struct RadioTranscriptAssetServiceTests {
 
         #expect(assets[0] == assets[1])
         #expect(await harness.downloader.callCount == 1)
+    }
+
+    @Test func acquisitionDownloadsTheSameResolvedVersionExposedToPlayback() async throws {
+        let originalURL = URL(string: "https://example.com/dynamic.mp3")!
+        let resolvedURL = URL(
+            string: "https://cdn.example.com/version-123.mp3"
+        )!
+        let resolver = TestRadioRemoteAudioResolver(
+            resolutions: [originalURL: resolvedURL]
+        )
+        let harness = try AssetHarness(remoteAudioResolver: resolver)
+        defer { harness.cleanup() }
+        let request = RadioTranscriptAudioRequest(
+            episodeKey: .init(feedID: "feed", episodeID: "dynamic"),
+            remoteURL: originalURL,
+            expectedDurationSeconds: 30,
+            purpose: .current
+        )
+
+        let playbackURL = await harness.service.resolvedPlaybackURL(
+            for: originalURL
+        )
+        let asset = try await harness.service.acquire(request)
+
+        #expect(playbackURL == resolvedURL)
+        #expect(asset.originalURL == originalURL)
+        #expect(
+            await harness.downloader.lastRequest?.resolvedRemoteURL ==
+                resolvedURL
+        )
+    }
+
+    @Test func remoteResolutionIsSharedByConcurrentPlaybackAndDownload() async {
+        let originalURL = URL(string: "https://example.com/dynamic.mp3")!
+        let resolvedURL = URL(
+            string: "https://cdn.example.com/version-123.mp3"
+        )!
+        let loader = TestRemoteResolutionLoader(resolvedURL: resolvedURL)
+        let resolver = RadioRemoteAudioResolver { url in
+            await loader.resolve(url)
+        }
+
+        async let playbackURL = resolver.resolve(originalURL)
+        async let downloadURL = resolver.resolve(originalURL)
+        let urls = await [playbackURL, downloadURL]
+
+        #expect(urls == [resolvedURL, resolvedURL])
+        #expect(await loader.callCount == 1)
     }
 
     @Test func automaticLookaheadRejectsLongEpisodesBeforeNetworkWork() async throws {
@@ -156,6 +223,13 @@ private enum TestDurationError: Error {
     case unreadable
 }
 
+private struct LegacyRadioTranscriptAudioRequest: Codable {
+    let episodeKey: RadioEpisodeKey
+    let remoteURL: URL
+    let expectedDurationSeconds: TimeInterval?
+    let purpose: RadioTranscriptAudioPurpose
+}
+
 private final class AssetHarness: @unchecked Sendable {
     let root: URL
     let downloader: TestRadioTranscriptDownloader
@@ -164,6 +238,9 @@ private final class AssetHarness: @unchecked Sendable {
     init(
         cacheLimitBytes: Int64 = 10_000,
         downloadDelay: Duration = .zero,
+        remoteAudioResolver:
+            any RadioRemoteAudioResolving =
+                PassthroughRadioRemoteAudioResolver(),
         durationLoader: @escaping RadioTranscriptAssetService.DurationLoader = {
             _ in 30
         }
@@ -179,6 +256,7 @@ private final class AssetHarness: @unchecked Sendable {
             rootDirectory: root.appendingPathComponent("cache"),
             downloader: downloader,
             cacheLimitBytes: cacheLimitBytes,
+            remoteAudioResolver: remoteAudioResolver,
             durationLoader: durationLoader
         )
     }
@@ -202,6 +280,7 @@ private actor TestRadioTranscriptDownloader: RadioTranscriptDownloading {
     private let delay: Duration
     private(set) var callCount = 0
     private(set) var maximumActiveCount = 0
+    private(set) var lastRequest: RadioTranscriptAudioRequest?
     private var activeCount = 0
 
     init(stagingDirectory: URL, delay: Duration) {
@@ -211,6 +290,7 @@ private actor TestRadioTranscriptDownloader: RadioTranscriptDownloading {
 
     func download(_ request: RadioTranscriptAudioRequest) async throws -> RadioTranscriptDownloadResult {
         callCount += 1
+        lastRequest = request
         activeCount += 1
         maximumActiveCount = max(maximumActiveCount, activeCount)
         defer { activeCount -= 1 }
@@ -231,5 +311,34 @@ private actor TestRadioTranscriptDownloader: RadioTranscriptDownloading {
             lastModified: "Thu, 23 Jul 2026 08:00:00 GMT",
             responseContentLength: Int64(bytes.count)
         )
+    }
+}
+
+private actor TestRadioRemoteAudioResolver: RadioRemoteAudioResolving {
+    private let resolutions: [URL: URL]
+    private(set) var callCount = 0
+
+    init(resolutions: [URL: URL]) {
+        self.resolutions = resolutions
+    }
+
+    func resolve(_ remoteURL: URL) async -> URL {
+        callCount += 1
+        return resolutions[remoteURL] ?? remoteURL
+    }
+}
+
+private actor TestRemoteResolutionLoader {
+    private let resolvedURL: URL
+    private(set) var callCount = 0
+
+    init(resolvedURL: URL) {
+        self.resolvedURL = resolvedURL
+    }
+
+    func resolve(_ remoteURL: URL) async -> URL {
+        callCount += 1
+        try? await Task.sleep(for: .milliseconds(50))
+        return resolvedURL
     }
 }

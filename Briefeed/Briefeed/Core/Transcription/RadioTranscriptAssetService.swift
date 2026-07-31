@@ -11,8 +11,37 @@ enum RadioTranscriptAudioPurpose: String, Codable, Equatable, Sendable {
 struct RadioTranscriptAudioRequest: Codable, Equatable, Sendable {
     let episodeKey: RadioEpisodeKey
     let remoteURL: URL
+    let resolvedRemoteURL: URL?
     let expectedDurationSeconds: TimeInterval?
     let purpose: RadioTranscriptAudioPurpose
+
+    init(
+        episodeKey: RadioEpisodeKey,
+        remoteURL: URL,
+        resolvedRemoteURL: URL? = nil,
+        expectedDurationSeconds: TimeInterval?,
+        purpose: RadioTranscriptAudioPurpose
+    ) {
+        self.episodeKey = episodeKey
+        self.remoteURL = remoteURL
+        self.resolvedRemoteURL = resolvedRemoteURL
+        self.expectedDurationSeconds = expectedDurationSeconds
+        self.purpose = purpose
+    }
+
+    var downloadURL: URL {
+        resolvedRemoteURL ?? remoteURL
+    }
+
+    func resolvingRemoteURL(to url: URL) -> Self {
+        Self(
+            episodeKey: episodeKey,
+            remoteURL: remoteURL,
+            resolvedRemoteURL: url,
+            expectedDurationSeconds: expectedDurationSeconds,
+            purpose: purpose
+        )
+    }
 }
 
 struct RadioTranscriptDownloadResult: Sendable {
@@ -46,6 +75,19 @@ protocol RadioTranscriptDownloading: Sendable {
     ) async throws -> RadioTranscriptDownloadResult
 }
 
+protocol RadioRemoteAudioResolving: Sendable {
+    func resolve(_ remoteURL: URL) async -> URL
+}
+
+struct PassthroughRadioRemoteAudioResolver:
+    RadioRemoteAudioResolving,
+    Sendable
+{
+    func resolve(_ remoteURL: URL) async -> URL {
+        RadioTranscriptDownloadSecurity.securedURL(for: remoteURL)
+    }
+}
+
 struct RadioTranscriptAudioAsset: Codable, Equatable, Sendable {
     static let currentSchemaVersion = 1
 
@@ -76,6 +118,7 @@ protocol RadioTranscriptAssetProviding: Sendable {
     ) async throws -> RadioTranscriptAudioAsset
     func cachedAsset(for episodeKey: RadioEpisodeKey) async throws -> RadioTranscriptAudioAsset?
     func preparedPlaybackURL(for episodeKey: RadioEpisodeKey) async -> URL?
+    func resolvedPlaybackURL(for remoteURL: URL) async -> URL
     func markTranscriptReady(_ asset: RadioTranscriptAudioAsset) async throws
     func pin(
         _ episodeKey: RadioEpisodeKey,
@@ -85,6 +128,12 @@ protocol RadioTranscriptAssetProviding: Sendable {
         _ episodeKey: RadioEpisodeKey,
         reason: RadioTranscriptAssetPinReason
     ) async
+}
+
+extension RadioTranscriptAssetProviding {
+    func resolvedPlaybackURL(for remoteURL: URL) async -> URL {
+        RadioTranscriptDownloadSecurity.securedURL(for: remoteURL)
+    }
 }
 
 actor RadioTranscriptAssetService: RadioTranscriptAssetProviding {
@@ -110,6 +159,7 @@ actor RadioTranscriptAssetService: RadioTranscriptAssetProviding {
     private let indexURL: URL
     private let fileManager: FileManager
     private let downloader: any RadioTranscriptDownloading
+    private let remoteAudioResolver: any RadioRemoteAudioResolving
     private let cacheLimitBytes: Int64
     private let durationLoader: DurationLoader
     private let permits = RadioTranscriptDownloadPermitPool(limit: 2)
@@ -126,12 +176,16 @@ actor RadioTranscriptAssetService: RadioTranscriptAssetProviding {
         downloader: any RadioTranscriptDownloading,
         cacheLimitBytes: Int64 = 500 * 1_024 * 1_024,
         fileManager: FileManager = .default,
+        remoteAudioResolver:
+            any RadioRemoteAudioResolving =
+                PassthroughRadioRemoteAudioResolver(),
         durationLoader: DurationLoader? = nil
     ) throws {
         self.rootDirectory = rootDirectory
         audioDirectory = rootDirectory.appendingPathComponent("audio", isDirectory: true)
         indexURL = rootDirectory.appendingPathComponent("asset-index-v1.json")
         self.downloader = downloader
+        self.remoteAudioResolver = remoteAudioResolver
         self.cacheLimitBytes = cacheLimitBytes
         self.fileManager = fileManager
         self.durationLoader = durationLoader ?? { url in
@@ -157,13 +211,15 @@ actor RadioTranscriptAssetService: RadioTranscriptAssetProviding {
             .appendingPathComponent("Briefeed", isDirectory: true)
             .appendingPathComponent("RadioTranscriptAudio", isDirectory: true)
         let staging = root.appendingPathComponent("staging", isDirectory: true)
+        let remoteAudioResolver = RadioRemoteAudioResolver()
         let downloader = try RadioTranscriptBackgroundDownloader(
             stagingDirectory: staging
         )
         let service = try RadioTranscriptAssetService(
             rootDirectory: root,
             downloader: downloader,
-            fileManager: fileManager
+            fileManager: fileManager,
+            remoteAudioResolver: remoteAudioResolver
         )
         downloader.setOrphanCompletionHandler { result in
             Task {
@@ -200,6 +256,10 @@ actor RadioTranscriptAssetService: RadioTranscriptAssetProviding {
             inFlight[request.episodeKey] = nil
             throw error
         }
+    }
+
+    func resolvedPlaybackURL(for remoteURL: URL) async -> URL {
+        await remoteAudioResolver.resolve(remoteURL)
     }
 
     func cachedAsset(
@@ -296,7 +356,16 @@ actor RadioTranscriptAssetService: RadioTranscriptAssetProviding {
         await permits.acquire()
         let result: RadioTranscriptDownloadResult
         do {
-            result = try await downloader.download(request)
+            // Podcast ad servers can return different audio for two requests
+            // to one enclosure URL. Playback and transcription must share the
+            // same resolved media URL or timed words can describe another
+            // insertion even though the episode identifier is unchanged.
+            let resolvedURL = await remoteAudioResolver.resolve(
+                request.remoteURL
+            )
+            result = try await downloader.download(
+                request.resolvingRemoteURL(to: resolvedURL)
+            )
             await permits.release()
         } catch {
             await permits.release()
@@ -532,6 +601,76 @@ enum RadioTranscriptDownloadSecurity {
     }
 }
 
+actor RadioRemoteAudioResolver: RadioRemoteAudioResolving {
+    typealias Loader = @Sendable (URL) async throws -> URL
+
+    private struct CacheEntry {
+        let resolvedURL: URL
+        let expiresAt: Date
+    }
+
+    private let cacheLifetime: TimeInterval
+    private let now: @Sendable () -> Date
+    private let loader: Loader
+    private var cache: [URL: CacheEntry] = [:]
+    private var inFlight: [URL: Task<URL, Never>] = [:]
+
+    init(
+        cacheLifetime: TimeInterval = 5 * 60,
+        now: @escaping @Sendable () -> Date = Date.init,
+        loader: @escaping Loader = RadioRemoteAudioResolver.loadFinalURL
+    ) {
+        self.cacheLifetime = cacheLifetime
+        self.now = now
+        self.loader = loader
+    }
+
+    func resolve(_ remoteURL: URL) async -> URL {
+        let securedURL = RadioTranscriptDownloadSecurity.securedURL(
+            for: remoteURL
+        )
+        let currentDate = now()
+        if let cached = cache[remoteURL],
+           cached.expiresAt > currentDate {
+            return cached.resolvedURL
+        }
+        if let task = inFlight[remoteURL] {
+            return await task.value
+        }
+
+        let loader = self.loader
+        let task = Task {
+            (try? await loader(securedURL)) ?? securedURL
+        }
+        inFlight[remoteURL] = task
+        let resolvedURL = await task.value
+        inFlight[remoteURL] = nil
+        cache[remoteURL] = CacheEntry(
+            resolvedURL: resolvedURL,
+            expiresAt: currentDate.addingTimeInterval(cacheLifetime)
+        )
+        return resolvedURL
+    }
+
+    private static func loadFinalURL(_ remoteURL: URL) async throws -> URL {
+        var request = URLRequest(
+            url: remoteURL,
+            cachePolicy: .reloadIgnoringLocalCacheData,
+            timeoutInterval: 2
+        )
+        request.httpMethod = "HEAD"
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode),
+              let finalURL = httpResponse.url,
+              finalURL.scheme?.caseInsensitiveCompare("https") ==
+                .orderedSame else {
+            throw URLError(.badServerResponse)
+        }
+        return finalURL
+    }
+}
+
 final class RadioTranscriptBackgroundDownloader:
     NSObject,
     RadioTranscriptDownloading,
@@ -592,7 +731,7 @@ final class RadioTranscriptBackgroundDownloader:
             try await withCheckedThrowingContinuation { continuation in
                 var urlRequest = URLRequest(
                     url: RadioTranscriptDownloadSecurity.securedURL(
-                        for: request.remoteURL
+                        for: request.downloadURL
                     )
                 )
                 urlRequest.cachePolicy = .reloadIgnoringLocalCacheData

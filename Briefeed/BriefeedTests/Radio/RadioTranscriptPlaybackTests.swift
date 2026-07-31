@@ -56,8 +56,11 @@ struct RadioTranscriptPlaybackTests {
         )
     }
 
-    @Test func anUnpreparedEpisodeStartsRemotePlaybackWithoutWaitingForTranscript() async {
+    @Test func anUnpreparedEpisodeStartsTheSharedRemoteVersionWithoutWaitingForTranscript() async {
         let candidate = makeCandidate("remote")
+        let resolvedURL = URL(
+            string: "https://cdn.example.com/remote-version.mp3"
+        )!
         let localURL = URL(fileURLWithPath: "/tmp/remote-owned.mp3")
         let asset = makeAsset(
             candidate: candidate,
@@ -67,7 +70,10 @@ struct RadioTranscriptPlaybackTests {
             isTranscriptReady: false
         )
         let assets = PlaybackTranscriptAssetProvider(
-            acquired: [candidate.key: asset]
+            acquired: [candidate.key: asset],
+            resolvedPlaybackURLs: [
+                candidate.originalPlaybackURL: resolvedURL
+            ]
         )
         let (player, transport) = await makePlayer(
             candidates: [candidate],
@@ -77,9 +83,12 @@ struct RadioTranscriptPlaybackTests {
 
         await player.playRadio()
 
-        #expect(transport.loads.map(\.1) == [
-            candidate.originalPlaybackURL
-        ])
+        #expect(transport.loads.map(\.1) == [resolvedURL])
+        #expect(
+            await assets.recordedResolutionURLs() == [
+                candidate.originalPlaybackURL
+            ]
+        )
         #expect(await assets.recordedAcquisitionRequests().isEmpty)
         #expect(!player.radioTranscriptPlaybackIsValidated)
         #expect(player.radioTranscriptPlaybackSyncState == .waiting)
@@ -814,6 +823,8 @@ private actor PlaybackTranscriptAssetProvider:
     private var cached: [RadioEpisodeKey: RadioTranscriptAudioAsset]
     private var acquired: [RadioEpisodeKey: RadioTranscriptAudioAsset]
     private var acquisitionRequests: [RadioTranscriptAudioRequest] = []
+    private var resolvedPlaybackURLs: [URL: URL]
+    private var resolutionURLs: [URL] = []
     private var blockedLookups = Set<RadioEpisodeKey>()
     private var lookupStarts = Set<RadioEpisodeKey>()
     private var lookupWaiters: [
@@ -823,11 +834,13 @@ private actor PlaybackTranscriptAssetProvider:
     init(
         prepared: [RadioEpisodeKey: URL] = [:],
         cached: [RadioEpisodeKey: RadioTranscriptAudioAsset] = [:],
-        acquired: [RadioEpisodeKey: RadioTranscriptAudioAsset] = [:]
+        acquired: [RadioEpisodeKey: RadioTranscriptAudioAsset] = [:],
+        resolvedPlaybackURLs: [URL: URL] = [:]
     ) {
         self.prepared = prepared
         self.cached = cached
         self.acquired = acquired
+        self.resolvedPlaybackURLs = resolvedPlaybackURLs
     }
 
     func setPrepared(_ url: URL, for key: RadioEpisodeKey) {
@@ -872,6 +885,15 @@ private actor PlaybackTranscriptAssetProvider:
 
     func recordedAcquisitionRequests() -> [RadioTranscriptAudioRequest] {
         acquisitionRequests
+    }
+
+    func resolvedPlaybackURL(for remoteURL: URL) async -> URL {
+        resolutionURLs.append(remoteURL)
+        return resolvedPlaybackURLs[remoteURL] ?? remoteURL
+    }
+
+    func recordedResolutionURLs() -> [URL] {
+        resolutionURLs
     }
 
     func cachedAsset(
