@@ -46,6 +46,123 @@ struct RadioSessionCoordinatorRestoreTests {
         #expect(coordinator.state == .playing)
     }
 
+    @Test func failedOpeningRefreshStillPlaysTheRestoredEpisode() async {
+        let episode = candidate("bbc", "restored")
+        let coordinator = makeCoordinator(store: FakeRadioSessionStore(), candidates: [episode])
+        _ = await coordinator.restore(autoplayEnabled: true)
+        coordinator.refreshStarted(enabledSourceCount: 1)
+
+        #expect(coordinator.applyInitialRefresh(.init(results: [
+            .init(feedID: "bbc", outcome: .failed(message: "Timeout"))
+        ])) == .play(request(for: episode, position: 0)))
+    }
+
+    @Test func openingProgressPrefersNPRWithoutWaitingForTheWholeBatch() async {
+        let bbc = candidate("bbc", "restored")
+        let npr = candidate("npr", "latest")
+        let repository = FakeRadioEpisodeRepository(candidates: [bbc])
+        let coordinator = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(), repository: repository,
+            now: { now }, connectivityStatus: { .online }
+        )
+        _ = await coordinator.restore(autoplayEnabled: true)
+        coordinator.refreshStarted(enabledSourceCount: 3)
+        let bbcResult = RSSFeedRefreshResult(feedID: "bbc", outcome: .success(insertedEpisodeIDs: []))
+        #expect(coordinator.applyOpeningRefreshProgress(
+            .init(results: [bbcResult]), preferredFeedID: "npr"
+        ) == nil)
+        #expect(coordinator.hasPendingColdLaunchAutoplay)
+
+        repository.values.append(npr)
+        let progress = RSSRefreshBatchResult(results: [
+            bbcResult, .init(feedID: "npr", outcome: .success(insertedEpisodeIDs: ["latest"]))
+        ])
+        #expect(coordinator.applyOpeningRefreshProgress(progress, preferredFeedID: "npr")
+                == .play(request(for: npr, position: 0)))
+        #expect(coordinator.beginOpeningFallback() == nil)
+        coordinator.transportDidStart(for: npr.key)
+        #expect(coordinator.applyInitialRefresh(progress) == nil)
+        #expect(coordinator.state == .playing)
+    }
+
+    @Test func openingFallbackStartsOnceAndLateRefreshCannotReplaceIt() async {
+        let bbc = candidate("bbc", "restored")
+        let npr = candidate("npr", "latest")
+        let repository = FakeRadioEpisodeRepository(candidates: [bbc])
+        let coordinator = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(snapshot: session([entry(bbc.key, position: 23)], current: bbc.key)),
+            repository: repository, now: { now }, connectivityStatus: { .online }
+        )
+        _ = await coordinator.restore(autoplayEnabled: true)
+        #expect(coordinator.beginOpeningFallback() == .play(request(for: bbc, position: 23)))
+        #expect(coordinator.beginOpeningFallback() == nil)
+        coordinator.transportDidStart(for: bbc.key)
+        repository.values.append(npr)
+        #expect(coordinator.applyOpeningRefreshProgress(.init(results: [
+            .init(feedID: "npr", outcome: .success(insertedEpisodeIDs: ["latest"]))
+        ]), preferredFeedID: "npr") == nil)
+        #expect(coordinator.currentKey == bbc.key)
+        #expect(coordinator.state == .playing)
+    }
+
+    @Test func elapsedOpeningFallbackReconnectsWithoutWaitingForRSSAndCanBeCancelled() async {
+        let episode = candidate("bbc", "restored")
+        let monitor = TestConnectivityMonitor(.unknown)
+        let scheduler = TestRadioRetryScheduler()
+        let coordinator = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(),
+            repository: FakeRadioEpisodeRepository(candidates: [episode]), now: { now },
+            connectivity: monitor, retryScheduler: scheduler
+        )
+        var intents: [RadioPlaybackIntent] = []
+        let observation = coordinator.pendingNetworkIntentPublisher.sink { intents.append($0) }
+        _ = await coordinator.restore(autoplayEnabled: true)
+        #expect(coordinator.beginOpeningFallback() == nil)
+        #expect(coordinator.state == .waitingForNetwork)
+        monitor.send(.online)
+        scheduler.fire()
+        #expect(intents == [.play(request(for: episode, position: 0))])
+        #expect(!coordinator.hasPendingColdLaunchAutoplay)
+
+        let cancelled = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(),
+            repository: FakeRadioEpisodeRepository(candidates: [episode]), now: { now },
+            connectivity: monitor, retryScheduler: scheduler
+        )
+        let cancelledObservation = cancelled.pendingNetworkIntentPublisher.sink { intents.append($0) }
+        monitor.send(.offline)
+        _ = await cancelled.restore(autoplayEnabled: true)
+        #expect(cancelled.beginOpeningFallback() == nil)
+        _ = cancelled.pauseByUser(positionSeconds: 0, duration: 300)
+        monitor.send(.online)
+        scheduler.fire()
+        #expect(intents.count == 1)
+        withExtendedLifetime((observation, cancelledObservation)) {}
+    }
+
+    @Test func noFallbackCandidateKeepsFreshAutoplayAvailableButManualPauseCancelsIt() async {
+        let repository = FakeRadioEpisodeRepository(candidates: [])
+        let coordinator = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(), repository: repository,
+            now: { now }, connectivityStatus: { .online }
+        )
+        _ = await coordinator.restore(autoplayEnabled: true)
+        #expect(coordinator.beginOpeningFallback() == nil)
+        #expect(coordinator.hasPendingColdLaunchAutoplay)
+        repository.values = [candidate("npr", "latest")]
+        #expect(coordinator.applyOpeningRefreshProgress(.init(results: [
+            .init(feedID: "npr", outcome: .success(insertedEpisodeIDs: ["latest"]))
+        ]), preferredFeedID: "npr")?.key == repository.values.first?.key)
+
+        let paused = makeCoordinator(store: FakeRadioSessionStore(), candidates: repository.values)
+        _ = await paused.restore(autoplayEnabled: true)
+        _ = paused.pauseByUser(positionSeconds: 0, duration: 60)
+        #expect(paused.beginOpeningFallback() == nil)
+        #expect(paused.applyOpeningRefreshProgress(.init(results: [
+            .init(feedID: "npr", outcome: .success(insertedEpisodeIDs: ["latest"]))
+        ]), preferredFeedID: "npr") == nil)
+    }
+
     @Test func connectivityAloneCannotBypassOpeningRefreshGate() async {
         let episode = candidate("npr", "one")
         let monitor = TestConnectivityMonitor(.unknown)

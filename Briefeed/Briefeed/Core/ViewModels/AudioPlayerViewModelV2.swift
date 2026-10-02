@@ -164,7 +164,17 @@ final class AudioPlayerViewModelV2: ObservableObject {
             }
             .store(in: &cancellables)
 
-        radioCoordinator.statePublisher.assign(to: &$radioState)
+        Publishers.CombineLatest(radioCoordinator.statePublisher, unifiedPlayer.$activeMode)
+            .sink { [weak self] state, mode in
+                guard let self else { return }
+                self.radioState = state
+                // Only the transport's `.playing` callback opens automatic
+                // transcript work. Selection, refresh, and `.loading` do not.
+                self.radioTranscriptCoordinator?.setPlaybackReady(
+                    state == .playing && mode == .radio
+                )
+            }
+            .store(in: &cancellables)
         radioCoordinator.entriesPublisher
             .sink { [weak self] entries in
                 self?.radioEntries = entries

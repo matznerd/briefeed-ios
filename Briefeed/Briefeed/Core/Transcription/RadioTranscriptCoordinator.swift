@@ -102,6 +102,7 @@ protocol RadioTranscriptCoordinating: AnyObject {
         next: [RadioEpisodeCandidate]
     )
     func updateVisibleSnapshot(_ candidates: [RadioEpisodeCandidate])
+    func setPlaybackReady(_ ready: Bool)
     func prepareAll()
     func retryCurrent()
     func stopPrepareAll()
@@ -111,6 +112,10 @@ protocol RadioTranscriptCoordinating: AnyObject {
     func preparedPlaybackURL(
         for episodeKey: RadioEpisodeKey
     ) async -> URL?
+}
+
+extension RadioTranscriptCoordinating {
+    func setPlaybackReady(_ ready: Bool) {}
 }
 
 @MainActor
@@ -162,6 +167,8 @@ final class RadioTranscriptCoordinator:
     private var batchPins = Set<RadioEpisodeKey>()
     private var pinnedBatchID: UUID?
     private var isActive = true
+    private var isPlaybackReady = false
+    private var automaticPreparationAllowed: Bool { isActive && isPlaybackReady }
     private var hasAcceptedBackgroundContinuation = false
     private var batchOperationGeneration = 0
     private var shouldReplaceBatchSnapshot = false
@@ -237,6 +244,12 @@ final class RadioTranscriptCoordinator:
         guard previousIdentity != updatedIdentity else { return }
 
         if previousIdentity?.current != updatedIdentity?.current {
+            // A selected/restored row is not proof that its audio has started.
+            // Do not compete with RSS refresh and first-buffer loading.
+            if previousIdentity?.current?.key != updatedIdentity?.current?.key,
+               previousIdentity != nil {
+                isPlaybackReady = false
+            }
             presentation = current.map {
                 RadioTranscriptPresentation(
                     episodeKey: $0.key,
@@ -244,7 +257,14 @@ final class RadioTranscriptCoordinator:
                 )
             } ?? .idle
         }
-        reconcileDesired(automaticAllowed: isActive)
+        reconcileDesired(automaticAllowed: automaticPreparationAllowed)
+    }
+
+    func setPlaybackReady(_ ready: Bool) {
+        guard isPlaybackReady != ready else { return }
+        isPlaybackReady = ready
+        guard automaticWorkIdentity != nil else { return }
+        reconcileDesired(automaticAllowed: automaticPreparationAllowed)
     }
 
     private var automaticWorkIdentity: AutomaticWorkIdentity? {
@@ -328,13 +348,13 @@ final class RadioTranscriptCoordinator:
             episodeKeys: batchPresentation.episodeKeys
         )
         releaseBatchPins(batchID: oldBatchID)
-        reconcileDesired(automaticAllowed: isActive)
+        reconcileDesired(automaticAllowed: automaticPreparationAllowed)
         restoreDeferredBatchPresentationIfNeeded()
     }
 
     func handleActive() {
         isActive = true
-        reconcileDesired(automaticAllowed: true)
+        reconcileDesired(automaticAllowed: automaticPreparationAllowed)
     }
 
     func handleBackground() {
@@ -708,7 +728,7 @@ final class RadioTranscriptCoordinator:
             completed: completed,
             total: manifest.totalCount
         )
-        reconcileDesired(automaticAllowed: isActive)
+        reconcileDesired(automaticAllowed: automaticPreparationAllowed)
     }
 
     private func isValidReadyCheckpoint(
@@ -879,7 +899,7 @@ final class RadioTranscriptCoordinator:
         )
         releaseBatchPins(batchID: expiredBatchID)
         if isActive {
-            reconcileDesired(automaticAllowed: true)
+            reconcileDesired(automaticAllowed: automaticPreparationAllowed)
         } else {
             Task { [pipeline] in
                 await pipeline.cancelAll()

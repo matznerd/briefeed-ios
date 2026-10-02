@@ -246,6 +246,57 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
         )
     }
 
+    func applyOpeningRefreshProgress(
+        _ result: RSSRefreshBatchResult,
+        preferredFeedID: String?
+    ) -> RadioPlaybackIntent? {
+        applyRefresh(
+            result,
+            isInitialColdLaunchRefresh: true,
+            autoplayWhenIdle: false,
+            isFinalBatch: false,
+            allowsOpeningAutoplay: preferredFeedID.map { preferred in
+                result.results.contains { $0.feedID == preferred }
+            } ?? true
+        )
+    }
+
+    func applyRefreshProgress(
+        _ result: RSSRefreshBatchResult,
+        autoplayWhenIdle: Bool
+    ) -> RadioPlaybackIntent? {
+        applyRefresh(
+            result,
+            isInitialColdLaunchRefresh: false,
+            autoplayWhenIdle: autoplayWhenIdle,
+            isFinalBatch: false
+        )
+    }
+
+    /// The opening freshness window is bounded. A slow/failed RSS source must
+    /// not leave existing playable audio silent. Manual actions cancel this intent.
+    func beginOpeningFallback() -> RadioPlaybackIntent? {
+        guard hasPendingColdLaunchAutoplay,
+              !hasActivePlaybackState,
+              state != .pausedByUser,
+              let request = requestForCurrent() else { return nil }
+        guard let deadline = coldLaunchAutoplayDeadline, now() < deadline else {
+            cancelPendingColdLaunchAutoplay()
+            return nil
+        }
+        guard canLoad(request.url) else {
+            // The freshness window has elapsed, but reachability may still be
+            // unknown. Reuse the cancellable reconnect intent instead of
+            // waiting for the entire RSS batch when the network returns.
+            setPending(request, purpose: .coldLaunchAutoplay)
+            state = .waitingForNetwork
+            return nil
+        }
+        cancelPendingColdLaunchAutoplay()
+        state = .loading
+        return .play(request)
+    }
+
     func sourceConfigurationDidChange(enabledSourceCount: Int) -> RadioPlaybackIntent? {
         let previousCurrentKey = currentKey
         let previousState = state
@@ -289,9 +340,11 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
     private func applyRefresh(
         _ result: RSSRefreshBatchResult,
         isInitialColdLaunchRefresh: Bool,
-        autoplayWhenIdle: Bool
+        autoplayWhenIdle: Bool,
+        isFinalBatch: Bool = true,
+        allowsOpeningAutoplay: Bool = true
     ) -> RadioPlaybackIntent? {
-        isRefreshing = false
+        isRefreshing = !isFinalBatch
         successfulSourceEvidenceCount = result.successfulSourceEvidenceCount
         attemptedFailureCount = result.attemptedFailureCount
         sourceFailures = Dictionary(uniqueKeysWithValues: result.results.compactMap { item in
@@ -358,6 +411,9 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
                 cancelPendingColdLaunchAutoplay()
                 return nil
             }
+            // Partial results keep the queue fresh, but a faster low-priority
+            // provider must not beat NPR during the short opening window.
+            guard allowsOpeningAutoplay else { return nil }
             if result.successfulSourceEvidenceCount > 0,
                let request = requestForCurrent() {
                 if canLoad(request.url) {
@@ -369,8 +425,11 @@ final class RadioSessionCoordinator: ObservableObject, RadioSessionCoordinating 
                 state = .waitingForNetwork
                 return nil
             }
-            if isTerminalInitialRefresh(result) {
-                cancelPendingColdLaunchAutoplay()
+            if isFinalBatch, isTerminalInitialRefresh(result) {
+                if let fallback = beginOpeningFallback() { return fallback }
+                if pendingRequest?.purpose != .coldLaunchAutoplay {
+                    cancelPendingColdLaunchAutoplay()
+                }
             }
             return nil
         }

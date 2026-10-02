@@ -7,6 +7,57 @@ import Testing
 @MainActor
 @Suite("Radio transcript coordinator")
 struct RadioTranscriptCoordinatorTests {
+    @Test func automaticPreparationWaitsForTheRadioTransportToPlay() async throws {
+        let harness = try CoordinatorHarness(playbackReady: false)
+        defer { harness.cleanup() }
+        let current = harness.candidate("restored")
+        harness.coordinator.updateCurrent(current, next: [harness.candidate("next")])
+        let beforePlayback = try await harness.pipeline.waitForReconciliation()
+        #expect(beforePlayback.interactive.isEmpty)
+
+        harness.coordinator.setPlaybackReady(true)
+        let afterPlayback = try await harness.pipeline.waitForReconciliation()
+        #expect(afterPlayback.interactive.map(\.episodeKey) == [current.key, harness.candidate("next").key])
+
+        harness.coordinator.setPlaybackReady(false)
+        let paused = try await harness.pipeline.waitForReconciliation()
+        #expect(paused.interactive.isEmpty)
+    }
+
+    @Test func aNewSelectionMustWaitForItsOwnTransportStart() async throws {
+        let harness = try CoordinatorHarness(playbackReady: false)
+        defer { harness.cleanup() }
+        harness.coordinator.updateCurrent(harness.candidate("first"), next: [])
+        _ = try await harness.pipeline.waitForReconciliation()
+        harness.coordinator.setPlaybackReady(true)
+        _ = try await harness.pipeline.waitForReconciliation()
+
+        harness.coordinator.updateCurrent(harness.candidate("replacement"), next: [])
+        let loading = try await harness.pipeline.waitForReconciliation()
+        #expect(loading.interactive.isEmpty)
+        harness.coordinator.setPlaybackReady(true)
+        let playing = try await harness.pipeline.waitForReconciliation()
+        #expect(playing.interactive.map(\.episodeKey) == [harness.candidate("replacement").key])
+    }
+
+    @Test func expiringExplicitBatchDoesNotStartAutomaticWorkBeforePlayback() async throws {
+        let harness = try CoordinatorHarness(playbackReady: false)
+        defer { harness.cleanup() }
+        let current = harness.candidate("current")
+        harness.coordinator.updateCurrent(current, next: [])
+        _ = try await harness.pipeline.waitForReconciliation()
+        harness.coordinator.updateVisibleSnapshot([current])
+        harness.coordinator.prepareAll()
+        let explicit = try await harness.pipeline.waitForReconciliation()
+        #expect(explicit.batch.map(\.episodeKey) == [current.key])
+        #expect(explicit.interactive.isEmpty)
+
+        harness.background.expire()
+        let expired = try await harness.pipeline.waitForReconciliation()
+        #expect(expired.interactive.isEmpty)
+        #expect(expired.batch.isEmpty)
+    }
+
     @Test func currentAndExactlyTwoUpcomingCandidatesBecomeImmutableJobs() async throws {
         let harness = try CoordinatorHarness()
         defer { harness.cleanup() }
@@ -629,7 +680,7 @@ private final class CoordinatorHarness: @unchecked Sendable {
     let coordinator: RadioTranscriptCoordinator
 
     @MainActor
-    init() throws {
+    init(playbackReady: Bool = true) throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("RadioTranscriptCoordinatorTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(
@@ -647,6 +698,7 @@ private final class CoordinatorHarness: @unchecked Sendable {
             metadataStore: metadata,
             backgroundDriver: background
         )
+        coordinator.setPlaybackReady(playbackReady)
     }
 
     func candidate(
@@ -899,5 +951,6 @@ private final class CoordinatorBackgroundDriver:
     func complete(success: Bool) {
         completions.append(success)
     }
+    func expire() { expiration?() }
     func cancel() {}
 }
