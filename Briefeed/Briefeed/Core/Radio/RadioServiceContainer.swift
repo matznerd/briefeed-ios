@@ -15,13 +15,16 @@ final class RadioServiceContainer {
     let transcriptAssetProvider:
         (any RadioTranscriptAssetProviding)?
     let transcriptAssetService: RadioTranscriptAssetService?
+    private var adPreferenceObserver: NSObjectProtocol?
+    private let adPreferenceDefaults: UserDefaults?
 
     init(
         connectivity: ConnectivityMonitoring,
         coordinator: RadioSessionCoordinator,
         feedSpeechMetadataStore: (any RadioFeedSpeechMetadataStoring)? = nil,
         transcriptCoordinator: (any RadioTranscriptCoordinating)? = nil,
-        transcriptAssetService: RadioTranscriptAssetService? = nil
+        transcriptAssetService: RadioTranscriptAssetService? = nil,
+        preferenceDefaults: UserDefaults? = nil
     ) {
         self.connectivity = connectivity
         self.coordinator = coordinator
@@ -29,7 +32,17 @@ final class RadioServiceContainer {
             feedSpeechMetadataStore ?? InMemoryRadioFeedSpeechMetadataStore()
         self.transcriptCoordinator = transcriptCoordinator
         self.transcriptAssetService = transcriptAssetService
+        adPreferenceDefaults = preferenceDefaults
         transcriptAssetProvider = transcriptAssetService
+        if preferenceDefaults != nil {
+            adPreferenceObserver = NotificationCenter.default.addObserver(forName: .radioAdPreferencesChanged,
+                                                                          object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, let defaults = self.adPreferenceDefaults else { return }
+                    self.transcriptCoordinator?.setAdPreferences(.load(defaults: defaults))
+                }
+            }
+        }
     }
 
     static var shared: RadioServiceContainer {
@@ -100,9 +113,12 @@ final class RadioServiceContainer {
         do {
             let store = try RadioTranscriptStore()
             let assets = try RadioTranscriptAssetService.makeProduction()
+            let adStore = try? RadioAdStore.makeProduction()
+            let adService = adStore.map { RadioAdPreparationService(store: $0) }
             let pipeline = RadioTranscriptPreparationPipeline(
                 assetProvider: assets,
-                store: store
+                store: store,
+                adService: adService
             )
             transcriptAssetService = assets
             transcriptCoordinator = RadioTranscriptCoordinator(
@@ -110,7 +126,9 @@ final class RadioServiceContainer {
                 store: store,
                 assetProvider: assets,
                 metadataStore: speechMetadataStore,
-                backgroundDriver: RadioTranscriptBackgroundTaskDriver()
+                backgroundDriver: RadioTranscriptBackgroundTaskDriver(),
+                adStore: adStore,
+                adPreferences: .load(defaults: .standard)
             )
         } catch {
             print("Could not open Radio transcript services: \(error)")
@@ -122,7 +140,8 @@ final class RadioServiceContainer {
             coordinator: coordinator,
             feedSpeechMetadataStore: speechMetadataStore,
             transcriptCoordinator: transcriptCoordinator,
-            transcriptAssetService: transcriptAssetService
+            transcriptAssetService: transcriptAssetService,
+            preferenceDefaults: .standard
         )
     }
 }

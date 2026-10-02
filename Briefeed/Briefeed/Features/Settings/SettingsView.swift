@@ -89,6 +89,13 @@ struct SettingsView: View {
                     Toggle("Autoplay Radio", isOn: $viewModel.userDefaultsManager.autoPlayLiveNewsOnOpen)
                         .accessibilityIdentifier(AccessibilityID.Settings.radioAutoplay)
 
+                    NavigationLink {
+                        RadioAdSettingsView(preferences: viewModel.userDefaultsManager)
+                    } label: {
+                        Label("Ad Skip", systemImage: "forward.end")
+                    }
+                    .accessibilityIdentifier(AccessibilityID.Settings.adSkip)
+
                     Picker("Radio Playback Speed", selection: $viewModel.userDefaultsManager.playbackSpeed) {
                         ForEach(PlaybackSpeedPolicy.supported, id: \.self) { speed in
                             Text(speed.formatted(.number.precision(.fractionLength(speed.rounded() == speed ? 0 : 2))))

@@ -263,6 +263,14 @@ final class UnifiedAudioPlayer: ObservableObject {
         radioTranscriptPlaybackSyncState == .synchronized
     }
 
+    var activeOwnedRadioAssetFingerprint: String? {
+        guard activeMode == .radio, activePlaybackID != nil, activeRadioKey == radioCoordinator.currentKey,
+              let identity = activeTranscriptAssetIdentity,
+              identity.episodeKey == activeRadioKey, identity.localFileURL.isFileURL,
+              identity.localFileURL == activeRadioPlaybackURL else { return nil }
+        return identity.assetFingerprint
+    }
+
     /// A restored Radio episode is usable before the audio transport is loaded,
     /// so `.none` can still present and route as Radio.
     var effectivePlaybackMode: ActivePlaybackMode {

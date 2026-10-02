@@ -7,6 +7,22 @@ import Testing
 @MainActor
 @Suite("Radio transcript coordinator")
 struct RadioTranscriptCoordinatorTests {
+    @Test func changingAdPreferencesReconcilesTheQueueWithoutStartingBeforePlayback() async throws {
+        let harness = try CoordinatorHarness(playbackReady: false)
+        defer { harness.cleanup() }
+        harness.coordinator.updateCurrent(harness.candidate("current"), next: [harness.candidate("next")])
+        _ = try await harness.pipeline.waitForReconciliation()
+        harness.coordinator.setAdPreferences(.init(prepareAhead: true))
+        let waiting = try await harness.pipeline.waitForReconciliation()
+        #expect(waiting.interactive.isEmpty)
+        harness.coordinator.setPlaybackReady(true)
+        let active = try await harness.pipeline.waitForReconciliation()
+        #expect(active.interactive.allSatisfy { $0.prepareAds })
+        harness.coordinator.setAdPreferences(.init())
+        let disabled = try await harness.pipeline.waitForReconciliation()
+        #expect(disabled.interactive.allSatisfy { !$0.prepareAds })
+    }
+
     @Test func automaticPreparationWaitsForTheRadioTransportToPlay() async throws {
         let harness = try CoordinatorHarness(playbackReady: false)
         defer { harness.cleanup() }

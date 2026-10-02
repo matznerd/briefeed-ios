@@ -5,6 +5,7 @@ import Foundation
 enum RadioTranscriptAudioPurpose: String, Codable, Equatable, Sendable {
     case current
     case automaticLookahead
+    case automaticAdLookahead
     case explicitBatch
 }
 
@@ -142,6 +143,8 @@ actor RadioTranscriptAssetService: RadioTranscriptAssetProviding {
         case invalidAudioDuration
         case missingDownloadedFile
         case storagePressure
+        case automaticByteLimit
+        case unsupportedStreamingManifest
         case unsupportedIndexSchema(Int)
     }
 
@@ -232,16 +235,23 @@ actor RadioTranscriptAssetService: RadioTranscriptAssetProviding {
     func acquire(
         _ request: RadioTranscriptAudioRequest
     ) async throws -> RadioTranscriptAudioAsset {
+        if request.purpose == .automaticAdLookahead,
+           !RadioAdResourcePolicy.permitsLookahead(duration: request.expectedDurationSeconds, enabled: true) {
+            throw AssetError.automaticDurationLimit
+        }
         if request.purpose == .automaticLookahead,
            let duration = request.expectedDurationSeconds,
            duration > 45 * 60 {
             throw AssetError.automaticDurationLimit
         }
         if let cached = try cachedAsset(for: request.episodeKey) {
+            try validateAdLookahead(cached, for: request)
             return cached
         }
         if let inFlight = inFlight[request.episodeKey] {
-            return try await inFlight.value
+            let asset = try await inFlight.value
+            try validateAdLookahead(asset, for: request)
+            return asset
         }
 
         let task = Task {
@@ -249,12 +259,29 @@ actor RadioTranscriptAssetService: RadioTranscriptAssetProviding {
         }
         inFlight[request.episodeKey] = task
         do {
-            let asset = try await task.value
+            let asset = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                if request.purpose == .automaticAdLookahead { task.cancel() }
+            }
             inFlight[request.episodeKey] = nil
             return asset
         } catch {
             inFlight[request.episodeKey] = nil
             throw error
+        }
+    }
+
+    private func validateAdLookahead(
+        _ asset: RadioTranscriptAudioAsset,
+        for request: RadioTranscriptAudioRequest
+    ) throws {
+        guard request.purpose == .automaticAdLookahead else { return }
+        guard asset.audioDurationSeconds <= RadioAdResourcePolicy.maximumDurationSeconds else {
+            throw AssetError.automaticDurationLimit
+        }
+        guard try fileSize(at: asset.localFileURL) <= RadioAdResourcePolicy.maximumDownloadBytes else {
+            throw AssetError.automaticByteLimit
         }
     }
 
@@ -275,6 +302,7 @@ actor RadioTranscriptAssetService: RadioTranscriptAssetProviding {
             try write(index: index)
             return nil
         }
+        try rejectStreamingManifest(at: asset.localFileURL, mediaURLs: [asset.originalURL, asset.finalURL])
         asset.lastAccessedAt = Date()
         if let assetIndex = index.assets.firstIndex(where: {
             $0.episodeKey == asset.episodeKey &&
@@ -356,10 +384,9 @@ actor RadioTranscriptAssetService: RadioTranscriptAssetProviding {
         await permits.acquire()
         let result: RadioTranscriptDownloadResult
         do {
-            // Podcast ad servers can return different audio for two requests
-            // to one enclosure URL. Playback and transcription must share the
-            // same resolved media URL or timed words can describe another
-            // insertion even though the episode identifier is unchanged.
+            try Task.checkCancellation()
+            // A resolved URL can still serve different ad insertions. Commit
+            // one rendition; analyzed playback must use those exact local bytes.
             let resolvedURL = await remoteAudioResolver.resolve(
                 request.remoteURL
             )
@@ -389,7 +416,11 @@ actor RadioTranscriptAssetService: RadioTranscriptAssetProviding {
             }
         }
 
+        try rejectStreamingManifest(at: result.stagedFileURL, mediaURLs: [request.remoteURL, result.finalURL])
+
         let byteCount = try fileSize(at: result.stagedFileURL)
+        if request.purpose == .automaticAdLookahead,
+           byteCount > RadioAdResourcePolicy.maximumDownloadBytes { throw AssetError.automaticByteLimit }
         var index = try loadIndex()
         try evictToFit(
             additionalBytes: byteCount,
@@ -402,6 +433,8 @@ actor RadioTranscriptAssetService: RadioTranscriptAssetProviding {
         guard duration.isFinite, duration > 0 else {
             throw AssetError.invalidAudioDuration
         }
+        if request.purpose == .automaticAdLookahead,
+           duration > RadioAdResourcePolicy.maximumDurationSeconds { throw AssetError.automaticDurationLimit }
 
         let pathExtension = request.remoteURL.pathExtension.isEmpty
             ? "audio"
@@ -524,6 +557,25 @@ actor RadioTranscriptAssetService: RadioTranscriptAssetProviding {
             hasher.update(data: data)
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func rejectStreamingManifest(at fileURL: URL, mediaURLs: [URL]) throws {
+        let playlistExtensions = Set(["m3u", "m3u8", "mpd", "pls", "xspf"])
+        guard !mediaURLs.contains(where: { playlistExtensions.contains($0.pathExtension.lowercased()) }) else {
+            throw AssetError.unsupportedStreamingManifest
+        }
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+        let prefix = try handle.read(upToCount: 1024) ?? Data()
+        let text = String(decoding: prefix, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{FEFF}")))
+            .lowercased()
+        // A local manifest can still fetch mutable remote segments. Its hash is
+        // not a fingerprint of the played audio, even with an audio-file URL.
+        guard !text.hasPrefix("#extm3u"), !text.hasPrefix("[playlist]"),
+              !text.hasPrefix("<?xml"), !text.hasPrefix("<mpd"), !text.hasPrefix("<playlist") else {
+            throw AssetError.unsupportedStreamingManifest
+        }
     }
 
     private static func loadAudioDuration(at url: URL) async throws -> TimeInterval {
@@ -735,6 +787,7 @@ final class RadioTranscriptBackgroundDownloader:
                     )
                 )
                 urlRequest.cachePolicy = .reloadIgnoringLocalCacheData
+                if request.purpose == .automaticAdLookahead { urlRequest.timeoutInterval = 120 }
                 let task = session.downloadTask(with: urlRequest)
                 if let metadata = try? JSONEncoder().encode(request) {
                     task.taskDescription = metadata.base64EncodedString()
@@ -778,6 +831,20 @@ final class RadioTranscriptBackgroundDownloader:
         completionHandler(
             RadioTranscriptDownloadSecurity.securedRequest(request)
         )
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        guard request(from: downloadTask)?.purpose == .automaticAdLookahead else { return }
+        if totalBytesWritten > RadioAdResourcePolicy.maximumDownloadBytes ||
+            totalBytesExpectedToWrite > RadioAdResourcePolicy.maximumDownloadBytes {
+            downloadTask.cancel()
+        }
     }
 
     func urlSession(

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Compile the real state machine/lifecycle on macOS, without Xcode or a simulator.
 # App composition, Core Data adapters, and platform background/speech execution
-# remain iOS gates; pipeline contracts are copied for coordinator tests only.
+# remain iOS gates. Pipeline tests inject synthetic assets/engines, never live ASR.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="$(mktemp -d "${TMPDIR:-/tmp}/briefeed-startup.XXXXXX")"
 trap 'rm -rf "$BUILD"' EXIT
@@ -45,12 +45,8 @@ done
 for file in TimedTranscript TimedTranscriptEngine RadioTranscriptModels RadioTranscriptStore RadioTranscriptAssetService RadioFeedSpeechMetadataStore RadioTranscriptCoordinator; do
     cp "$ROOT/Briefeed/Core/Transcription/$file.swift" "$BUILD/Sources/"
 done
-awk '
-    /^struct RadioResolvedTranscriptEngine/ { skip_engine = 1 }
-    /^enum RadioTranscriptPipelineEvent/ { skip_engine = 0 }
-    /^actor RadioTranscriptPreparationPipeline/ { exit }
-    !skip_engine { print }
-' "$ROOT/Briefeed/Core/Transcription/RadioTranscriptPreparationPipeline.swift" > "$BUILD/Sources/RadioTranscriptPipelineContracts.swift"
+cp "$ROOT/Briefeed/Core/Transcription/RadioTranscriptPreparationPipeline.swift" \
+    "$ROOT/Briefeed/Core/Transcription/AppleSpeechAnalyzerEngine.swift" "$BUILD/Sources/"
 awk '
     /^import BackgroundTasks/ { next }
     /^final class RadioTranscriptBackgroundTaskDriver/ { exit }
@@ -72,6 +68,12 @@ awk '
     !skip_transport { print }
 ' "$ROOT/BriefeedTests/Radio/RadioAppLifecycleTests.swift" > "$BUILD/Tests/RadioAppLifecycleTests.swift"
 cp "$ROOT/BriefeedTests/Transcription/RadioTranscriptCoordinatorTests.swift" "$BUILD/Tests/"
+for file in "$ROOT"/Briefeed/Core/AdDetection/*.swift; do
+    if [ -f "$file" ]; then cp "$file" "$BUILD/Sources/"; fi
+done
+for file in "$ROOT"/BriefeedTests/AdDetection/*.swift; do
+    if [ -f "$file" ]; then cp "$file" "$BUILD/Tests/"; fi
+done
 xcrun swift test --package-path "$BUILD" \
     --scratch-path "${RADIO_HOST_BUILD_PATH:-${TMPDIR:-/tmp}/briefeed-radio-startup-host-build}" \
     --build-system native --disable-index-store --disable-keychain --disable-netrc --jobs 2 "$@"
