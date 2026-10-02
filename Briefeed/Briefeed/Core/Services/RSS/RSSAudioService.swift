@@ -122,17 +122,20 @@ class RSSAudioService: NSObject, ObservableObject {
         await refreshAll(now: Date())
     }
 
-    func refreshAll(now: Date) async -> RSSRefreshBatchResult {
+    func refreshAll(
+        now: Date,
+        onProgress: (@MainActor (RSSRefreshBatchResult) async -> Void)? = nil
+    ) async -> RSSRefreshBatchResult {
         guard !isRefreshing else { return await waitForActiveRefresh() }
         
         isRefreshing = true
         lastError = nil
         
-        var results: [RSSFeedRefreshResult] = []
-        for feed in feeds.filter(\.isEnabled).sorted(by: { lhs, rhs in
+        let enabledFeeds = feeds.filter(\.isEnabled).sorted(by: { lhs, rhs in
             lhs.priority == rhs.priority ? lhs.id < rhs.id : lhs.priority < rhs.priority
-        }) {
-            results.append(await refreshFeed(feed, now: now))
+        })
+        let results = await refreshFeedsConcurrently(enabledFeeds, now: now, onProgress: onProgress) { service, feed, now in
+            await service.refreshFeed(feed, now: now)
         }
         
         // Clean up old episodes
@@ -145,11 +148,11 @@ class RSSAudioService: NSObject, ObservableObject {
     func refreshIfStale(now: Date) async -> RSSRefreshBatchResult {
         guard !isRefreshing else { return await waitForActiveRefresh() }
         isRefreshing = true
-        var results: [RSSFeedRefreshResult] = []
-        for feed in feeds.filter(\.isEnabled).sorted(by: { lhs, rhs in
+        let enabledFeeds = feeds.filter(\.isEnabled).sorted(by: { lhs, rhs in
             lhs.priority == rhs.priority ? lhs.id < rhs.id : lhs.priority < rhs.priority
-        }) {
-            results.append(await refreshIfStale(feed, now: now))
+        })
+        let results = await refreshFeedsConcurrently(enabledFeeds, now: now) { service, feed, now in
+            await service.refreshIfStale(feed, now: now)
         }
         let result = RSSRefreshBatchResult(results: results)
         completeRefresh(with: result)
@@ -392,6 +395,35 @@ class RSSAudioService: NSObject, ObservableObject {
             feeds = try viewContext.fetch(fetchRequest)
         } catch {
             print("Error loading feeds: \(error)")
+        }
+    }
+
+    private func refreshFeedsConcurrently(
+        _ feeds: [RSSFeed],
+        now: Date,
+        onProgress: (@MainActor (RSSRefreshBatchResult) async -> Void)? = nil,
+        operation: @escaping @MainActor (RSSAudioService, RSSFeed, Date) async -> RSSFeedRefreshResult
+    ) async -> [RSSFeedRefreshResult] {
+        // Feed I/O overlaps at suspension points; Core Data work stays serialized on MainActor.
+        await withTaskGroup(of: (Int, RSSFeedRefreshResult).self) { group in
+            for (index, feed) in feeds.enumerated() {
+                group.addTask { @MainActor [self] in
+                    (index, await operation(self, feed, now))
+                }
+            }
+
+            var indexedResults: [(Int, RSSFeedRefreshResult)] = []
+            indexedResults.reserveCapacity(feeds.count)
+            for await result in group {
+                indexedResults.append(result)
+                if !Task.isCancelled, let onProgress {
+                    // Publish completed sources before the slowest request ends.
+                    // Ordering remains source-priority based, never network-speed based.
+                    let progress = indexedResults.sorted { $0.0 < $1.0 }.map(\.1)
+                    await onProgress(RSSRefreshBatchResult(results: progress))
+                }
+            }
+            return indexedResults.sorted { $0.0 < $1.0 }.map(\.1)
         }
     }
 

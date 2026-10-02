@@ -22,13 +22,34 @@ struct RadioTranscriptJob: Equatable, Sendable {
     let expectedDurationSeconds: TimeInterval?
     let languageTag: String
     let priority: RadioTranscriptJobPriority
+    let prepareAds: Bool
+
+    init(episodeKey: RadioEpisodeKey, remoteURL: URL, expectedDurationSeconds: TimeInterval?,
+         languageTag: String, priority: RadioTranscriptJobPriority, prepareAds: Bool = false) {
+        self.episodeKey = episodeKey
+        self.remoteURL = remoteURL
+        self.expectedDurationSeconds = expectedDurationSeconds
+        self.languageTag = languageTag
+        self.priority = priority
+        self.prepareAds = prepareAds
+    }
+
+    var executionRank: Int {
+        guard prepareAds else { return priority.rawValue }
+        return switch priority {
+        case .nextOne: 0
+        case .nextTwo: 1
+        case .current: 2
+        case .batch: 3
+        }
+    }
 
     var audioPurpose: RadioTranscriptAudioPurpose {
         switch priority {
         case .current:
             .current
         case .nextOne, .nextTwo:
-            .automaticLookahead
+            prepareAds ? .automaticAdLookahead : .automaticLookahead
         case .batch:
             .explicitBatch
         }
@@ -81,6 +102,7 @@ struct AppleRadioTranscriptEngineResolver: RadioTranscriptEngineResolving {
 }
 
 enum RadioTranscriptPipelineEvent: Equatable, Sendable {
+    case adPreparation(episodeKey: RadioEpisodeKey, generation: Int, state: RadioAdPreparationState)
     case preparation(
         episodeKey: RadioEpisodeKey,
         generation: Int,
@@ -103,6 +125,7 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
     private let assetProvider: any RadioTranscriptAssetProviding
     private let store: RadioTranscriptStore
     private let engineResolver: any RadioTranscriptEngineResolving
+    private let adService: RadioAdPreparationService?
     private let now: @Sendable () -> Date
     private var worker: Task<Void, Never>?
     private var activeGeneration = 0
@@ -118,11 +141,13 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
         store: RadioTranscriptStore,
         engineResolver: any RadioTranscriptEngineResolving =
             AppleRadioTranscriptEngineResolver(),
+        adService: RadioAdPreparationService? = nil,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.assetProvider = assetProvider
         self.store = store
         self.engineResolver = engineResolver
+        self.adService = adService
         self.now = now
     }
 
@@ -154,8 +179,8 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
         let automatic = interactive
             .enumerated()
             .sorted { lhs, rhs in
-                if lhs.element.priority != rhs.element.priority {
-                    return lhs.element.priority < rhs.element.priority
+                if lhs.element.executionRank != rhs.element.executionRank {
+                    return lhs.element.executionRank < rhs.element.executionRank
                 }
                 return lhs.offset < rhs.offset
             }
@@ -195,6 +220,9 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
         generation: Int,
         tracksBatchEntry: Bool
     ) async {
+        if job.prepareAds {
+            emit(.adPreparation(episodeKey: job.episodeKey, generation: generation, state: .queued))
+        }
         emit(.preparation(
             episodeKey: job.episodeKey,
             generation: generation,
@@ -246,6 +274,7 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
                     episodeKey: job.episodeKey,
                     generation: generation
                 )
+                await prepareAds(for: job, transcript: cached, generation: generation)
                 return
             }
 
@@ -328,6 +357,7 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
                     episodeKey: job.episodeKey,
                     generation: generation
                 )
+                await prepareAds(for: job, transcript: transcript, generation: generation)
             } catch {
                 try? await store.removeTranscript(for: actualKey)
                 throw error
@@ -336,6 +366,10 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
             return
         } catch {
             guard generation == activeGeneration else { return }
+            if job.prepareAds {
+                emit(.adPreparation(episodeKey: job.episodeKey, generation: generation,
+                                    state: .unavailable(Self.errorMessage(error))))
+            }
             if tracksBatchEntry {
                 try? await updateBatch(
                     job.episodeKey,
@@ -348,6 +382,36 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
                 state: Self.preparationState(for: error)
             ))
         }
+    }
+
+    private func prepareAds(for job: RadioTranscriptJob, transcript: TimedTranscript, generation: Int) async {
+        guard job.prepareAds, generation == activeGeneration, !Task.isCancelled else { return }
+        guard let adService else {
+            emit(.adPreparation(episodeKey: job.episodeKey, generation: generation,
+                                state: .unavailable("Ad preparation unavailable")))
+            return
+        }
+        do {
+            let record = try await adService.prepare(transcript: transcript, episodeKey: job.episodeKey) { [weak self] state in
+                await self?.emitAdProgress(state, for: job.episodeKey, generation: generation)
+            }
+            try ensureCurrent(generation)
+            emit(.adPreparation(episodeKey: job.episodeKey, generation: generation, state: .ready(record)))
+        } catch is CancellationError { }
+        catch {
+            guard generation == activeGeneration, !Task.isCancelled else { return }
+            let state: RadioAdPreparationState = if error as? RadioAdPreparationError == .resourceDeferred {
+                .deferred
+            } else {
+                .unavailable("On-device ad analysis unavailable")
+            }
+            emit(.adPreparation(episodeKey: job.episodeKey, generation: generation, state: state))
+        }
+    }
+
+    private func emitAdProgress(_ state: RadioAdPreparationState, for key: RadioEpisodeKey, generation: Int) {
+        guard generation == activeGeneration, !Task.isCancelled else { return }
+        emit(.adPreparation(episodeKey: key, generation: generation, state: state))
     }
 
     private func updateBatch(
@@ -501,7 +565,11 @@ actor RadioTranscriptPreparationPipeline: RadioTranscriptPipelineScheduling {
         if let assetError = error as? RadioTranscriptAssetService.AssetError {
             switch assetError {
             case .automaticDurationLimit:
-                return "Long episodes are prepared only with Prepare All."
+                return "Automatic preparation duration limit reached."
+            case .automaticByteLimit:
+                return "Audio exceeds the preparation download size limit."
+            case .unsupportedStreamingManifest:
+                return "Streaming playlists cannot be prepared as exact audio files."
             case .invalidAudioDuration:
                 return "The episode duration could not be read."
             case .missingDownloadedFile:

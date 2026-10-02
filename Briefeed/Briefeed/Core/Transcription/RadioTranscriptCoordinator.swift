@@ -96,12 +96,17 @@ protocol RadioTranscriptCoordinating: AnyObject {
         AnyPublisher<RadioTranscriptPresentation, Never> { get }
     var batchPresentationPublisher:
         AnyPublisher<RadioTranscriptBatchPresentation, Never> { get }
+    var adPreparationPublisher: AnyPublisher<[RadioEpisodeKey: RadioAdPreparationState], Never> { get }
+    func setAdPreferences(_ preferences: RadioAdPreferences)
+    func reviewAdSpan(record: RadioAdRecord, spanID: UUID, kind: RadioAdKind,
+                      start: TimeInterval, end: TimeInterval, boundariesReviewed: Bool) async throws
 
     func updateCurrent(
         _ current: RadioEpisodeCandidate?,
         next: [RadioEpisodeCandidate]
     )
     func updateVisibleSnapshot(_ candidates: [RadioEpisodeCandidate])
+    func setPlaybackReady(_ ready: Bool)
     func prepareAll()
     func retryCurrent()
     func stopPrepareAll()
@@ -113,6 +118,18 @@ protocol RadioTranscriptCoordinating: AnyObject {
     ) async -> URL?
 }
 
+extension RadioTranscriptCoordinating {
+    func setPlaybackReady(_ ready: Bool) {}
+    var adPreparationPublisher: AnyPublisher<[RadioEpisodeKey: RadioAdPreparationState], Never> {
+        Just([:]).eraseToAnyPublisher()
+    }
+    func setAdPreferences(_ preferences: RadioAdPreferences) {}
+    func reviewAdSpan(record: RadioAdRecord, spanID: UUID, kind: RadioAdKind,
+                      start: TimeInterval, end: TimeInterval, boundariesReviewed: Bool) async throws {
+        throw RadioAdPreparationError.modelUnavailable
+    }
+}
+
 @MainActor
 final class RadioTranscriptCoordinator:
     ObservableObject,
@@ -122,6 +139,10 @@ final class RadioTranscriptCoordinator:
         RadioTranscriptPresentation.idle
     @Published private(set) var batchPresentation =
         RadioTranscriptBatchPresentation.idle
+    @Published private(set) var adPreparationStates: [RadioEpisodeKey: RadioAdPreparationState] = [:]
+    var adPreparationPublisher: AnyPublisher<[RadioEpisodeKey: RadioAdPreparationState], Never> {
+        $adPreparationStates.eraseToAnyPublisher()
+    }
 
     var presentationPublisher:
         AnyPublisher<RadioTranscriptPresentation, Never> {
@@ -145,6 +166,8 @@ final class RadioTranscriptCoordinator:
     private let assetProvider: any RadioTranscriptAssetProviding
     private let metadataStore: any RadioFeedSpeechMetadataStoring
     private let backgroundDriver: any RadioTranscriptBackgroundDriving
+    private let adStore: RadioAdStore?
+    private var adPreferences: RadioAdPreferences
     private var eventTask: Task<Void, Never>?
     private var startupReconciliationTask: Task<Void, Never>?
     private var reconciliationTask: Task<Void, Never>?
@@ -162,6 +185,8 @@ final class RadioTranscriptCoordinator:
     private var batchPins = Set<RadioEpisodeKey>()
     private var pinnedBatchID: UUID?
     private var isActive = true
+    private var isPlaybackReady = false
+    private var automaticPreparationAllowed: Bool { isActive && isPlaybackReady }
     private var hasAcceptedBackgroundContinuation = false
     private var batchOperationGeneration = 0
     private var shouldReplaceBatchSnapshot = false
@@ -190,13 +215,17 @@ final class RadioTranscriptCoordinator:
         store: RadioTranscriptStore,
         assetProvider: any RadioTranscriptAssetProviding,
         metadataStore: any RadioFeedSpeechMetadataStoring,
-        backgroundDriver: any RadioTranscriptBackgroundDriving
+        backgroundDriver: any RadioTranscriptBackgroundDriving,
+        adStore: RadioAdStore? = nil,
+        adPreferences: RadioAdPreferences = .init()
     ) {
         self.pipeline = pipeline
         self.store = store
         self.assetProvider = assetProvider
         self.metadataStore = metadataStore
         self.backgroundDriver = backgroundDriver
+        self.adStore = adStore
+        self.adPreferences = adPreferences
         startupReconciliationTask = Task { [store] in
             try? await store.reconcile()
         }
@@ -215,6 +244,28 @@ final class RadioTranscriptCoordinator:
         reconciliationTask?.cancel()
         batchRestoreTask?.cancel()
         batchStartTask?.cancel()
+    }
+
+    func setAdPreferences(_ preferences: RadioAdPreferences) {
+        guard preferences != adPreferences else { return }
+        adPreferences = preferences
+        for (key, state) in adPreparationStates where state.record == nil {
+            adPreparationStates[key] = .deferred
+        }
+        reconcileDesired(automaticAllowed: automaticPreparationAllowed)
+    }
+
+    func reviewAdSpan(record: RadioAdRecord, spanID: UUID, kind: RadioAdKind,
+                      start: TimeInterval, end: TimeInterval, boundariesReviewed: Bool) async throws {
+        guard let adStore, record.key.episodeKey == currentCandidate?.key,
+              adPreparationStates[record.key.episodeKey]?.record?.key == record.key else {
+            throw RadioAdStore.StoreError.missingRecord
+        }
+        let updated = try await adStore.review(key: record.key, spanID: spanID, expectedRevision: record.revision,
+                                               kind: kind, start: start, end: end, boundariesReviewed: boundariesReviewed)
+        guard record.key.episodeKey == currentCandidate?.key,
+              adPreparationStates[record.key.episodeKey]?.record?.key == record.key else { return }
+        adPreparationStates[record.key.episodeKey] = .ready(updated)
     }
 
     func updateCurrent(
@@ -237,6 +288,12 @@ final class RadioTranscriptCoordinator:
         guard previousIdentity != updatedIdentity else { return }
 
         if previousIdentity?.current != updatedIdentity?.current {
+            // A selected/restored row is not proof that its audio has started.
+            // Do not compete with RSS refresh and first-buffer loading.
+            if previousIdentity?.current?.key != updatedIdentity?.current?.key,
+               previousIdentity != nil {
+                isPlaybackReady = false
+            }
             presentation = current.map {
                 RadioTranscriptPresentation(
                     episodeKey: $0.key,
@@ -244,7 +301,14 @@ final class RadioTranscriptCoordinator:
                 )
             } ?? .idle
         }
-        reconcileDesired(automaticAllowed: isActive)
+        reconcileDesired(automaticAllowed: automaticPreparationAllowed)
+    }
+
+    func setPlaybackReady(_ ready: Bool) {
+        guard isPlaybackReady != ready else { return }
+        isPlaybackReady = ready
+        guard automaticWorkIdentity != nil else { return }
+        reconcileDesired(automaticAllowed: automaticPreparationAllowed)
     }
 
     private var automaticWorkIdentity: AutomaticWorkIdentity? {
@@ -328,17 +392,21 @@ final class RadioTranscriptCoordinator:
             episodeKeys: batchPresentation.episodeKeys
         )
         releaseBatchPins(batchID: oldBatchID)
-        reconcileDesired(automaticAllowed: isActive)
+        reconcileDesired(automaticAllowed: automaticPreparationAllowed)
         restoreDeferredBatchPresentationIfNeeded()
     }
 
     func handleActive() {
         isActive = true
-        reconcileDesired(automaticAllowed: true)
+        reconcileDesired(automaticAllowed: automaticPreparationAllowed)
     }
 
     func handleBackground() {
         isActive = false
+        let continuingKeys = hasAcceptedBackgroundContinuation ? Set(activeBatchJobs.map(\.episodeKey)) : []
+        for (key, state) in adPreparationStates where state.record == nil && !continuingKeys.contains(key) {
+            adPreparationStates[key] = .deferred
+        }
         if hasAcceptedBackgroundContinuation,
            activeBatchID != nil,
            !activeBatchJobs.isEmpty {
@@ -708,7 +776,7 @@ final class RadioTranscriptCoordinator:
             completed: completed,
             total: manifest.totalCount
         )
-        reconcileDesired(automaticAllowed: isActive)
+        reconcileDesired(automaticAllowed: automaticPreparationAllowed)
     }
 
     private func isValidReadyCheckpoint(
@@ -751,7 +819,8 @@ final class RadioTranscriptCoordinator:
                 remoteURL: candidate.originalPlaybackURL,
                 expectedDurationSeconds: candidate.durationSeconds,
                 languageTag: metadata.languageTag,
-                priority: priority
+                priority: priority,
+                prepareAds: adPreferences.preparationEnabled
             ))
         }
         return jobs
@@ -822,6 +891,11 @@ final class RadioTranscriptCoordinator:
 
     private func handle(_ event: RadioTranscriptPipelineEvent) {
         switch event {
+        case .adPreparation(let episodeKey, let eventGeneration, let state):
+            guard eventGeneration == generation else { return }
+            let retainedKeys = Set([currentCandidate].compactMap { $0?.key } + nextCandidates.map(\.key) + activeBatchJobs.map(\.episodeKey))
+            adPreparationStates = adPreparationStates.filter { retainedKeys.contains($0.key) }
+            adPreparationStates[episodeKey] = state
         case .preparation(let episodeKey, let eventGeneration, let state):
             guard eventGeneration == generation,
                   episodeKey == currentCandidate?.key else {
@@ -879,7 +953,7 @@ final class RadioTranscriptCoordinator:
         )
         releaseBatchPins(batchID: expiredBatchID)
         if isActive {
-            reconcileDesired(automaticAllowed: true)
+            reconcileDesired(automaticAllowed: automaticPreparationAllowed)
         } else {
             Task { [pipeline] in
                 await pipeline.cancelAll()

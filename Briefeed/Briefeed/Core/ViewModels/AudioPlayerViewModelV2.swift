@@ -49,6 +49,68 @@ final class AudioPlayerViewModelV2: ObservableObject {
         RadioTranscriptBatchPresentation.idle
     @Published private(set) var radioTranscriptPlaybackSyncState:
         RadioTranscriptPlaybackSyncState = .waiting
+    @Published private(set) var radioAdPreparationStates: [RadioEpisodeKey: RadioAdPreparationState] = [:]
+    @Published private(set) var radioAdUndoAvailable = false
+    private var radioAdUndo: (key: RadioEpisodeKey, hash: String, position: TimeInterval)?
+
+    var currentRadioAdRecord: RadioAdRecord? {
+        guard let key = currentRadioEpisode?.key, let record = radioAdPreparationStates[key]?.record,
+              radioTranscriptPresentation.episodeKey == key, radioTranscriptPresentation.isComplete,
+              let transcript = radioTranscriptPresentation.transcript,
+              record.key.assetFingerprint == transcript.assetFingerprint,
+              record.key.transcriptEngine == transcript.engineIdentifier,
+              record.key.transcriptVersion == transcript.engineVersion,
+              record.key.locale == transcript.localeIdentifier else { return nil }
+        return record
+    }
+
+    var radioAdPlaybackIsExact: Bool {
+        guard let record = currentRadioAdRecord, effectivePlaybackMode == .radio else { return false }
+        return unifiedPlayer.activeOwnedRadioAssetFingerprint == record.key.assetFingerprint
+    }
+
+    func reviewRadioAd(record expected: RadioAdRecord, spanID: UUID, kind: RadioAdKind, start: TimeInterval,
+                       end: TimeInterval, boundariesReviewed: Bool) async throws {
+        guard let record = currentRadioAdRecord, record.key == expected.key, let radioTranscriptCoordinator else {
+            throw RadioAdStore.StoreError.missingRecord
+        }
+        guard record.revision == expected.revision else { throw RadioAdStore.StoreError.staleRevision }
+        // Listening-based boundary approval must describe the actual owned playing rendition.
+        guard !boundariesReviewed || radioAdPlaybackIsExact else { throw RadioAdValidationError.invalidIdentity }
+        try await radioTranscriptCoordinator.reviewAdSpan(record: record, spanID: spanID, kind: kind,
+                                                          start: start, end: end, boundariesReviewed: boundariesReviewed)
+    }
+
+    func listenToRadioAd(at seconds: TimeInterval) {
+        guard radioAdPlaybackIsExact, seconds.isFinite, let record = currentRadioAdRecord,
+              seconds >= 0, seconds < record.audioDurationSeconds else { return }
+        unifiedPlayer.seek(to: seconds)
+        if !isPlaying { togglePlayPause() }
+    }
+
+    func skipReviewedRadioAd(spanID: UUID) {
+        guard let record = currentRadioAdRecord,
+              let target = RadioAdSkipPolicy.manualTarget(record: record, spanID: spanID,
+                                                          playingFingerprint: unifiedPlayer.activeOwnedRadioAssetFingerprint,
+                                                          isOwnedAudio: radioAdPlaybackIsExact) else { return }
+        let position = unifiedPlayer.currentTime
+        guard position.isFinite, position >= 0 else { return }
+        radioAdUndo = (record.key.episodeKey, record.key.assetFingerprint, position)
+        radioAdUndoAvailable = true
+        unifiedPlayer.seek(to: target)
+    }
+
+    func undoRadioAdSkip() {
+        guard let undo = radioAdUndo, currentRadioEpisode?.key == undo.key,
+              unifiedPlayer.activeOwnedRadioAssetFingerprint == undo.hash else {
+            radioAdUndo = nil
+            radioAdUndoAvailable = false
+            return
+        }
+        radioAdUndo = nil
+        radioAdUndoAvailable = false
+        unifiedPlayer.seek(to: undo.position)
+    }
 
     var radioTranscriptPlaybackIsValidated: Bool {
         radioTranscriptPlaybackSyncState == .synchronized
@@ -164,7 +226,17 @@ final class AudioPlayerViewModelV2: ObservableObject {
             }
             .store(in: &cancellables)
 
-        radioCoordinator.statePublisher.assign(to: &$radioState)
+        Publishers.CombineLatest(radioCoordinator.statePublisher, unifiedPlayer.$activeMode)
+            .sink { [weak self] state, mode in
+                guard let self else { return }
+                self.radioState = state
+                // Only the transport's `.playing` callback opens automatic
+                // transcript work. Selection, refresh, and `.loading` do not.
+                self.radioTranscriptCoordinator?.setPlaybackReady(
+                    state == .playing && mode == .radio
+                )
+            }
+            .store(in: &cancellables)
         radioCoordinator.entriesPublisher
             .sink { [weak self] entries in
                 self?.radioEntries = entries
@@ -188,6 +260,8 @@ final class AudioPlayerViewModelV2: ObservableObject {
             .store(in: &cancellables)
         radioTranscriptCoordinator?.batchPresentationPublisher
             .assign(to: &$radioTranscriptBatchPresentation)
+        radioTranscriptCoordinator?.adPreparationPublisher
+            .assign(to: &$radioAdPreparationStates)
         unifiedPlayer.$radioTranscriptPlaybackSyncState
             .assign(to: &$radioTranscriptPlaybackSyncState)
         unifiedPlayer.$radioTranscriptValidationRevision
@@ -257,6 +331,10 @@ final class AudioPlayerViewModelV2: ObservableObject {
     }
 
     private func refreshNowPlaying() {
+        if let undo = radioAdUndo, currentRadioEpisode?.key != undo.key || effectivePlaybackMode != .radio {
+            radioAdUndo = nil
+            radioAdUndoAvailable = false
+        }
         if effectivePlaybackMode == .radio, let episode = currentRadioEpisode {
             currentTitle = episode.displayTitle()
             currentArtist = episode.sourceName

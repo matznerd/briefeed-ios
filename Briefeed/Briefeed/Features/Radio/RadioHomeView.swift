@@ -193,6 +193,7 @@ struct RadioHomeView: View {
     @EnvironmentObject private var audioPlayerViewModel: AudioPlayerViewModelV2
     @State private var showingAddSource = false
     @State private var showingExpandedTranscript = false
+    @State private var showingAdReview = false
     @State private var selectedSourceRoute: SourceRoute?
     private let onAppearRefresh: @MainActor () -> Void
     @FetchRequest(
@@ -253,6 +254,17 @@ struct RadioHomeView: View {
                     }
                 }
 
+                if let record = audioPlayerViewModel.currentRadioAdRecord {
+                    Section {
+                        Button {
+                            showingAdReview = true
+                        } label: {
+                            Label("Ad Review (\(record.spans.count))", systemImage: "waveform.badge.magnifyingglass")
+                        }
+                        .accessibilityIdentifier("radio.openAdReview")
+                    }
+                }
+
                 if showsStateMessage {
                     Section {
                         radioStateView
@@ -300,6 +312,10 @@ struct RadioHomeView: View {
                     }
                 )
                 .presentationDetents([.large])
+            }
+            .sheet(isPresented: $showingAdReview) {
+                RadioAdReviewView(player: audioPlayerViewModel)
+                    .presentationDetents([.large])
             }
         }
         .onAppear {

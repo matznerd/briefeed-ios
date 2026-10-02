@@ -8,6 +8,138 @@ import Testing
 struct RadioAppLifecycleTests {
     private let emptyRefresh = RSSRefreshBatchResult(results: [])
 
+    @Test func earlyNPRProgressStartsOnceWhileSlowBatchAndFallbackRemainPending() async {
+        let monitor = LifecycleConnectivityMonitor(.online)
+        let slowFeed = LifecycleVoidGate()
+        let fallbackTimer = LifecycleVoidGate()
+        let now = Date()
+        let episode = candidate(publicationDate: now)
+        let repository = FakeRadioEpisodeRepository(candidates: [])
+        let coordinator = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(), repository: repository,
+            now: { now }, connectivity: monitor
+        )
+        let driver = makeDriver(
+            monitor: monitor,
+            sleepBeforeOpeningFallback: { await fallbackTimer.wait() },
+            cancelAutoplay: { coordinator.cancelPendingColdLaunchAutoplay() }
+        )
+        var startedKeys: [RadioEpisodeKey] = []
+        let execute: @MainActor (RadioPlaybackIntent?) -> Void = { intent in
+            guard case .play(let request) = intent else { return }
+            startedKeys.append(request.key)
+            coordinator.transportDidStart(for: request.key)
+        }
+        let work = RadioAppLifecycleDriver.RefreshWork(
+            begin: { coordinator.refreshStarted(enabledSourceCount: 2) },
+            loadIncrementally: { progress in
+                repository.values = [episode]
+                await progress(self.refreshResult(episodeID: "latest"))
+                await slowFeed.wait()
+                return self.refreshResult(episodeID: "latest")
+            },
+            apply: { execute(coordinator.applyInitialRefresh($0)) },
+            applyProgress: {
+                execute(coordinator.applyOpeningRefreshProgress($0, preferredFeedID: "npr"))
+            }
+        )
+        driver.handleScenePhase(.active)
+        await driver.startColdLaunch(
+            restore: { await coordinator.restore(autoplayEnabled: $0) },
+            openingFallback: { execute(coordinator.beginOpeningFallback()) },
+            initialRefresh: work, foregroundRefresh: work
+        )
+        await settle()
+        #expect(startedKeys == [episode.key])
+        #expect(coordinator.state == .playing)
+        #expect(driver.hasInFlightRefresh)
+        fallbackTimer.release()
+        await settle()
+        #expect(startedKeys == [episode.key])
+        slowFeed.release()
+        await settle()
+        #expect(startedKeys == [episode.key])
+        driver.handleTermination()
+    }
+
+    @Test func openingFeedProgressAppliesBeforeSlowBatchCompletion() async {
+        let monitor = LifecycleConnectivityMonitor(.online)
+        let gate = LifecycleVoidGate()
+        let driver = makeDriver(monitor: monitor)
+        var progressCount = 0
+        var completionCount = 0
+        let work = RadioAppLifecycleDriver.RefreshWork(
+            loadIncrementally: { progress in
+                await progress(self.emptyRefresh)
+                await gate.wait()
+                return self.emptyRefresh
+            },
+            apply: { _ in completionCount += 1 },
+            applyProgress: { _ in progressCount += 1 }
+        )
+        driver.handleScenePhase(.active)
+        await driver.startColdLaunch(restore: { _ in nil }, initialRefresh: work, foregroundRefresh: work)
+        await settle()
+        #expect(progressCount == 1)
+        #expect(completionCount == 0)
+        #expect(driver.hasInFlightRefresh)
+        gate.release()
+        await settle()
+        #expect(completionCount == 1)
+        driver.handleTermination()
+    }
+
+    @Test func openingFallbackDoesNotWaitForConnectivityOrFeedCompletion() async {
+        let monitor = LifecycleConnectivityMonitor(.unknown)
+        let timer = LifecycleVoidGate()
+        let driver = makeDriver(monitor: monitor, sleepBeforeOpeningFallback: { await timer.wait() })
+        var fallbackCount = 0
+        let work = refreshWork(load: { self.emptyRefresh })
+        driver.handleScenePhase(.active)
+        await driver.startColdLaunch(
+            restore: { _ in nil }, openingFallback: { fallbackCount += 1 },
+            initialRefresh: work, foregroundRefresh: work
+        )
+        await settle()
+        #expect(driver.hasPendingRefresh)
+        #expect(fallbackCount == 0)
+        timer.release()
+        await settle()
+        #expect(fallbackCount == 1)
+        driver.handleTermination()
+    }
+
+    @Test func backgroundRejectsDelayedProgressAndOpeningFallback() async {
+        let monitor = LifecycleConnectivityMonitor(.online)
+        let timer = LifecycleVoidGate()
+        let loader = LifecycleVoidGate()
+        let driver = makeDriver(monitor: monitor, sleepBeforeOpeningFallback: { await timer.wait() })
+        var appliedCount = 0
+        var fallbackCount = 0
+        let work = RadioAppLifecycleDriver.RefreshWork(
+            loadIncrementally: { progress in
+                await loader.wait()
+                await progress(self.emptyRefresh)
+                return self.emptyRefresh
+            },
+            apply: { _ in appliedCount += 1 },
+            applyProgress: { _ in appliedCount += 1 }
+        )
+        driver.handleScenePhase(.active)
+        await driver.startColdLaunch(
+            restore: { _ in nil }, openingFallback: { fallbackCount += 1 },
+            initialRefresh: work, foregroundRefresh: work
+        )
+        await settle()
+        driver.handleScenePhase(.background)
+        timer.release()
+        loader.release()
+        await settle()
+        #expect(appliedCount == 0)
+        #expect(fallbackCount == 0)
+        driver.handleTermination()
+    }
+
     @Test func coldLaunchRestoresBeforeItsSingleInitialRefresh() async {
         let monitor = LifecycleConnectivityMonitor(.online)
         var events: [String] = []
@@ -646,6 +778,9 @@ struct RadioAppLifecycleTests {
             try await Task.sleep(for: .seconds(3_600))
         },
         settleActiveScene: @escaping RadioAppLifecycleDriver.SettleActiveScene = {},
+        sleepBeforeOpeningFallback: @escaping @MainActor () async throws -> Void = {
+            try await Task.sleep(for: .seconds(3_600))
+        },
         cancelAutoplay: @escaping @MainActor () -> Void = {},
         forceSave: @escaping @MainActor (RadioAppLifecycleDriver.SaveReason) -> Void = { _ in }
     ) -> RadioAppLifecycleDriver {
@@ -654,6 +789,7 @@ struct RadioAppLifecycleTests {
             now: now,
             sleep: sleep,
             settleActiveScene: settleActiveScene,
+            sleepBeforeOpeningFallback: sleepBeforeOpeningFallback,
             cancelPendingColdLaunchAutoplay: cancelAutoplay,
             forceSave: forceSave
         )

@@ -6,7 +6,24 @@
 //
 
 import Combine
+import OSLog
 import SwiftUI
+
+@MainActor
+enum RadioStartupDiagnostics {
+    private static let logger = Logger(subsystem: "Matznerd.Briefeed", category: "RadioStartup")
+    private static var openedAt: Date?
+
+    static func begin() {
+        openedAt = Date()
+        record("opening")
+    }
+
+    static func record(_ stage: String) {
+        let milliseconds = Int(Date().timeIntervalSince(openedAt ?? Date()) * 1_000)
+        logger.info("stage=\(stage, privacy: .public) elapsed_ms=\(milliseconds)")
+    }
+}
 
 enum RadioStartupPolicy {
     static func shouldStartServices(for phase: ScenePhase) -> Bool {
@@ -25,6 +42,7 @@ enum RadioStartupPolicy {
 final class RadioAppLifecycleDriver {
     typealias Sleep = @MainActor (TimeInterval) async throws -> Void
     typealias SettleActiveScene = @MainActor () async -> Void
+    typealias RefreshProgress = @MainActor (RSSRefreshBatchResult) async -> Void
 
     enum SaveReason {
         case background
@@ -33,7 +51,7 @@ final class RadioAppLifecycleDriver {
 
     struct RefreshWork {
         let begin: @MainActor () -> Void
-        let load: @MainActor () async -> RSSRefreshBatchResult
+        let load: @MainActor (@escaping RefreshProgress) async -> RSSRefreshBatchResult
         let apply: @MainActor (RSSRefreshBatchResult) async -> Void
 
         init(
@@ -42,9 +60,23 @@ final class RadioAppLifecycleDriver {
             apply: @escaping @MainActor (RSSRefreshBatchResult) async -> Void = { _ in }
         ) {
             self.begin = begin
-            self.load = load
+            self.load = { _ in await load() }
             self.apply = apply
         }
+
+        init(
+            begin: @escaping @MainActor () -> Void = {},
+            loadIncrementally: @escaping @MainActor (@escaping RefreshProgress) async -> RSSRefreshBatchResult,
+            apply: @escaping @MainActor (RSSRefreshBatchResult) async -> Void,
+            applyProgress: @escaping @MainActor (RSSRefreshBatchResult) async -> Void
+        ) {
+            self.begin = begin
+            self.load = loadIncrementally
+            self.apply = apply
+            self.applyProgress = applyProgress
+        }
+
+        var applyProgress: @MainActor (RSSRefreshBatchResult) async -> Void = { _ in }
     }
 
     private struct PendingRefresh {
@@ -59,6 +91,7 @@ final class RadioAppLifecycleDriver {
     private let now: @MainActor () -> Date
     private let sleep: Sleep
     private let settleActiveScene: SettleActiveScene
+    private let sleepBeforeOpeningFallback: @MainActor () async throws -> Void
     private let cancelPendingColdLaunchAutoplay: @MainActor () -> Void
     private let forceSave: @MainActor (SaveReason) -> Void
     private var connectivityCancellable: AnyCancellable?
@@ -82,6 +115,7 @@ final class RadioAppLifecycleDriver {
     private var lastOpeningRefreshRequestAt: Date?
     private var pendingRestoreProjection: (@MainActor () async -> Void)?
     private var restoreProjectionTask: Task<Void, Never>?
+    private var openingFallbackTask: Task<Void, Never>?
 
     var hasPendingRefresh: Bool { pendingRefresh != nil }
     var hasInFlightRefresh: Bool { inFlightRefreshID != nil }
@@ -96,6 +130,9 @@ final class RadioAppLifecycleDriver {
         settleActiveScene: @escaping SettleActiveScene = {
             try? await Task.sleep(for: .milliseconds(300))
         },
+        sleepBeforeOpeningFallback: @escaping @MainActor () async throws -> Void = {
+            try await Task.sleep(for: .milliseconds(1_500))
+        },
         cancelPendingColdLaunchAutoplay: @escaping @MainActor () -> Void,
         forceSave: @escaping @MainActor (SaveReason) -> Void
     ) {
@@ -103,6 +140,7 @@ final class RadioAppLifecycleDriver {
         self.now = now
         self.sleep = sleep
         self.settleActiveScene = settleActiveScene
+        self.sleepBeforeOpeningFallback = sleepBeforeOpeningFallback
         self.cancelPendingColdLaunchAutoplay = cancelPendingColdLaunchAutoplay
         self.forceSave = forceSave
         connectivityCancellable = connectivity.statusPublisher.sink { [weak self] status in
@@ -114,6 +152,7 @@ final class RadioAppLifecycleDriver {
         prepare: @escaping @MainActor () async -> Void = {},
         restore: @escaping @MainActor (Bool) async -> RadioPlaybackIntent?,
         applyRestoreIntent: @escaping @MainActor (RadioPlaybackIntent?) async -> Void = { _ in },
+        openingFallback: (@MainActor () async -> Void)? = nil,
         initialRefresh: RefreshWork,
         foregroundRefresh: RefreshWork,
         pollRefresh: RefreshWork? = nil
@@ -132,6 +171,7 @@ final class RadioAppLifecycleDriver {
                   !didTerminate else { return }
         }
         didStartColdLaunch = true
+        RadioStartupDiagnostics.begin()
 
         await prepare()
         guard !didTerminate else { return }
@@ -154,6 +194,18 @@ final class RadioAppLifecycleDriver {
         }
         await applyRestoreIntent(restoreIntent)
         guard restoreGeneration == generation, isActive, !didTerminate else { return }
+
+        if coldLaunchAutoplayAllowed, let openingFallback {
+            let fallbackGeneration = generation
+            openingFallbackTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                do { try await self.sleepBeforeOpeningFallback() } catch { return }
+                guard !Task.isCancelled, self.isActive, !self.didTerminate,
+                      fallbackGeneration == self.generation else { return }
+                RadioStartupDiagnostics.record("opening-fallback")
+                await openingFallback()
+            }
+        }
 
         requestInitialRefreshIfNeeded()
         armPollIfNeeded()
@@ -288,8 +340,16 @@ final class RadioAppLifecycleDriver {
         let work = pendingRefresh.work
         inFlightRefreshID = id
         work.begin()
+        RadioStartupDiagnostics.record("refresh-began")
         refreshTask = Task { @MainActor [weak self] in
-            let result = await work.load()
+            let result = await work.load { progress in
+                guard let self, !Task.isCancelled,
+                      self.inFlightRefreshID == id,
+                      self.generation == taskGeneration,
+                      self.isActive, !self.didTerminate else { return }
+                RadioStartupDiagnostics.record("feed-result")
+                await work.applyProgress(progress)
+            }
             let wasCancelled = Task.isCancelled
             await self?.finishRefresh(
                 id: id,
@@ -314,6 +374,7 @@ final class RadioAppLifecycleDriver {
             && isActive
             && !didTerminate
         if shouldApply {
+            RadioStartupDiagnostics.record("refresh-complete")
             await work.apply(result)
         }
         guard id == inFlightRefreshID else { return }
@@ -360,6 +421,8 @@ final class RadioAppLifecycleDriver {
         generation += 1
         pendingRefresh = nil
         refreshTask?.cancel()
+        openingFallbackTask?.cancel()
+        openingFallbackTask = nil
         pollTask?.cancel()
         pollTask = nil
         pollID = nil
@@ -408,6 +471,12 @@ extension BriefeedApp {
             applyRestoreIntent: { intent in
                 await UnifiedAudioPlayer.shared.execute(intent)
             },
+            openingFallback: {
+                guard UserDefaultsManager.shared.autoPlayLiveNewsOnOpen,
+                      !UnifiedAudioPlayer.shared.isPlaying,
+                      UnifiedAudioPlayer.shared.activeMode != .brief else { return }
+                await UnifiedAudioPlayer.shared.execute(services.coordinator.beginOpeningFallback())
+            },
             initialRefresh: makeRadioRefreshWork(
                 useInitialAutoplayOpportunity: true,
                 forceNetworkRefresh: true
@@ -442,10 +511,10 @@ extension BriefeedApp {
                     enabledSourceCount: RSSAudioService.shared.enabledFeedCount
                 )
             },
-            load: {
+            loadIncrementally: { progress in
                 let now = Date()
                 return forceNetworkRefresh
-                    ? await RSSAudioService.shared.refreshAll(now: now)
+                    ? await RSSAudioService.shared.refreshAll(now: now, onProgress: progress)
                     : await RSSAudioService.shared.refreshIfStale(now: now)
             },
             apply: { result in
@@ -458,6 +527,17 @@ extension BriefeedApp {
                             && !UnifiedAudioPlayer.shared.isPlaying
                             && UnifiedAudioPlayer.shared.activeMode != .brief
                     )
+                await UnifiedAudioPlayer.shared.execute(intent)
+            },
+            applyProgress: { result in
+                guard UserDefaultsManager.shared.autoPlayLiveNewsOnOpen,
+                      UnifiedAudioPlayer.shared.activeMode != .brief else { return }
+                let preferredID = RSSAudioService.shared.feeds
+                    .filter(\.isEnabled)
+                    .min { $0.priority == $1.priority ? $0.id < $1.id : $0.priority < $1.priority }?.id
+                let intent = useInitialAutoplayOpportunity
+                    ? services.coordinator.applyOpeningRefreshProgress(result, preferredFeedID: preferredID)
+                    : services.coordinator.applyRefreshProgress(result, autoplayWhenIdle: !UnifiedAudioPlayer.shared.isPlaying)
                 await UnifiedAudioPlayer.shared.execute(intent)
             }
         )
