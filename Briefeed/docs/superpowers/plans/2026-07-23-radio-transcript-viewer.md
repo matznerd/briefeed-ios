@@ -515,14 +515,13 @@ RADIO_TEST_SELECTOR=BriefeedTests/RadioTranscriptPlaybackTests make radio-unit
 
 - [ ] **Step 3: Inject the prepared-asset provider**
 
-Before a new Radio load, acquire the transcript pipeline's fingerprinted audio
-asset and play that local URL. The asset service coalesces simultaneous player
-and pipeline requests into one download. Preserve the existing
-`RSSEpisode.downloadedFilePath` fallback for non-transcript downloads. If
-acquisition fails, play the remote URL. When a fallback stream's exact asset
-later completes, replace the active transport only after duration validation
-and start the local item at the current media time. A local load failure
-restores the original URL at that same time.
+October 4 continuity correction (#36): before a new Radio load, use a cached
+fingerprinted local asset when available; otherwise start remote audio without
+waiting for preparation. Preserve the existing `RSSEpisode.downloadedFilePath`
+fallback for non-transcript downloads. Never replace an active remote stream
+when its transcript finishes or the app returns foreground. Equal duration is
+not proof of equal dynamically inserted content. Same-item resume must keep
+the owned transport's position, not reapply an older request snapshot.
 
 - [ ] **Step 4: Add current-stream validation reporting**
 
@@ -531,8 +530,9 @@ from the response the transport is actually playing when the transport exposes
 them. Report that identity to the transcript coordinator; publish ready text
 only when its validation policy passes. Never use the separate preparation
 download's metadata as a proxy for the active stream. Until SwiftAudioEx
-exposes that identity, use only exact prepared local playback, including the
-duration-gated media-time-preserving promotion in Step 3.
+exposes that identity, synchronized text requires exact prepared local playback
+chosen at a new load. Transcript validation is presentation-only; it must not
+change playback to make its identity check succeed.
 
 - [ ] **Step 5: Verify the playback regression suites GREEN**
 
