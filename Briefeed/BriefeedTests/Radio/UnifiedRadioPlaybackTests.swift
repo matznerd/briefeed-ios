@@ -64,6 +64,73 @@ struct UnifiedRadioPlaybackTests {
         #expect(player.activeMode == .radio)
     }
 
+    @Test func foregroundRefreshCannotSwitchOrSeekAudioThatContinuedInBackground() async throws {
+        let playing = makeCandidate("bbc")
+        let fresh = makeCandidate("npr-new")
+        let repository = RecordingRadioRepository(candidates: [playing])
+        let radio = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(snapshot: makeSession(playing.key)),
+            repository: repository, connectivityStatus: { .online }
+        )
+        _ = await radio.restore(autoplayEnabled: false)
+        let transport = SpyAudioTransport()
+        let player = UnifiedAudioPlayer(
+            audioPlayer: transport, queueCoordinator: FakeBriefQueueCoordinator(),
+            radioCoordinator: radio,
+            context: PersistenceController(inMemory: true).container.viewContext
+        )
+        await player.playRadio()
+        let playbackID = try #require(transport.lastPlaybackID)
+        player.audioStateChanged(id: playbackID, to: .playing, from: .loading)
+        transport.duration = 300
+        transport.currentTime = 30
+        player.handleAppBackground()
+        transport.currentTime = 90
+        player.audioProgressUpdated(id: playbackID, progress: 0.3, currentTime: 90, duration: 300)
+        player.handleAppForeground()
+
+        repository.values.append(fresh)
+        let result = RSSRefreshBatchResult(results: [
+            .init(feedID: fresh.key.feedID, outcome: .success(insertedEpisodeIDs: [fresh.key.episodeID]))
+        ])
+        radio.refreshStarted(enabledSourceCount: 2)
+        await player.execute(radio.applyRefreshProgress(result, autoplayWhenIdle: true))
+        await player.execute(radio.applyRefresh(result, autoplayWhenIdle: true))
+        await player.beginEffectiveCurrent()
+
+        #expect(radio.currentKey == playing.key)
+        #expect(radio.state == .playing)
+        #expect(radio.entries.first?.positionSeconds == 90)
+        #expect(transport.lastPlaybackID == playbackID)
+        #expect(transport.loads.map(\.1) == [playing.originalPlaybackURL])
+        #expect(transport.seeks.isEmpty)
+        #expect(transport.currentTime == 90)
+    }
+
+    @Test func sameItemStartBeforeReadinessKeepsTheOnePendingRestoreSeek() async throws {
+        let candidate = makeCandidate("pending-restore")
+        let radio = RadioSessionCoordinator(
+            store: FakeRadioSessionStore(snapshot: makeSession(candidate.key, position: 42)),
+            repository: RecordingRadioRepository(candidates: [candidate]),
+            connectivityStatus: { .online }
+        )
+        _ = await radio.restore(autoplayEnabled: false)
+        let transport = SpyAudioTransport()
+        let player = UnifiedAudioPlayer(
+            audioPlayer: transport, queueCoordinator: FakeBriefQueueCoordinator(),
+            radioCoordinator: radio,
+            context: PersistenceController(inMemory: true).container.viewContext
+        )
+        await player.playRadio()
+        let playbackID = try #require(transport.lastPlaybackID)
+        await player.beginEffectiveCurrent()
+        #expect(transport.seeks.isEmpty)
+        player.audioItemReady(id: playbackID, duration: 300)
+        player.audioItemReady(id: playbackID, duration: 300)
+        #expect(transport.loads.count == 1)
+        #expect(transport.seeks == [42])
+    }
+
     @Test func radioPausePersistsBeforeTransportMutation() async throws {
         var events: [String] = []
         let candidate = makeCandidate("one")

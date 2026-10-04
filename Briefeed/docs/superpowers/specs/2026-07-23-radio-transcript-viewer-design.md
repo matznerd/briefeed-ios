@@ -698,6 +698,9 @@ Checkpoint behavior:
 
 ## Exact-Asset and Dynamic-Ad Safety
 
+Updated October 4, 2026 after the foreground playback-jump report (#36). This
+contract supersedes the earlier duration-gated active-audio promotion design.
+
 Some podcast publishers dynamically insert different sponsor audio for
 different requests. A transcript generated from a second HTTP request can be
 wrong even if the RSS episode GUID is unchanged.
@@ -705,42 +708,39 @@ wrong even if the RSS episode GUID is unchanged.
 V1 uses these safeguards:
 
 1. Every transcript is keyed by a SHA-256 fingerprint of downloaded bytes.
-2. Before first playback, the player and transcript pipeline request the same
-   owned audio asset. `RadioTranscriptAssetService` coalesces those requests
-   into one download, fingerprints the resulting bytes, and gives both
-   consumers the same local file.
-3. Playback waits only for that audio acquisition, not for SpeechAnalyzer.
-   Audio then starts from the exact local bytes while transcription proceeds
-   against that file. Prepared-ahead and replay playback use the same path
-   without another download.
-4. If owned-asset acquisition fails, audio falls back to the publisher URL.
-   Synchronized text remains hidden unless playback later moves to an exact
-   prepared file or the transport independently validates the active response.
+2. A new transport load uses a cached owned asset when available. Playback and
+   transcription then use the same fingerprinted local bytes.
+3. An uncached episode starts from the publisher URL without waiting for an
+   audio download or SpeechAnalyzer. Automatic preparation begins only after
+   the transport reports playing; lookahead prepares upcoming episodes.
+4. Synchronized text for a remote stream remains hidden unless the transport
+   independently validates the active response. A separate preparation
+   download is not evidence of the bytes currently being heard.
 5. On iOS versions or devices where on-device transcript preparation is
    unavailable, playback keeps the existing immediate remote path and does not
    perform transcript-only audio acquisition.
-6. A fallback remote stream may still be promoted to the exact local asset
-   after duration validation. The replacement transport starts at the current
-   media time; stale callbacks from the old playback ID are ignored.
+6. Transcript validation is presentation-only. Foreground reconciliation,
+   partial/final transcript completion, and batch preparation never replace,
+   resume, seek, complete, or advance the active transport. Equal duration
+   cannot establish equal content when publishers insert different ads.
 7. If duration differs beyond the tolerance, synchronized text stays
-   unavailable for that fallback stream.
-8. If an exact local load fails during fallback promotion, Briefeed restores
-   the original playback URL at the same media time. Transcript work must not
-   strand, complete, or advance the Radio queue.
+   unavailable. Matching duration alone never validates a remote stream.
+8. A same-episode play/resume intent keeps the existing transport and its live
+   position. Saved request positions apply only when loading a new transport;
+   explicit user seeking remains a separate command. Returning from background
+   resumes presentation polling, not playback restoration.
 9. A transport that exposes final URL, response validators, positive content
    length, and duration may validate the active remote response directly
-   instead of performing the local promotion.
+   without changing playback.
 10. A finalized partial transcript follows the same exact-asset rules as a
-    complete transcript. It may trigger same-position local promotion, but
-    text remains hidden for an unverified or mismatched stream.
+    complete transcript. Neither may trigger an audio reload; text remains
+    hidden for an unverified or mismatched stream.
 
-For an uncached episode, the first play may incur a bounded download-only
-startup delay. This is the smallest reliable implementation with the current
-SwiftAudioEx adapter, which cannot expose or tee the bytes it streams. The
-delay must be measured on physical hardware for short Radio bulletins. A
-follow-up transport task owns progressive play-while-capturing if the measured
-delay is unacceptable. The viewer never substitutes metadata from one request
-as proof of the bytes returned by another.
+The current SwiftAudioEx adapter cannot expose or tee streamed bytes, so an
+uncached first play and transcript preparation may use separate requests. The
+first-play transcript may remain unavailable; audio continuity takes priority.
+Issue #24 owns active-response identity/progressive play-while-capturing. The
+viewer never substitutes metadata from one request as proof of another's bytes.
 
 The future ad classifier must use the same fingerprinted asset identity. The
 58.62/59.40 Marketplace boundary is research evidence, not a reusable rule.
@@ -936,12 +936,12 @@ shows material data use.
 
 ### Integration Tests
 
-- Start uncached episode: one audio acquisition serves both playback and
-  transcription; playback begins before transcript readiness.
+- Start uncached episode: audio starts without acquiring a transcript asset;
+  preparation begins only after transport readiness.
 - Select an earlier source-history episode: audio starts first, its transcript
   appears when ready, and adjacent history is not prepared.
-- Current transcript becomes visible after exact-local promotion preserves the
-  current media time, or after active-response identity validation passes.
+- Current transcript becomes visible for an already-owned local asset or after
+  active-response identity validation passes, without changing active audio.
 - Next two prepare in deterministic Radio order.
 - Next during transcription cancels/promotes correctly.
 - Pause and resume freeze and continue the active word.
@@ -962,10 +962,11 @@ shows material data use.
 - Offline playback from cached audio restores its cached transcript.
 - A prepared-ahead episode starts playback from its exact local asset on its
   first play.
-- Prepared audio promotion preserves media time for playing and paused/resume
-  paths.
-- A failed prepared-audio load restores the original stream at the same media
-  time and keeps synchronized text hidden.
+- Partial/final transcript completion on foreground return causes no transport
+  reload or seek, even when another readable asset has the same duration.
+- Same-item play/resume ignores an older saved request position and keeps the
+  live transport position, including a paused transport.
+- A corrupt prepared file cannot interrupt an already-playing remote stream.
 - Dynamic-ad duration mismatch fails closed.
 
 ### Visual and Accessibility Tests
