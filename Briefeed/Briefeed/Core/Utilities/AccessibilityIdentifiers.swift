@@ -143,6 +143,9 @@ enum AccessibilityID {
     enum Settings {
         static let done = "settings.done"
         static let radioAutoplay = "settings.radioAutoplay"
+        static let adSkip = "settings.adSkip"
+        static let prepareAdsAhead = "settings.prepareAdsAhead"
+        static let skipAds = "settings.skipAds"
         static let playbackSpeed = "settings.playbackSpeed"
         static let feedOrder = "settings.feedOrder"
         static let darkMode = "settings.darkMode"

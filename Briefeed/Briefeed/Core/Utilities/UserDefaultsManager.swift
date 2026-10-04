@@ -47,6 +47,8 @@ enum UserDefaultsKey: String, CaseIterable {
     
     // RSS Live News
     case autoPlayLiveNewsOnOpen = "autoPlayLiveNewsOnOpen"
+    case radioPrepareAdsAhead = "radioPrepareAdsAhead"
+    case radioSkipAds = "radioSkipAds"
     case autoRefreshLiveNewsOnOpen = "autoRefreshLiveNewsOnOpen"
     case rssPlaybackSpeed = "rssPlaybackSpeed"
     case defaultBriefFilter = "defaultBriefFilter"
@@ -112,6 +114,8 @@ class UserDefaultsManager: ObservableObject {
             UserDefaultsKey.currentFeedSort.rawValue: "hot",
             // RSS defaults
             "autoPlayLiveNewsOnOpen": false,
+            UserDefaultsKey.radioPrepareAdsAhead.rawValue: false,
+            UserDefaultsKey.radioSkipAds.rawValue: false,
             "autoRefreshLiveNewsOnOpen": true,
             "defaultBriefFilter": "all",
             "rssRetentionHours": 168,
@@ -261,6 +265,24 @@ class UserDefaultsManager: ObservableObject {
     }
 
     // MARK: - RSS Settings
+    @Published var radioPrepareAdsAhead = false {
+        didSet {
+            userDefaults.set(radioPrepareAdsAhead, forKey: UserDefaultsKey.radioPrepareAdsAhead.rawValue)
+            if oldValue != radioPrepareAdsAhead {
+                NotificationCenter.default.post(name: .radioAdPreferencesChanged, object: nil)
+            }
+        }
+    }
+
+    @Published var radioSkipAds = false {
+        didSet {
+            userDefaults.set(radioSkipAds, forKey: UserDefaultsKey.radioSkipAds.rawValue)
+            if oldValue != radioSkipAds {
+                NotificationCenter.default.post(name: .radioAdPreferencesChanged, object: nil)
+            }
+        }
+    }
+
     @Published var autoPlayLiveNewsOnOpen: Bool = false {
         didSet {
             userDefaults.set(autoPlayLiveNewsOnOpen, forKey: "autoPlayLiveNewsOnOpen")
@@ -434,6 +456,8 @@ class UserDefaultsManager: ObservableObject {
         fluidAudioVoiceSpeed = userDefaults.object(forKey: UserDefaultsKey.fluidAudioVoiceSpeed.rawValue) as? Float ?? 1.0
 
         // Load RSS settings
+        radioPrepareAdsAhead = userDefaults.bool(forKey: UserDefaultsKey.radioPrepareAdsAhead.rawValue)
+        radioSkipAds = RadioAdSkipPolicy.isReleaseQualified && userDefaults.bool(forKey: UserDefaultsKey.radioSkipAds.rawValue)
         autoPlayLiveNewsOnOpen = userDefaults.bool(forKey: "autoPlayLiveNewsOnOpen")
         autoRefreshLiveNewsOnOpen = userDefaults.bool(forKey: "autoRefreshLiveNewsOnOpen")
         rssRetentionHours = userDefaults.integer(forKey: "rssRetentionHours")

@@ -263,6 +263,14 @@ final class UnifiedAudioPlayer: ObservableObject {
         radioTranscriptPlaybackSyncState == .synchronized
     }
 
+    var activeOwnedRadioAssetFingerprint: String? {
+        guard activeMode == .radio, activePlaybackID != nil, activeRadioKey == radioCoordinator.currentKey,
+              let identity = activeTranscriptAssetIdentity,
+              identity.episodeKey == activeRadioKey, identity.localFileURL.isFileURL,
+              identity.localFileURL == activeRadioPlaybackURL else { return nil }
+        return identity.assetFingerprint
+    }
+
     /// A restored Radio episode is usable before the audio transport is loaded,
     /// so `.none` can still present and route as Radio.
     var effectivePlaybackMode: ActivePlaybackMode {
@@ -1015,6 +1023,7 @@ final class UnifiedAudioPlayer: ObservableObject {
                 return
             }
             if activePlaybackID != nil { audioPlayer.stop() }
+            isPlaying = false
 
             let playbackID = TransportPlaybackID()
             failedTranscriptPromotionIdentity = nil
@@ -1031,10 +1040,10 @@ final class UnifiedAudioPlayer: ObservableObject {
             updateRemoteAvailability()
 
             do {
+                RadioStartupDiagnostics.record("play-intent")
                 // Playback must never wait for transcript preparation. The
-                // transcript coordinator already acquires the current asset in
-                // parallel; use it only when it is cached before this load,
-                // otherwise start the remote stream immediately.
+                // cached lookup never acquires audio. Automatic preparation
+                // begins only after this transport reaches `.playing`.
                 let playbackAsset: RadioTranscriptAudioAsset?
                 if prefersOwnedTranscriptPlayback,
                    let radioTranscriptAssetProvider {
@@ -1058,10 +1067,10 @@ final class UnifiedAudioPlayer: ObservableObject {
                 } else if fallbackURL.isFileURL {
                     url = fallbackURL
                 } else if let radioTranscriptAssetProvider {
-                    // Resolving redirects is a short metadata request, not
-                    // transcript preparation. The transcript downloader uses
-                    // this same resolved URL so dynamic ad insertion cannot
-                    // produce two timelines for one episode.
+                    // Share the resolved rendition URL with transcript work.
+                    // This is a metadata HEAD request (2-second request timeout),
+                    // not ASR. URL equality alone is not proof of matching audio;
+                    // transcript presentation still validates rendition identity.
                     url = await radioTranscriptAssetProvider
                         .resolvedPlaybackURL(for: fallbackURL)
                 } else {
@@ -1072,6 +1081,7 @@ final class UnifiedAudioPlayer: ObservableObject {
                     return
                 }
                 activeRadioPlaybackURL = url
+                RadioStartupDiagnostics.record("transport-load")
                 radioTranscriptPlaybackSyncState = .waiting
                 try await audioPlayer.play(
                     id: playbackID,
@@ -2146,6 +2156,7 @@ extension UnifiedAudioPlayer: SwiftAudioExServiceDelegate {
         case .playing:
             isPlaying = true
             if activeMode == .radio, let activeRadioKey {
+                RadioStartupDiagnostics.record("transport-playing")
                 radioCoordinator.transportDidStart(for: activeRadioKey)
             }
             startProgressTimer()

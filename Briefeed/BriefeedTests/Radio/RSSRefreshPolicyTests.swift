@@ -226,6 +226,75 @@ struct RSSRefreshPolicyTests {
         #expect(firstResult.results.count == 1)
     }
 
+    @Test @MainActor func refreshAllStartsIndependentFeedLoadsConcurrently() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let context = persistence.container.viewContext
+        let slow = makeFeed(in: context, id: "npr-slow")
+        slow.url = "https://example.com/slow.xml"
+        slow.priority = 1
+        let daily = makeFeed(in: context, id: "nyt-the-daily")
+        daily.url = "https://example.com/daily.xml"
+        daily.priority = 7
+        try context.save()
+        let probe = RSSRefreshConcurrencyProbe()
+        let service = RSSAudioService(
+            viewContext: context,
+            dataLoader: { endpoint in
+                await probe.load(endpoint: endpoint, data: Self.feedXML(
+                    url: "https://example.com/audio.mp3",
+                    date: "Wed, 17 Jul 2024 12:05:00 GMT"
+                ))
+            }
+        )
+
+        let refresh = Task { @MainActor in
+            await service.refreshAll(now: Date(timeIntervalSince1970: 200))
+        }
+        for _ in 0..<100 where probe.maximumConcurrentLoads < 2 {
+            await Task.yield()
+        }
+        probe.releaseAllLoads()
+        let result = await refresh.value
+
+        #expect(result.successfulSourceEvidenceCount == 2)
+        #expect(result.results.map(\.feedID) == ["npr-slow", "nyt-the-daily"])
+        #expect(probe.maximumConcurrentLoads == 2)
+    }
+
+    @Test @MainActor func refreshPublishesNPRWhileASecondaryFeedIsStillLoading() async throws {
+        let context = PersistenceController(inMemory: true).container.viewContext
+        let npr = makeFeed(in: context, id: "npr-news-now")
+        npr.priority = 1
+        npr.url = "https://example.com/npr.xml"
+        let slow = makeFeed(in: context, id: "slow")
+        slow.priority = 2
+        slow.url = "https://example.com/slow.xml"
+        try context.save()
+        let gate = RSSRefreshDataGate()
+        let xml = Self.feedXML(url: "https://example.com/audio.mp3", date: "Wed, 17 Jul 2024 12:05:00 GMT")
+        let service = RSSAudioService(viewContext: context, dataLoader: { endpoint in
+            endpoint == slow.url ? await gate.wait() : xml
+        })
+        var progress: [RSSRefreshBatchResult] = []
+        var completed = false
+        let refresh = Task { @MainActor in
+            _ = await service.refreshAll(now: .now, onProgress: { progress.append($0) })
+            completed = true
+        }
+        for _ in 0..<200 {
+            if !progress.isEmpty, gate.isWaiting { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(gate.isWaiting)
+        #expect(progress.first?.results.map(\.feedID) == ["npr-news-now"])
+        #expect(!completed)
+        #expect(service.isRefreshing)
+        gate.release(xml)
+        await refresh.value
+        #expect(progress.last?.results.map(\.feedID) == ["npr-news-now", "slow"])
+        #expect(!service.isRefreshing)
+    }
+
     private enum SaveError: Error { case denied }
 
     @MainActor private func makeFeed(in context: NSManagedObjectContext, id: String, lastFetchDate: Date? = nil) -> RSSFeed {
@@ -279,5 +348,36 @@ private final class RSSRefreshDataGate {
     func release(_ data: Data) {
         continuation?.resume(returning: data)
         continuation = nil
+    }
+}
+
+@MainActor
+private final class RSSRefreshConcurrencyProbe {
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+    private var releaseRequested = false
+    private var activeLoads = 0
+    private(set) var maximumConcurrentLoads = 0
+
+    func load(endpoint _: String, data: Data) async -> Data {
+        activeLoads += 1
+        maximumConcurrentLoads = max(maximumConcurrentLoads, activeLoads)
+        if !releaseRequested {
+            await withCheckedContinuation { continuation in
+                if releaseRequested {
+                    continuation.resume()
+                } else {
+                    continuations.append(continuation)
+                }
+            }
+        }
+        activeLoads -= 1
+        return data
+    }
+
+    func releaseAllLoads() {
+        releaseRequested = true
+        let waiting = continuations
+        continuations.removeAll()
+        waiting.forEach { $0.resume() }
     }
 }
